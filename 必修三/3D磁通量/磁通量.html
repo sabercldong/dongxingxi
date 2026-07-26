@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>磁通量三维演示 (Magnetic Flux)</title>
+    <style>
+        /* --- 布局样式 --- */
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; }
+        
+        #container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* 左侧 3D 视口 */
+        #canvas-container {
+            flex: 1; /* 占据剩余空间 */
+            position: relative;
+            background: linear-gradient(to bottom, #eef2f3, #8e9eab);
+            overflow: hidden;
+        }
+
+        /* 右侧 控制面板 */
+        #sidebar {
+            width: 300px; /* 固定宽度 */
+            background-color: #ffffff;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        /* --- 控件样式 --- */
+        h2 { margin: 0 0 10px 0; color: #333; font-size: 1.2rem; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        
+        .control-group {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #eee;
+        }
+
+        label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            color: #555;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        input[type=range] {
+            width: 100%;
+            margin: 5px 0 15px 0;
+            cursor: pointer;
+        }
+
+        /* 数据显示高亮 */
+        .value-display { color: #1976d2; font-weight: bold; }
+
+        /* 按钮组 */
+        .btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            color: white;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        button:active { transform: scale(0.98); }
+
+        #btn-start { background-color: #2e7d32; }
+        #btn-pause { background-color: #f57f17; }
+        #btn-reset { background-color: #c62828; }
+
+        /* 结果展示面板 */
+        #result-panel {
+            background-color: #e3f2fd;
+            border: 1px solid #bbdefb;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .formula { font-family: 'Times New Roman', serif; font-style: italic; font-size: 1.1rem; color: #444; margin-bottom: 5px; }
+        .result-val { font-size: 1.5rem; color: #d32f2f; font-weight: bold; }
+
+        /* 提示信息 */
+        .tip { font-size: 0.8rem; color: #888; margin-top: auto; }
+    </style>
+    
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>磁通量演示控制台</h2>
+
+        <div class="btn-row">
+            <button id="btn-start">演示(转动)</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">还原</button>
+        </div>
+
+        <div class="control-group">
+            <label>磁感应强度 B (T) <span id="val-b" class="value-display">1.0</span></label>
+            <input type="range" id="input-b" min="0" max="5.0" step="0.1" value="1.0">
+
+            <label>平面面积 S (m²) <span id="val-s" class="value-display">10.0</span></label>
+            <input type="range" id="input-s" min="1.0" max="20.0" step="0.5" value="10.0">
+
+            <label>倾斜角度 θ (度) <span id="val-angle" class="value-display">0</span>°</label>
+            <input type="range" id="input-angle" min="0" max="360" step="1" value="0">
+        </div>
+
+        <div id="result-panel">
+            <div class="formula">Φ = B · S · cosθ</div>
+            <div class="result-val">Φ = <span id="val-flux">10.00</span> Wb</div>
+        </div>
+
+        <div class="control-group" style="font-size: 0.85rem; color: #666;">
+            <p><strong>图例说明：</strong></p>
+            <p><span style="color:#2196f3">■</span> 蓝色箭头：磁感线 (B)</p>
+            <p><span style="color:#d32f2f">■</span> 红色箭头：平面法线 (n)</p>
+            <p><span style="color:#4caf50">■</span> 绿色区域：平面 (S)</p>
+        </div>
+
+        <div class="tip">鼠标左键旋转，右键平移，滚轮缩放</div>
+    </div>
+</div>
+
+<script>
+    // --- 1. 初始化场景 (Scene Setup) ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    // 添加一点雾效果，增加空间感
+    scene.fog = new THREE.FogExp2(0xeef2f3, 0.02);
+
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+    camera.position.set(15, 10, 15);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // --- 2. 控制器 (OrbitControls) ---
+    // 检查是否有 OrbitControls，如果没有则报错提示（根据用户提供的文件名）
+    let controls;
+    if (typeof THREE.OrbitControls !== 'undefined') {
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+    } else if (typeof OrbitControls !== 'undefined') {
+        controls = new OrbitControls(camera, renderer.domElement);
+    } else {
+        alert("未检测到 OrbitControls.js，请确保文件存在。");
+    }
+    
+    if(controls) {
+        controls.enableDamping = true; // 阻尼感
+        controls.dampingFactor = 0.05;
+    }
+
+    // --- 3. 灯光 (Lights) ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // 辅助网格 (地面)
+    const gridHelper = new THREE.GridHelper(50, 50, 0xcccccc, 0xeef2f3);
+    gridHelper.position.y = -5;
+    scene.add(gridHelper);
+
+    // --- 4. 核心物体创建 ---
+
+    // A. 磁场 (Magnetic Field Lines)
+    const fieldGroup = new THREE.Group();
+    scene.add(fieldGroup);
+    const arrows = [];
+    const FIELD_ROWS = 7;
+    const FIELD_COLS = 7;
+    const SPACING = 2;
+
+    // 创建箭头网格代表磁感线
+    function createField() {
+        // 清除旧的
+        while(fieldGroup.children.length > 0){ 
+            fieldGroup.remove(fieldGroup.children[0]); 
+        }
+        arrows.length = 0;
+
+        const dir = new THREE.Vector3(0, 1, 0); // 磁场默认向上
+        const origin = new THREE.Vector3(0, 0, 0);
+        const length = 8;
+        const hex = 0x2196f3; // 蓝色
+
+        for (let i = 0; i < FIELD_ROWS; i++) {
+            for (let j = 0; j < FIELD_COLS; j++) {
+                const x = (i - FIELD_ROWS/2) * SPACING + SPACING/2;
+                const z = (j - FIELD_COLS/2) * SPACING + SPACING/2;
+                
+                const arrowHelper = new THREE.ArrowHelper(dir, new THREE.Vector3(x, -4, z), length, hex, 0.5, 0.3);
+                fieldGroup.add(arrowHelper);
+                arrows.push(arrowHelper);
+            }
+        }
+    }
+    createField();
+
+    // B. 平面 (The Surface S)
+    const planeGroup = new THREE.Group();
+    scene.add(planeGroup);
+
+    // 平面几何体
+    const geometry = new THREE.PlaneGeometry(1, 1); // 初始大小1x1，通过scale控制
+    const material = new THREE.MeshPhongMaterial({ 
+        color: 0x4caf50, 
+        side: THREE.DoubleSide, 
+        transparent: true, 
+        opacity: 0.6,
+        shininess: 50
+    });
+    const planeMesh = new THREE.Mesh(geometry, material);
+    // 初始平面水平放置
+    planeMesh.rotation.x = -Math.PI / 2; 
+    planeGroup.add(planeMesh);
+
+    // 平面边框
+    const edges = new THREE.EdgesGeometry(geometry);
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x1b5e20, linewidth: 2 });
+    const wireframe = new THREE.LineSegments(edges, lineMat);
+    wireframe.rotation.x = -Math.PI / 2; // 跟随平面旋转
+    planeGroup.add(wireframe);
+
+    // C. 法线向量 (Normal Vector)
+    const normalDir = new THREE.Vector3(0, 1, 0);
+    const normalOrigin = new THREE.Vector3(0, 0, 0);
+    const normalArrow = new THREE.ArrowHelper(normalDir, normalOrigin, 3, 0xd32f2f, 0.6, 0.4);
+    // 将法线添加到 planeGroup 中，这样旋转 planeGroup 时法线会自动跟随
+    // 注意：因为 planeMesh 默认被我旋转了 -90度(X轴)，法线默认朝Z。我们需要调整一下层级关系。
+    // 为了简单，我们旋转整个 planeGroup。
+    planeGroup.add(normalArrow);
+
+
+    // --- 5. 逻辑控制与更新 ---
+
+    // 状态变量
+    const params = {
+        B: 1.0,
+        S: 10.0,
+        angleDeg: 0,
+        isAnimating: false
+    };
+
+    // DOM 元素引用
+    const dom = {
+        inputB: document.getElementById('input-b'),
+        inputS: document.getElementById('input-s'),
+        inputAngle: document.getElementById('input-angle'),
+        valB: document.getElementById('val-b'),
+        valS: document.getElementById('val-s'),
+        valAngle: document.getElementById('val-angle'),
+        valFlux: document.getElementById('val-flux')
+    };
+
+    function updatePhysics() {
+        // 1. 获取输入值
+        params.B = parseFloat(dom.inputB.value);
+        params.S = parseFloat(dom.inputS.value);
+        params.angleDeg = parseFloat(dom.inputAngle.value);
+
+        // 2. 更新显示数值
+        dom.valB.innerText = params.B.toFixed(1);
+        dom.valS.innerText = params.S.toFixed(1);
+        dom.valAngle.innerText = params.angleDeg.toFixed(0);
+
+        // 3. 更新 3D 物体
+        
+        // 更新磁场 (通过改变箭头长度或可见性来模拟强度)
+        // 这里我们用箭头的 长度 和 粗细 视觉模拟 B
+        const arrowScale = 0.5 + (params.B / 5.0) * 1.5; 
+        arrows.forEach(arrow => {
+            // 如果 B=0，隐藏
+            arrow.visible = params.B > 0.01;
+            // 改变颜色深度
+            if(params.B > 3) arrow.setColor(new THREE.Color(0x0d47a1));
+            else arrow.setColor(new THREE.Color(0x2196f3));
+        });
+
+        // 更新面积 S (缩放平面)
+        // 假设面积是正方形，边长 = sqrt(S)
+        const sideLength = Math.sqrt(params.S);
+        planeMesh.scale.set(sideLength, sideLength, 1);
+        wireframe.scale.set(sideLength, sideLength, 1);
+
+        // 更新角度 (旋转平面组)
+        // 我们的磁场是向上的 (World Y)
+        // 我们的平面组初始是水平的，法线向上。
+        // 旋转轴可以是 X 轴。
+        const rad = THREE.MathUtils.degToRad(params.angleDeg);
+        planeGroup.rotation.x = rad;
+
+        // 4. 计算磁通量
+        // Φ = B * S * cos(θ)
+        // 注意：物理公式中 θ 是 B 和 法线 n 的夹角。
+        // 在我们的模型中，B 向上。平面初始法线向上。
+        // 当 group 旋转 rad 时，法线也旋转 rad。所以夹角就是 rad。
+        const flux = params.B * params.S * Math.cos(rad);
+        
+        // 更新结果显示 (保留两位小数，处理负零)
+        let displayFlux = flux.toFixed(2);
+        if (displayFlux === "-0.00") displayFlux = "0.00";
+        dom.valFlux.innerText = displayFlux;
+    }
+
+    // --- 6. 事件监听 ---
+
+    dom.inputB.addEventListener('input', updatePhysics);
+    dom.inputS.addEventListener('input', updatePhysics);
+    dom.inputAngle.addEventListener('input', () => {
+        // 手动拖动时停止自动播放
+        params.isAnimating = false;
+        updatePhysics();
+    });
+
+    // 按钮功能
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        params.isAnimating = false;
+        dom.inputB.value = 1.0;
+        dom.inputS.value = 10.0;
+        dom.inputAngle.value = 0;
+        updatePhysics();
+        // 重置相机
+        controls.reset(); 
+    });
+
+    document.getElementById('btn-pause').addEventListener('click', () => {
+        params.isAnimating = false;
+    });
+
+    document.getElementById('btn-start').addEventListener('click', () => {
+        if (!params.isAnimating) {
+            params.isAnimating = true;
+        }
+    });
+
+    // --- 7. 动画循环 (Animation Loop) ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // 如果处于演示状态，自动增加角度
+        if (params.isAnimating) {
+            let nextAngle = parseFloat(dom.inputAngle.value) + 0.5;
+            if (nextAngle > 360) nextAngle = 0;
+            dom.inputAngle.value = nextAngle;
+            updatePhysics();
+        }
+
+        if(controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // --- 8. 启动 ---
+    // 窗口大小改变自适应
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    // 初始化调用一次
+    updatePhysics();
+    animate();
+
+</script>
+</body>
+</html>

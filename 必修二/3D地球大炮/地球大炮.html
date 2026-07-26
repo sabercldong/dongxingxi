@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>地球大炮原理演示 (Earth Cannon)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #000; color: #fff; }
+        
+        /* 画布容器 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧功能区 */
+        #ui-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 280px;
+            height: 100%;
+            background: rgba(30, 30, 30, 0.9);
+            border-left: 1px solid #444;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        h2, h3 { margin-top: 0; color: #4db8ff; }
+        .control-group { margin-bottom: 15px; border-bottom: 1px solid #555; padding-bottom: 15px; }
+        
+        label { display: block; margin-bottom: 5px; font-size: 14px; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 5px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn-start { background-color: #28a745; color: white; }
+        .btn-pause { background-color: #ffc107; color: black; }
+        .btn-reset { background-color: #dc3545; color: white; }
+        .btn-toggle-chart { background-color: #17a2b8; color: white; margin-top: 10px;}
+        button:hover { opacity: 0.9; }
+
+        /* 左上角可拖动图表 */
+        #chart-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            height: 250px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #444;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            z-index: 100;
+        }
+
+        #chart-header {
+            padding: 8px;
+            background: #333;
+            cursor: move; /* 抓手光标 */
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        #chart-body {
+            flex: 1;
+            padding: 5px;
+            position: relative;
+        }
+        
+        .close-btn { cursor: pointer; color: #aaa; }
+        .close-btn:hover { color: #fff; }
+
+        .info-text { font-size: 12px; color: #aaa; line-height: 1.4; }
+    </style>
+</head>
+<body>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-container">
+        <div id="chart-header">
+            <span>速度/位移 实时监控</span>
+            <span class="close-btn" onclick="toggleChart()">×</span>
+        </div>
+        <div id="chart-body">
+            <canvas id="physicsChart"></canvas>
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h2>地球大炮演示</h2>
+        
+        <div class="control-group">
+            <button class="btn-start" onclick="startSim()">开始 (Start)</button>
+            <button class="btn-pause" onclick="pauseSim()">暂停 (Pause)</button>
+            <button class="btn-reset" onclick="resetSim()">还原 (Reset)</button>
+        </div>
+
+        <div class="control-group">
+            <label>演示速度 (Speed): <span id="speed-val">1.0</span>x</label>
+            <input type="range" id="speed-slider" min="0.1" max="5.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label>透明度 (Opacity):</label>
+            <input type="range" id="opacity-slider" min="0.1" max="1.0" step="0.1" value="0.3">
+        </div>
+
+        <button class="btn-toggle-chart" onclick="toggleChart()">显示/隐藏图表</button>
+
+        <div class="info-text">
+            <h3>原理说明</h3>
+            <p>假设地球是均匀球体，且忽略空气阻力和科里奥利力。</p>
+            <p>物体在隧道中受到的引力与它到地心的距离成正比 ($F \propto -r$)。</p>
+            <p>这构成了一个简谐运动 (SHM)，周期约为 84 分钟。物体将在地心达到最大速度。</p>
+        </div>
+    </div>
+
+    <script>
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let earth, tunnel, ball, core;
+        let animationId;
+        let isRunning = false;
+        let simulationTime = 0;
+        let timeScale = 1.0;
+        
+        // 物理常量 (模拟单位)
+        const R = 10; // 地球半径
+        const g = 9.8; // 表面重力
+        // 简谐运动角频率 omega = sqrt(g/R)
+        const omega = Math.sqrt(g / R); 
+        
+        // 图表相关
+        let chart;
+        let chartVisible = true;
+        const maxDataPoints = 100;
+
+        // ================= 初始化 Three.js =================
+        function init() {
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050510);
+
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(25, 10, 25);
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 4. 控制器 (OrbitControls)
+            // 检查OrbitControls是否加载成功 (取决于版本，有时挂在THREE下， sometimes global)
+            if (THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else if (typeof OrbitControls !== 'undefined') {
+                controls = new OrbitControls(camera, renderer.domElement);
+            } else {
+                alert("OrbitControls.js 未正确加载，请检查文件名。");
+            }
+            if(controls) {
+                controls.enableDamping = true;
+                controls.autoRotate = false;
+            }
+
+            // 5. 灯光
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(50, 50, 50);
+            scene.add(dirLight);
+
+            // 6. 创建物体
+            createObjects();
+
+            // 7. 初始化图表
+            initChart();
+
+            // 8. 监听调整大小
+            window.addEventListener('resize', onWindowResize);
+
+            // 9. 开始循环
+            animate();
+        }
+
+        function createObjects() {
+            // 地球 (半透明球体)
+            const earthGeo = new THREE.SphereGeometry(R, 32, 32);
+            const earthMat = new THREE.MeshPhongMaterial({
+                color: 0x2233ff,
+                transparent: true,
+                opacity: 0.3,
+                wireframe: false,
+                side: THREE.DoubleSide
+            });
+            earth = new THREE.Mesh(earthGeo, earthMat);
+            scene.add(earth);
+
+            // 地球线框 (增加视觉效果)
+            const wireframeGeo = new THREE.WireframeGeometry(earthGeo);
+            const wireframe = new THREE.LineSegments(wireframeGeo);
+            wireframe.material.depthTest = false;
+            wireframe.material.opacity = 0.1;
+            wireframe.material.transparent = true;
+            earth.add(wireframe);
+
+            // 隧道 (圆柱体，贯穿Y轴)
+            const tunnelGeo = new THREE.CylinderGeometry(1, 1, R * 2.01, 32, 1, true);
+            const tunnelMat = new THREE.MeshBasicMaterial({ 
+                color: 0x444444, 
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.5
+            });
+            tunnel = new THREE.Mesh(tunnelGeo, tunnelMat);
+            scene.add(tunnel);
+
+            // 地核 (参考点)
+            const coreGeo = new THREE.SphereGeometry(0.5, 16, 16);
+            const coreMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+            core = new THREE.Mesh(coreGeo, coreMat);
+            scene.add(core);
+
+            // 小球/穿梭机
+            const ballGeo = new THREE.SphereGeometry(0.6, 32, 32);
+            const ballMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+            ball = new THREE.Mesh(ballGeo, ballMat);
+            ball.position.y = R; // 初始位置在表面
+            scene.add(ball);
+            
+            // 添加轨迹线容器
+            const trailGeo = new THREE.BufferGeometry();
+            const trailMat = new THREE.LineBasicMaterial({ color: 0xff0000 });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ================= 物理与动画逻辑 =================
+        
+        function updatePhysics(deltaTime) {
+            if (!isRunning) return;
+
+            simulationTime += deltaTime * timeScale;
+
+            // 简谐运动公式: y = A * cos(omega * t)
+            // 初始条件: t=0, y=R (表面)
+            const positionY = R * Math.cos(omega * simulationTime);
+            
+            // 速度公式: v = -A * omega * sin(omega * t)
+            const velocity = -R * omega * Math.sin(omega * simulationTime);
+
+            // 更新小球位置
+            ball.position.y = positionY;
+
+            // 更新图表数据
+            updateChartData(simulationTime, positionY, velocity);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const dt = 0.016; // 假设60fps
+            updatePhysics(dt);
+
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // ================= 交互控制 =================
+
+        function startSim() { isRunning = true; }
+        function pauseSim() { isRunning = false; }
+        
+        function resetSim() {
+            isRunning = false;
+            simulationTime = 0;
+            ball.position.y = R;
+            // 重置图表
+            if (chart) {
+                chart.data.labels = [];
+                chart.data.datasets[0].data = [];
+                chart.data.datasets[1].data = [];
+                chart.update();
+            }
+        }
+
+        // 速度滑块
+        document.getElementById('speed-slider').addEventListener('input', (e) => {
+            timeScale = parseFloat(e.target.value);
+            document.getElementById('speed-val').innerText = timeScale.toFixed(1);
+        });
+
+        // 透明度滑块
+        document.getElementById('opacity-slider').addEventListener('input', (e) => {
+            if (earth) {
+                earth.material.opacity = parseFloat(e.target.value);
+            }
+        });
+
+        // ================= 图表功能 (Chart.js) =================
+        function initChart() {
+            if (typeof Chart === 'undefined') return;
+
+            const ctx = document.getElementById('physicsChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '位移 (Distance)',
+                            borderColor: 'rgb(255, 99, 132)',
+                            data: [],
+                            yAxisID: 'y',
+                            pointRadius: 0,
+                            borderWidth: 2
+                        },
+                        {
+                            label: '速度 (Velocity)',
+                            borderColor: 'rgb(54, 162, 235)',
+                            data: [],
+                            yAxisID: 'y1',
+                            pointRadius: 0,
+                            borderWidth: 2
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false, // 关闭动画以提高性能
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { labels: { color: 'white' } }
+                    },
+                    scales: {
+                        x: { display: false }, // 隐藏时间轴标签
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            min: -R - 2,
+                            max: R + 2,
+                            grid: { color: '#333' },
+                            ticks: { color: '#aaa' }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            grid: { drawOnChartArea: false },
+                            ticks: { color: '#aaa' }
+                        }
+                    }
+                }
+            });
+        }
+
+        let frameCounter = 0;
+        function updateChartData(time, pos, vel) {
+            if (!chart) return;
+            
+            // 限制图表更新频率，避免卡顿
+            frameCounter++;
+            if (frameCounter % 5 !== 0) return; 
+
+            const labels = chart.data.labels;
+            const dataPos = chart.data.datasets[0].data;
+            const dataVel = chart.data.datasets[1].data;
+
+            labels.push(time.toFixed(1));
+            dataPos.push(pos);
+            dataVel.push(vel);
+
+            // 保持数据长度
+            if (labels.length > maxDataPoints) {
+                labels.shift();
+                dataPos.shift();
+                dataVel.shift();
+            }
+
+            chart.update();
+        }
+
+        function toggleChart() {
+            const container = document.getElementById('chart-container');
+            if (chartVisible) {
+                container.style.display = 'none';
+            } else {
+                container.style.display = 'flex';
+            }
+            chartVisible = !chartVisible;
+        }
+
+        // ================= 拖拽逻辑 =================
+        const chartContainer = document.getElementById('chart-container');
+        const chartHeader = document.getElementById('chart-header');
+        let isDragging = false;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+
+        chartHeader.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            dragOffsetX = e.clientX - chartContainer.offsetLeft;
+            dragOffsetY = e.clientY - chartContainer.offsetTop;
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                chartContainer.style.left = (e.clientX - dragOffsetX) + 'px';
+                chartContainer.style.top = (e.clientY - dragOffsetY) + 'px';
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+        });
+
+        // 启动程序
+        init();
+
+    </script>
+</body>
+</html>

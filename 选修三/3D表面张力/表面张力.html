@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>液体表面张力 3D 模拟</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; }
+        
+        /* 主画布 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧功能区 */
+        #ui-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 280px;
+            height: 100vh;
+            background: rgba(30, 30, 30, 0.9);
+            color: #fff;
+            padding: 20px;
+            box-sizing: border-box;
+            border-left: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        h2, h3 { margin: 0 0 10px 0; color: #4facfe; }
+        
+        /* 控件样式 */
+        .control-group { margin-bottom: 15px; border-bottom: 1px solid #444; padding-bottom: 15px; }
+        label { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 5px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .btn-start { background-color: #28a745; color: white; }
+        .btn-pause { background-color: #ffc107; color: black; }
+        .btn-reset { background-color: #dc3545; color: white; }
+        button:hover { opacity: 0.8; }
+        
+        .toggle-chart { margin-top: auto; background: #007bff; color: white; width: 100%; }
+
+        /* 左上角图表区 (可拖动) */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            cursor: move; /* 指示可拖动 */
+            z-index: 20;
+            user-select: none;
+        }
+        #chart-header {
+            font-size: 12px;
+            color: #333;
+            margin-bottom: 5px;
+            text-align: center;
+            font-weight: bold;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+        }
+        .hidden { display: none !important; }
+
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">:: 按住此处拖动 - 中心点位移能量 ::</div>
+        <canvas id="tensionChart"></canvas>
+    </div>
+
+    <div id="ui-panel">
+        <h2>控制面板</h2>
+        
+        <div class="control-group">
+            <h3>运行控制</h3>
+            <div class="btn-group">
+                <button class="btn-start" onclick="app.start()">开始</button>
+                <button class="btn-pause" onclick="app.pause()">暂停</button>
+                <button class="btn-reset" onclick="app.reset()">还原</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>物理参数 (滚轮/滑动)</h3>
+            
+            <label>
+                <span>表面张力 (Tension)</span>
+                <span id="val-tension">50</span>
+            </label>
+            <input type="range" min="10" max="100" value="50" oninput="app.updateParam('tension', this.value)">
+            <p style="font-size:12px; color:#aaa;">张力越大，恢复平整越快，波长越长。</p>
+
+            <label>
+                <span>粘滞阻力 (Damping)</span>
+                <span id="val-damping">0.98</span>
+            </label>
+            <input type="range" min="0.90" max="0.995" step="0.001" value="0.98" oninput="app.updateParam('damping', this.value)">
+            
+            <label>
+                <span>扰动频率 (Frequency)</span>
+                <span id="val-freq">2.0</span>
+            </label>
+            <input type="range" min="0.1" max="10" step="0.1" value="2.0" oninput="app.updateParam('frequency', this.value)">
+
+            <label>
+                <span>扰动幅度 (Amplitude)</span>
+                <span id="val-amp">1.5</span>
+            </label>
+            <input type="range" min="0.1" max="5.0" step="0.1" value="1.5" oninput="app.updateParam('amplitude', this.value)">
+        </div>
+
+        <div class="control-group">
+            <h3>视图</h3>
+            <button class="toggle-chart" onclick="app.toggleChart()">显示/隐藏 图表</button>
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+
+    <script>
+        /**
+         * 应用程序主逻辑
+         */
+        class FluidApp {
+            constructor() {
+                this.container = document.getElementById('canvas-container');
+                this.isRunning = true;
+                this.time = 0;
+                
+                // 物理参数
+                this.params = {
+                    tension: 50,      // 模拟张力系数
+                    damping: 0.98,    // 衰减
+                    frequency: 2.0,   // 波源频率
+                    amplitude: 1.5    // 波源振幅
+                };
+
+                this.chartVisible = true;
+                
+                this.initThree();
+                this.initChart();
+                this.initDrag();
+                this.animate();
+            }
+
+            initThree() {
+                // 1. 场景
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x222222);
+                // 添加雾化效果增加深邃感
+                this.scene.fog = new THREE.Fog(0x222222, 10, 80);
+
+                // 2. 相机
+                this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(20, 20, 20);
+                this.camera.lookAt(0, 0, 0);
+
+                // 3. 渲染器
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+                this.container.appendChild(this.renderer.domElement);
+
+                // 4. 控制器 (OrbitControls) - 假设是全局变量 THREE.OrbitControls 或 OrbitControls
+                // 兼容不同版本的引入方式
+                const Controls = window.OrbitControls || (THREE.OrbitControls ? THREE.OrbitControls : null);
+                if (Controls) {
+                    this.controls = new Controls(this.camera, this.renderer.domElement);
+                    this.controls.enableDamping = true;
+                } else {
+                    console.error("OrbitControls not found. Make sure the file is named correctly.");
+                }
+
+                // 5. 光照
+                const ambientLight = new THREE.AmbientLight(0x404040, 2);
+                this.scene.add(ambientLight);
+
+                const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+                dirLight.position.set(10, 20, 10);
+                this.scene.add(dirLight);
+                
+                const pointLight = new THREE.PointLight(0x00aaff, 1, 50);
+                pointLight.position.set(0, 5, 0);
+                this.scene.add(pointLight);
+
+                // 6. 液体表面 (平面网格)
+                // 使用高细分平面来模拟液体
+                const geometry = new THREE.PlaneGeometry(30, 30, 128, 128);
+                // 旋转至水平
+                geometry.rotateX(-Math.PI / 2);
+                
+                // 材质：高光 Phong 材质，模拟液体反光
+                const material = new THREE.MeshPhongMaterial({
+                    color: 0x0077ff,
+                    specular: 0xffffff,
+                    shininess: 80,
+                    side: THREE.DoubleSide,
+                    wireframe: false,
+                    flatShading: false
+                });
+
+                this.waterMesh = new THREE.Mesh(geometry, material);
+                this.scene.add(this.waterMesh);
+
+                // 保存原始顶点位置用于计算
+                this.baseGeometry = geometry.clone(); // 备份
+                
+                // 网格辅助线
+                const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x333333);
+                gridHelper.position.y = -2;
+                this.scene.add(gridHelper);
+
+                // 监听窗口调整
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            }
+
+            initChart() {
+                if(typeof Chart === 'undefined') return;
+
+                const ctx = document.getElementById('tensionChart').getContext('2d');
+                this.chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: Array(50).fill(''),
+                        datasets: [{
+                            label: '中心点振幅 (模拟能量)',
+                            data: Array(50).fill(0),
+                            borderColor: 'rgba(0, 119, 255, 1)',
+                            backgroundColor: 'rgba(0, 119, 255, 0.2)',
+                            borderWidth: 2,
+                            tension: 0.4,
+                            fill: true,
+                            pointRadius: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        animation: false, // 禁用动画以提高性能
+                        scales: {
+                            y: { min: -2, max: 2, display: true },
+                            x: { display: false }
+                        },
+                        plugins: {
+                            legend: { display: false }
+                        }
+                    }
+                });
+            }
+
+            // 图表拖动逻辑
+            initDrag() {
+                const el = document.getElementById('chart-wrapper');
+                let isDragging = false;
+                let offsetX, offsetY;
+
+                el.addEventListener('mousedown', (e) => {
+                    isDragging = true;
+                    offsetX = e.clientX - el.offsetLeft;
+                    offsetY = e.clientY - el.offsetTop;
+                    el.style.opacity = '0.6';
+                });
+
+                document.addEventListener('mousemove', (e) => {
+                    if (isDragging) {
+                        el.style.left = (e.clientX - offsetX) + 'px';
+                        el.style.top = (e.clientY - offsetY) + 'px';
+                    }
+                });
+
+                document.addEventListener('mouseup', () => {
+                    isDragging = false;
+                    el.style.opacity = '1.0';
+                });
+            }
+
+            updatePhysics() {
+                if (!this.isRunning) return;
+
+                this.time += 0.05;
+
+                const positions = this.waterMesh.geometry.attributes.position;
+                const basePositions = this.baseGeometry.attributes.position;
+                const count = positions.count;
+
+                // 简单的波浪算法
+                // 高张力 (Tension) = 波传播快，波长拉长
+                // 高粘滞 (Damping) = 振幅衰减快
+                
+                const t = this.time * (this.params.frequency * 0.5); 
+                // 张力系数影响波长 (k)
+                const k = 150 / this.params.tension; 
+                
+                let centerHeight = 0;
+
+                for (let i = 0; i < count; i++) {
+                    const x = basePositions.getX(i);
+                    const z = basePositions.getZ(i); // 原始平面是X-Z平面（旋转后）
+                    
+                    // 计算到中心的距离
+                    const dist = Math.sqrt(x * x + z * z);
+                    
+                    // 模拟公式：正弦波 * 距离衰减 (模拟表面张力拉平效果)
+                    // 距离越远，波受到的阻尼越大
+                    let wave = Math.sin(dist * k - t);
+                    
+                    // 衰减函数
+                    let decay = Math.exp(-dist * (1 - this.params.damping) * 0.5);
+                    
+                    // 中心点波源
+                    let y = wave * this.params.amplitude * decay;
+
+                    // 设置新的高度 Y
+                    positions.setY(i, y);
+
+                    // 记录中心点附近的高度用于图表
+                    if (Math.abs(x) < 0.1 && Math.abs(z) < 0.1) {
+                        centerHeight = y;
+                    }
+                }
+
+                positions.needsUpdate = true;
+                this.waterMesh.geometry.computeVertexNormals();
+
+                // 更新图表
+                this.updateChart(centerHeight);
+            }
+
+            updateChart(value) {
+                if (!this.chart || !this.chartVisible) return;
+                
+                // 每隔几帧更新一次，避免太快
+                if (Math.floor(this.time * 100) % 5 !== 0) return;
+
+                const data = this.chart.data.datasets[0].data;
+                data.shift();
+                data.push(value);
+                this.chart.update();
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                this.updatePhysics();
+                
+                if (this.controls) this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+
+            // --- UI 接口 ---
+
+            start() { this.isRunning = true; }
+            pause() { this.isRunning = false; }
+            reset() {
+                this.isRunning = false;
+                this.time = 0;
+                // 重置平面
+                const positions = this.waterMesh.geometry.attributes.position;
+                const count = positions.count;
+                for(let i=0; i<count; i++) positions.setY(i, 0);
+                positions.needsUpdate = true;
+                this.renderer.render(this.scene, this.camera);
+                
+                // 重置图表
+                if(this.chart) {
+                    this.chart.data.datasets[0].data = Array(50).fill(0);
+                    this.chart.update();
+                }
+            }
+
+            updateParam(key, value) {
+                this.params[key] = parseFloat(value);
+                // 更新显示的数值
+                const span = document.getElementById('val-' + (key === 'frequency' ? 'freq' : (key === 'amplitude' ? 'amp' : key)));
+                if(span) span.innerText = value;
+            }
+
+            toggleChart() {
+                this.chartVisible = !this.chartVisible;
+                const wrapper = document.getElementById('chart-wrapper');
+                if (this.chartVisible) {
+                    wrapper.classList.remove('hidden');
+                } else {
+                    wrapper.classList.add('hidden');
+                }
+            }
+        }
+
+        // 启动应用
+        window.onload = () => {
+            window.app = new FluidApp();
+        };
+
+    </script>
+</body>
+</html>

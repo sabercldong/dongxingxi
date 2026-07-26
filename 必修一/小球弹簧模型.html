@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弹簧振子仿真 (全屏慢动作版)</title>
+    <style>
+        :root {
+            --bg-color: #1e293b;       /* 深蓝灰背景 */
+            --panel-bg: #f8fafc;       /* 浅色控制面板 */
+            --text-primary: #334155;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-blue: #3b82f6;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-color);
+            height: 100vh; /* 强制单屏 */
+            display: flex; /* 左右布局 */
+            overflow: hidden; /* 禁止滚动 */
+        }
+
+        /* 左侧：仿真演示区 (铺满剩余空间) */
+        #simulation-container {
+            flex: 1; /* 占据剩余所有宽度 */
+            position: relative;
+            background-color: #334155;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end; /* 底部对齐 */
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 右侧：功能控制区 */
+        #control-panel {
+            width: 360px; /* 固定宽度 */
+            min-width: 300px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto; /* 内容过多可内部滚动 */
+            box-shadow: -5px 0 15px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+
+        /* 控件样式 */
+        h2 { margin: 0 0 10px 0; color: #1e293b; border-bottom: 3px solid var(--accent-blue); padding-bottom: 5px; }
+        
+        .control-group {
+            background: #fff;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+
+        label { display: flex; justify-content: space-between; font-weight: 600; font-size: 0.9rem; color: var(--text-primary); margin-bottom: 8px;}
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: var(--accent-blue); }
+
+        .btn-group { display: flex; gap: 10px; margin-top: 5px; }
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            font-size: 1rem;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        #btn-start { background-color: var(--accent-green); }
+        #btn-reset { background-color: var(--accent-red); }
+
+        /* 数据网格 */
+        .data-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-family: 'Courier New', monospace;
+        }
+        .data-item {
+            background: #f1f5f9;
+            padding: 8px;
+            border-radius: 4px;
+            display: flex;
+            flex-direction: column;
+        }
+        .data-label { font-size: 0.75rem; color: #64748b; }
+        .data-value { font-weight: bold; color: #0f172a; font-size: 1rem; }
+
+        /* 能量条 */
+        .energy-row { margin-bottom: 5px; }
+        .energy-meta { display: flex; justify-content: space-between; font-size: 0.8rem; margin-bottom: 2px; }
+        .bar-bg { height: 6px; background: #e2e8f0; border-radius: 3px; overflow: hidden; }
+        .bar-fill { height: 100%; width: 0%; transition: width 0.1s; }
+
+    </style>
+</head>
+<body>
+
+    <div id="simulation-container">
+        <canvas id="simCanvas"></canvas>
+        <div style="position:absolute; top:10px; left:10px; color:rgba(255,255,255,0.5); font-size:12px;">
+            窗口大小自适应 | 自动铺满
+        </div>
+    </div>
+
+    <div id="control-panel">
+        <h2>物理仿真控制台</h2>
+        
+        <div class="control-group" style="background: #e0f2fe; border-color: #bae6fd;">
+            <label>⏱️ 动画速度 : <span id="v-time">0.2</span>x</label>
+            <input type="range" id="timeScale" min="0.05" max="1.0" step="0.05" value="0.2">
+            <div style="font-size:0.75rem; color:#0369a1; margin-top:4px;">当前为 5倍慢放，方便观察细节</div>
+        </div>
+
+        <div class="control-group">
+            <label>小球质量 (m): <span id="v-m">2.0</span> kg</label>
+            <input type="range" id="m" min="0.5" max="10" step="0.5" value="2.0">
+        </div>
+
+        <div class="control-group">
+            <label>劲度系数 (k): <span id="v-k">30</span> N/m</label>
+            <input type="range" id="k" min="5" max="100" step="5" value="30">
+        </div>
+
+        <div class="control-group">
+            <label>阻尼 (空气阻力): <span id="v-d">0.05</span></label>
+            <input type="range" id="d" min="0.0" max="0.5" step="0.01" value="0.05">
+        </div>
+
+        <div class="btn-group">
+            <button id="btn-start">开始 / 暂停</button>
+            <button id="btn-reset">重置系统</button>
+        </div>
+
+        <h3>📝 实时数据</h3>
+        <div class="data-grid">
+            <div class="data-item">
+                <span class="data-label">高度 (h)</span>
+                <span class="data-value" id="d-h">0.00 m</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">速度 (v)</span>
+                <span class="data-value" id="d-v">0.00 m/s</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">压缩量 (Δx)</span>
+                <span class="data-value" id="d-x" style="color:#e11d48">0.00 m</span>
+            </div>
+            <div class="data-item">
+                <span class="data-label">瞬时弹力 (F)</span>
+                <span class="data-value" id="d-f" style="color:#e11d48">0.0 N</span>
+            </div>
+        </div>
+
+        <h3>🔋 能量分布</h3>
+        <div class="control-group">
+            <div class="energy-row">
+                <div class="energy-meta"><span>动能 (Ek)</span><span id="txt-ek">0J</span></div>
+                <div class="bar-bg"><div class="bar-fill" id="bar-ek" style="background:#ef4444"></div></div>
+            </div>
+            <div class="energy-row">
+                <div class="energy-meta"><span>重力势能 (Ep)</span><span id="txt-ep">0J</span></div>
+                <div class="bar-bg"><div class="bar-fill" id="bar-ep" style="background:#3b82f6"></div></div>
+            </div>
+            <div class="energy-row">
+                <div class="energy-meta"><span>弹性势能 (Es)</span><span id="txt-es">0J</span></div>
+                <div class="bar-bg"><div class="bar-fill" id="bar-es" style="background:#f59e0b"></div></div>
+            </div>
+            <div class="energy-row" style="margin-top:8px; border-top:1px solid #eee; padding-top:4px;">
+                <div class="energy-meta"><span>总机械能</span><span id="txt-et">0J</span></div>
+                <div class="bar-bg"><div class="bar-fill" id="bar-et" style="background:#10b981"></div></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('simulation-container');
+
+    // --- 1. 物理模型参数 (MKS单位制: 米, 千克, 秒) ---
+    // 坐标系：地面 y=0，向上为正
+    const PHYSICS = {
+        g: 9.8,        // 重力加速度
+        groundY: 0,    // 地面物理坐标
+        viewHeightM: 6.0, // 视图总高度（米）：决定缩放比例，让6米撑满屏幕
+    };
+
+    let state = {
+        m: 2.0,      // 质量
+        k: 30,       // 劲度系数
+        damping: 0.05, // 阻尼
+        timeScale: 0.2, // 慢动作系数
+        
+        y: 4.5,      // 球心高度 (初始位置)
+        v: 0,        // 速度
+        
+        springRestL: 2.5, // 弹簧原长(米)
+        ballRadius: 0.25, // 球半径(米)
+        
+        // 实时计算值
+        compression: 0,
+        forceSpring: 0,
+        forceDamping: 0,
+        forceGravity: 0,
+        a: 0
+    };
+
+    let running = false;
+    let animId;
+    let PPM = 100; // Pixels Per Meter (动态计算)
+
+    // --- 2. 响应式布局与初始化 ---
+    function resizeCanvas() {
+        // 让 Canvas 像素尺寸等于显示尺寸，避免模糊
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        
+        // 核心：计算 PPM (Pixels Per Meter)
+        // 让设定的 viewHeightM (比如6米) 对应 Canvas 的高度
+        PPM = canvas.height / PHYSICS.viewHeightM;
+        
+        if (!running) draw(); // 暂停时重绘以适应窗口
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    function init() {
+        state.y = 4.5;
+        state.v = 0;
+        state.a = 0;
+        state.compression = 0;
+        state.forceSpring = 0;
+        
+        updateParamsFromDOM();
+        resizeCanvas();
+        draw();
+        updateDOM();
+    }
+
+    // --- 3. 物理引擎核心 ---
+    function updatePhysics(dt) {
+        // 应用时间缩放 (慢动作)
+        const dtSim = dt * state.timeScale;
+
+        // A. 受力分析
+        state.forceGravity = -state.m * PHYSICS.g;
+        
+        // 弹簧受力判定
+        // 弹簧顶部自然高度
+        const springTopRest = state.springRestL;
+        // 球体底部高度
+        const ballBottom = state.y - state.ballRadius;
+        
+        state.forceSpring = 0;
+        state.compression = 0;
+
+        // 只有当球底 低于 弹簧原长高度时，才产生弹力
+        if (ballBottom < springTopRest) {
+            state.compression = springTopRest - ballBottom;
+            // 胡克定律 (向上推)
+            state.forceSpring = state.k * state.compression;
+            
+            // 地面碰撞检测 (简易版)
+            if (ballBottom <= 0) {
+                state.y = state.ballRadius; // 强制拉回地面
+                state.v = -state.v * 0.5;   // 撞击地面能量损失
+            }
+        }
+
+        // 阻尼力 (总是阻碍运动)
+        state.forceDamping = -state.damping * state.v * 5.0; // 系数放大一点以便观察
+
+        // B. 运动定律 (F_net = ma)
+        const F_net = state.forceGravity + state.forceSpring + state.forceDamping;
+        state.a = F_net / state.m;
+
+        // C. 欧拉积分 (更新位置)
+        state.v += state.a * dtSim;
+        state.y += state.v * dtSim;
+    }
+
+    // --- 4. 绘图系统 ---
+    function toScreenY(meterY) {
+        // 物理坐标(0在下) -> 屏幕坐标(0在上)
+        return canvas.height - (meterY * PPM);
+    }
+    
+    function toScreenSize(meterSize) {
+        return meterSize * PPM;
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. 绘制背景标尺 (每0.5米)
+        ctx.strokeStyle = '#3b4c65'; // 淡淡的网格线
+        ctx.lineWidth = 1;
+        ctx.font = '12px Arial';
+        ctx.fillStyle = '#64748b';
+        ctx.textAlign = 'right';
+
+        for (let h = 0; h <= PHYSICS.viewHeightM; h += 0.5) {
+            const y = toScreenY(h);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+            ctx.fillText(h.toFixed(1) + 'm', canvas.width - 10, y - 5);
+        }
+
+        // 2. 绘制地面
+        const groundPixelY = toScreenY(0);
+        ctx.fillStyle = '#475569';
+        ctx.fillRect(0, groundPixelY, canvas.width, 20);
+
+        // 3. 计算关键点
+        const centerX = canvas.width / 2;
+        const springRestY_Screen = toScreenY(state.springRestL);
+        
+        // 计算平衡位置 (mg = kx => x = mg/k)
+        const eqDist = (state.m * PHYSICS.g) / state.k;
+        const eqY_Meters = state.springRestL - eqDist;
+        const eqY_Screen = toScreenY(eqY_Meters); // 这是平衡时球底的位置
+
+        // 4. 绘制辅助线
+        // 橙色虚线：弹簧原长
+        drawDasheLine(centerX - 150, springRestY_Screen, centerX + 150, '#f59e0b', '弹簧原长');
+        
+        // 绿色实线：平衡位置 (当且仅当球底到达此处时受力平衡)
+        // 绘制一条对应球心的绿线更直观
+        const eqBallCenterY_Screen = toScreenY(eqY_Meters + state.ballRadius);
+        drawSolidLine(centerX - 150, eqBallCenterY_Screen, centerX + 150, '#10b981', '平衡位置(速度最大)');
+
+        // 5. 绘制弹簧
+        // 确定弹簧当前高度：如果球在空中，弹簧是原长；如果接触，弹簧高度=球底高度
+        let currentSpringH = state.springRestL;
+        if ((state.y - state.ballRadius) < state.springRestL) {
+            currentSpringH = state.y - state.ballRadius;
+        }
+        if (currentSpringH < 0) currentSpringH = 0; // 压扁极限
+
+        const springTopY_Screen = toScreenY(currentSpringH);
+        const springWidth = toScreenSize(0.6); // 弹簧宽0.6米
+        
+        drawCoilSpring(centerX, groundPixelY, springTopY_Screen, springWidth, 12);
+
+        // 6. 绘制小球
+        const ballScreenY = toScreenY(state.y);
+        const ballScreenR = toScreenSize(state.ballRadius);
+
+        ctx.beginPath();
+        ctx.arc(centerX, ballScreenY, ballScreenR, 0, Math.PI * 2);
+        // 红色球体渐变
+        let grad = ctx.createRadialGradient(
+            centerX - ballScreenR*0.3, ballScreenY - ballScreenR*0.3, ballScreenR*0.2,
+            centerX, ballScreenY, ballScreenR
+        );
+        grad.addColorStop(0, '#fca5a5');
+        grad.addColorStop(1, '#dc2626');
+        ctx.fillStyle = grad;
+        ctx.fill();
+        ctx.strokeStyle = '#7f1d1d'; // 深红边框
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // 球心白点
+        ctx.beginPath();
+        ctx.arc(centerX, ballScreenY, 3, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(255,255,255,0.8)';
+        ctx.fill();
+    }
+
+    // 辅助绘图：弹簧
+    function drawCoilSpring(x, bottomY, topY, width, segments) {
+        ctx.beginPath();
+        ctx.strokeStyle = '#cbd5e1'; // 亮灰色弹簧
+        ctx.lineWidth = 6; // 加粗线条
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        let height = bottomY - topY;
+        let step = height / segments;
+
+        ctx.moveTo(x, bottomY);
+        for (let i = 1; i <= segments; i++) {
+            // 之字形
+            let xOffset = (i % 2 === 0) ? -width/2 : width/2;
+            if (i === segments) xOffset = 0; // 最后归中
+            let y = bottomY - i * step;
+            ctx.lineTo(x + xOffset, y);
+        }
+        ctx.stroke();
+        
+        // 弹簧顶盖
+        ctx.beginPath();
+        ctx.moveTo(x - width/1.5, topY);
+        ctx.lineTo(x + width/1.5, topY);
+        ctx.lineWidth = 8;
+        ctx.strokeStyle = '#64748b'; // 深色托盘
+        ctx.stroke();
+    }
+
+    function drawDasheLine(x1, y, x2, color, text) {
+        ctx.beginPath();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.moveTo(x1, y);
+        ctx.lineTo(x2, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = color;
+        ctx.textAlign = 'left';
+        ctx.fillText(text, x2 + 5, y + 4);
+    }
+    
+    function drawSolidLine(x1, y, x2, color, text) {
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.moveTo(x1, y);
+        ctx.lineTo(x2, y);
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.textAlign = 'left';
+        ctx.fillText(text, x2 + 5, y + 4);
+    }
+
+    // --- 5. 主循环与DOM更新 ---
+    let lastTime = 0;
+    function loop(timestamp) {
+        if (!running) return;
+        
+        if (!lastTime) lastTime = timestamp;
+        const dt = (timestamp - lastTime) / 1000; // 转秒
+        lastTime = timestamp;
+
+        // 限制最大 dt 防止切换标签页时爆炸
+        const safeDt = Math.min(dt, 0.05);
+
+        // 多步子物理模拟以保证精度
+        const subSteps = 4;
+        for (let i = 0; i < subSteps; i++) {
+            updatePhysics(safeDt / subSteps);
+        }
+
+        draw();
+        updateDOM();
+        animId = requestAnimationFrame(loop);
+    }
+
+    function updateDOM() {
+        document.getElementById('d-h').innerText = state.y.toFixed(2) + ' m';
+        document.getElementById('d-v').innerText = state.v.toFixed(2) + ' m/s';
+        
+        // 只有接触时才显示压缩量和弹力
+        if (state.compression > 0.001) {
+            document.getElementById('d-x').innerText = state.compression.toFixed(3) + ' m';
+            document.getElementById('d-f').innerText = state.forceSpring.toFixed(1) + ' N';
+        } else {
+            document.getElementById('d-x').innerText = "0.00 m";
+            document.getElementById('d-f').innerText = "0.0 N";
+        }
+
+        // 能量
+        const Ek = 0.5 * state.m * state.v * state.v;
+        const Ep = state.m * PHYSICS.g * state.y;
+        const Es = 0.5 * state.k * state.compression * state.compression;
+        const Et = Ek + Ep + Es;
+        
+        // 进度条最大参考值 (基于初始能量)
+        const maxE = 200; 
+
+        document.getElementById('txt-ek').innerText = Ek.toFixed(1);
+        document.getElementById('bar-ek').style.width = Math.min(100, Ek/maxE*100) + '%';
+        
+        document.getElementById('txt-ep').innerText = Ep.toFixed(1);
+        document.getElementById('bar-ep').style.width = Math.min(100, Ep/maxE*100) + '%';
+        
+        document.getElementById('txt-es').innerText = Es.toFixed(1);
+        document.getElementById('bar-es').style.width = Math.min(100, Es/maxE*100) + '%';
+
+        document.getElementById('txt-et').innerText = Et.toFixed(1) + ' J';
+        document.getElementById('bar-et').style.width = Math.min(100, Et/maxE*100) + '%';
+    }
+
+    // --- 6. 事件绑定 ---
+    function updateParamsFromDOM() {
+        state.m = parseFloat(document.getElementById('m').value);
+        state.k = parseFloat(document.getElementById('k').value);
+        state.damping = parseFloat(document.getElementById('d').value);
+        state.timeScale = parseFloat(document.getElementById('timeScale').value);
+        
+        document.getElementById('v-m').innerText = state.m.toFixed(1);
+        document.getElementById('v-k').innerText = state.k;
+        document.getElementById('v-d').innerText = state.damping.toFixed(2);
+        document.getElementById('v-time').innerText = state.timeScale.toFixed(2);
+    }
+
+    ['m', 'k', 'd', 'timeScale'].forEach(id => {
+        document.getElementById(id).addEventListener('input', () => {
+            updateParamsFromDOM();
+            if (!running) draw(); // 实时更新静态画面
+        });
+    });
+
+    document.getElementById('btn-start').addEventListener('click', () => {
+        running = !running;
+        if (running) {
+            lastTime = 0;
+            loop(0);
+        }
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        running = false;
+        cancelAnimationFrame(animId);
+        init();
+    });
+
+    // 启动初始化
+    init();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物理等时圆模型仿真 (Isochronous Circle)</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-color: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent-color: #4CAF50;
+            --accent-hover: #45a049;
+            --border-color: #444;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden; /* 强制单屏 */
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+        }
+
+        /* 左侧画布区 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle at center, #2a2a2a 0%, #1a1a1a 100%);
+        }
+
+        canvas {
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            border-radius: 4px;
+        }
+
+        /* 右侧功能区 */
+        #control-panel {
+            width: 320px;
+            background-color: var(--panel-color);
+            border-left: 1px solid var(--border-color);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            overflow-y: auto;
+        }
+
+        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 2px solid var(--accent-color); padding-bottom: 10px; }
+        
+        .control-group {
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        label { display: block; margin-bottom: 5px; font-size: 0.9rem; }
+        
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .value-display {
+            float: right;
+            color: var(--accent-color);
+            font-weight: bold;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+            margin-bottom: 5px;
+        }
+
+        .btn-primary { background-color: var(--accent-color); color: white; }
+        .btn-primary:hover { background-color: var(--accent-hover); }
+        
+        .btn-secondary { background-color: #555; color: white; }
+        .btn-secondary:hover { background-color: #666; }
+
+        select {
+            width: 100%;
+            padding: 10px;
+            background: #444;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+
+        .info-box {
+            font-size: 0.85rem;
+            color: #aaa;
+            line-height: 1.4;
+            border-top: 1px solid var(--border-color);
+            padding-top: 10px;
+            margin-top: auto; /* 推到底部 */
+        }
+
+        .formula {
+            font-style: italic;
+            text-align: center;
+            margin: 10px 0;
+            color: #fff;
+            font-family: 'Times New Roman', serif;
+            font-size: 1.1rem;
+        }
+
+        /* 状态指示灯 */
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #555;
+            margin-right: 5px;
+        }
+        .status-running { background-color: #00ff00; box-shadow: 0 0 5px #00ff00; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div id="control-panel">
+        <h2>等时圆模型设置</h2>
+
+        <div class="control-group">
+            <label>演示模式</label>
+            <select id="modeSelect">
+                <option value="top-down">最高点发散 (Top to Ring)</option>
+                <option value="bottom-up">汇聚最低点 (Ring to Bottom)</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label>重力加速度 (g) <span id="val-g" class="value-display">9.8</span></label>
+            <input type="range" id="g-slider" min="1" max="20" step="0.1" value="9.8">
+        </div>
+
+        <div class="control-group">
+            <label>圆半径 (R) <span id="val-r" class="value-display">200</span></label>
+            <input type="range" id="r-slider" min="100" max="300" step="10" value="200">
+        </div>
+
+        <div class="control-group">
+            <label>轨道数量 <span id="val-tracks" class="value-display">8</span></label>
+            <input type="range" id="tracks-slider" min="2" max="24" step="2" value="8">
+        </div>
+
+        <div class="control-group" style="text-align: center;">
+            <div id="timer-display" style="font-size: 1.5rem; font-family: monospace; color: var(--accent-color);">0.00s</div>
+            <div style="font-size: 0.8rem; color: #888;">理论时间: <span id="theory-time">0.00</span>s</div>
+        </div>
+
+        <div style="margin-top: 10px;">
+            <button id="btn-start" class="btn-primary">开始演示</button>
+            <button id="btn-reset" class="btn-secondary">重置</button>
+        </div>
+
+        <div class="info-box">
+            <p><strong>原理说明：</strong></p>
+            <p>物体沿光滑弦从圆的最高点滑落至圆周，或从圆周滑落至最低点，所需时间均相等。</p>
+            <div class="formula">t = 2√(R/g)</div>
+            <p>时间与倾角无关，仅取决于半径 R 和重力 g。</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 状态变量
+        let state = {
+            running: false,
+            startTime: 0,
+            elapsed: 0,
+            radius: 200,
+            g: 9.8, // pixels/s^2 (logic scale) -> will be scaled visually
+            numTracks: 8,
+            mode: 'top-down', // 'top-down' or 'bottom-up'
+            scale: 100 // 1 meter = 100 pixels
+        };
+
+        let animationFrameId;
+
+        // DOM 元素引用
+        const els = {
+            g: document.getElementById('g-slider'),
+            r: document.getElementById('r-slider'),
+            tracks: document.getElementById('tracks-slider'),
+            mode: document.getElementById('modeSelect'),
+            valG: document.getElementById('val-g'),
+            valR: document.getElementById('val-r'),
+            valTracks: document.getElementById('val-tracks'),
+            timer: document.getElementById('timer-display'),
+            theory: document.getElementById('theory-time'),
+            btnStart: document.getElementById('btn-start'),
+            btnReset: document.getElementById('btn-reset')
+        };
+
+        // 初始化Canvas尺寸
+        function resizeCanvas() {
+            const container = document.getElementById('canvas-container');
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            draw();
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        // 更新UI数值显示
+        function updateUI() {
+            state.g = parseFloat(els.g.value);
+            state.radius = parseInt(els.r.value);
+            state.numTracks = parseInt(els.tracks.value);
+            state.mode = els.mode.value;
+
+            els.valG.textContent = state.g.toFixed(1);
+            els.valR.textContent = state.radius;
+            els.valTracks.textContent = state.numTracks;
+
+            // 计算理论时间 t = 2 * sqrt(R / g)
+            // 注意单位换算：Radius是像素，g是m/s^2。我们需要把R转成米 (R / scale)
+            const rInMeters = state.radius / state.scale;
+            const theoryTime = 2 * Math.sqrt(rInMeters / state.g);
+            els.theory.textContent = theoryTime.toFixed(3);
+        }
+
+        // 核心绘图逻辑
+        function draw() {
+            // 清空画布
+            ctx.fillStyle = '#1e1e1e';
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+
+            // 绘制主圆
+            ctx.beginPath();
+            ctx.arc(cx, cy, state.radius, 0, Math.PI * 2);
+            ctx.strokeStyle = '#444';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // 绘制垂直直径虚线
+            ctx.beginPath();
+            ctx.moveTo(cx, cy - state.radius);
+            ctx.lineTo(cx, cy + state.radius);
+            ctx.setLineDash([5, 5]);
+            ctx.strokeStyle = '#666';
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 确定起点和终点逻辑
+            // 角度分布：-90度是正上方，90度是正下方
+            // 我们在左右两侧分布弦
+            
+            const maxAngle = Math.PI / 2; // 90度
+            // 排除纯垂直的情况，防止重叠
+            const angleStep = (maxAngle * 1.6) / (state.numTracks - 1); 
+            const startAngleOffset = - (maxAngle * 0.8);
+
+            for (let i = 0; i < state.numTracks; i++) {
+                let theta = startAngleOffset + (i * angleStep);
+                
+                // 修正：避免完全水平（无法滑动）或完全垂直（与直径重叠）
+                if (Math.abs(theta) < 0.05) theta = 0.05; 
+                
+                // 计算弦的几何
+                // 模式1: 最高点(0, -R) 到 圆周
+                // 模式2: 圆周 到 最低点(0, R)
+                
+                let startX, startY, endX, endY, slideAngle;
+                
+                if (state.mode === 'top-down') {
+                    // 起点：最高点
+                    startX = 0;
+                    startY = -state.radius;
+                    // 终点：根据角度计算。弦长 L = 2R * cos(alpha)
+                    // alpha 是弦与垂直线的夹角
+                    // 这里 theta 是相对于垂直线的夹角
+                    
+                    endX = state.radius * Math.sin(2 * theta);
+                    endY = -state.radius * Math.cos(2 * theta); // 这样不对，这是圆心坐标系
+                    
+                    // 更简单的方法：
+                    // 最高点 P(0, -R). 下一点 Q(x, y). 
+                    // 连线 PQ 使得它也是圆的一条弦
+                    // 角度 theta 为弦与垂直方向夹角。
+                    // 弦长 L = 2R * cos(theta)
+                    // endX = L * sin(theta)
+                    // endY = -R + L * cos(theta)
+                    
+                    const L = 2 * state.radius * Math.cos(theta);
+                    startX = cx;
+                    startY = cy - state.radius;
+                    endX = cx + L * Math.sin(theta);
+                    endY = (cy - state.radius) + L * Math.cos(theta);
+                    
+                    slideAngle = theta;
+                } else {
+                    // 汇聚到底部
+                    // 终点：最低点
+                    const L = 2 * state.radius * Math.cos(theta);
+                    endX = cx;
+                    endY = cy + state.radius;
+                    startX = cx - L * Math.sin(theta); // 注意方向，为了对称
+                    startY = (cy + state.radius) - L * Math.cos(theta);
+                    
+                    slideAngle = theta; // 加速度计算角度相同
+                }
+
+                // 绘制轨道（弦）
+                ctx.beginPath();
+                ctx.moveTo(startX, startY);
+                ctx.lineTo(endX, endY);
+                ctx.strokeStyle = '#555';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // 计算小球位置
+                // s = 1/2 * a * t^2
+                // a = g * cos(theta)
+                let dist = 0;
+                let progress = 0;
+
+                const L_total = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+                const L_meters = L_total / state.scale;
+
+                if (state.running) {
+                    const acc = state.g * Math.cos(slideAngle);
+                    const distMeters = 0.5 * acc * Math.pow(state.elapsed, 2);
+                    dist = distMeters * state.scale;
+                    
+                    if (dist >= L_total) {
+                        dist = L_total;
+                        progress = 1;
+                    } else {
+                        progress = dist / L_total;
+                    }
+                }
+
+                // 小球当前坐标
+                const ballX = startX + (endX - startX) * progress;
+                const ballY = startY + (endY - startY) * progress;
+
+                // 绘制小球
+                ctx.beginPath();
+                ctx.arc(ballX, ballY, 6, 0, Math.PI * 2);
+                
+                // 颜色逻辑：到达终点变色
+                if (progress >= 1 && state.running) {
+                    ctx.fillStyle = '#4CAF50'; // Green
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = '#4CAF50';
+                } else {
+                    ctx.fillStyle = '#2196F3'; // Blue
+                    ctx.shadowBlur = 0;
+                }
+                
+                ctx.fill();
+                ctx.shadowBlur = 0; // reset
+            }
+        }
+
+        // 动画循环
+        function loop() {
+            if (!state.running) return;
+
+            const now = Date.now();
+            state.elapsed = (now - state.startTime) / 1000;
+
+            els.timer.textContent = state.elapsed.toFixed(2) + "s";
+
+            draw();
+
+            // 简单的自动停止检查：取一个稍微大于理论时间的值，防止无限循环
+            const rInMeters = state.radius / state.scale;
+            const theoryTime = 2 * Math.sqrt(rInMeters / state.g);
+            
+            // 如果超过理论时间 + 0.5秒，暂停（可选，这里保持运行以便观察完全贴合）
+            /* if (state.elapsed > theoryTime + 0.5) {
+                // stop();
+            }
+            */
+
+            animationFrameId = requestAnimationFrame(loop);
+        }
+
+        function start() {
+            if (state.running) return;
+            state.running = true;
+            state.startTime = Date.now() - (state.elapsed * 1000); // 允许暂停后继续（虽然后面逻辑是重置）
+            els.btnStart.textContent = "暂停";
+            loop();
+        }
+
+        function pause() {
+            state.running = false;
+            cancelAnimationFrame(animationFrameId);
+            els.btnStart.textContent = "继续";
+        }
+
+        function reset() {
+            state.running = false;
+            cancelAnimationFrame(animationFrameId);
+            state.elapsed = 0;
+            els.timer.textContent = "0.00s";
+            els.btnStart.textContent = "开始演示";
+            draw();
+        }
+
+        // 事件监听
+        els.btnStart.addEventListener('click', () => {
+            if (state.running) pause();
+            else start();
+        });
+
+        els.btnReset.addEventListener('click', reset);
+
+        // 绑定滑块实时更新
+        [els.g, els.r, els.tracks, els.mode].forEach(input => {
+            input.addEventListener('input', () => {
+                reset(); // 改变参数时重置
+                updateUI();
+                draw();
+            });
+        });
+
+        // 初始化
+        updateUI();
+        resizeCanvas();
+
+    </script>
+</body>
+</html>

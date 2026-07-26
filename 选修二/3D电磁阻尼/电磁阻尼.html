@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>电磁阻尼最终态演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; }
+        
+        /* 右侧控制区 */
+        #gui-container {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 100vh;
+            background: rgba(30, 30, 30, 0.95);
+            border-left: 1px solid #444;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            color: #eee;
+            z-index: 10;
+        }
+
+        /* 左上角图表容器 */
+        #chart-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 400px;
+            height: 250px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            cursor: move;
+            z-index: 10;
+            display: block;
+        }
+        
+        #chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+            border-bottom: 1px solid #ccc;
+            padding-bottom: 5px;
+            color: #333;
+            font-weight: bold;
+            font-size: 14px;
+        }
+
+        .btn-close { cursor: pointer; color: #888; font-weight: bold; }
+        .btn-close:hover { color: #f00; }
+
+        /* 控件样式 */
+        .control-group { margin-bottom: 25px; border-bottom: 1px solid #444; padding-bottom: 15px; }
+        .control-group:last-child { border-bottom: none; }
+        label { display: block; margin-bottom: 8px; font-size: 14px; color: #aaa; }
+        input[type="range"] { width: 100%; cursor: pointer; margin-bottom: 5px;}
+        
+        button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 12px 15px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 14px;
+            margin: 5px 0;
+            cursor: pointer;
+            border-radius: 4px;
+            width: 100%;
+            transition: background 0.3s;
+            font-weight: bold;
+        }
+        button:hover { background-color: #45a049; }
+        button.btn-reset { background-color: #f44336; }
+        button.btn-reset:hover { background-color: #d32f2f; }
+        button.btn-toggle-chart { background-color: #2196F3; margin-top: 10px;}
+
+        .status-box {
+            background: #222;
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 5px;
+            border: 1px solid #555;
+        }
+        .status-text { font-size: 13px; margin-bottom: 4px; }
+        .highlight-red { color: #ff5555; font-weight: bold; }
+        .highlight-green { color: #55ff55; font-weight: bold; }
+        .highlight-gold { color: #ffcc00; font-weight: bold; }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="chart-container">
+        <div id="chart-header">
+            <span>摆角 (时间-角度)</span>
+            <span class="btn-close" onclick="toggleChart(false)">✕</span>
+        </div>
+        <canvas id="myChart"></canvas>
+    </div>
+
+    <div id="gui-container">
+        <h2>电磁阻尼演示</h2>
+        <p style="font-size: 12px; color: #bbb; line-height: 1.5;">
+            <strong>观察重点：</strong><br>
+            1. 只有圆环<b>进出边界</b>时才减速。<br>
+            2. 当摆幅减小到完全在<b>框内</b>时，磁通量不变，无感应电流，将<b>无限自由摆动</b>。
+        </p>
+        
+        <div class="control-group">
+            <button id="btn-start">开始 / 暂停</button>
+            <button id="btn-reset" class="btn-reset">还原 (Reset)</button>
+        </div>
+
+        <div class="control-group">
+            <label>初始摆角: <span id="val-angle">45</span>°</label>
+            <input type="range" id="input-angle" min="15" max="70" value="45">
+            <div style="font-size:12px; color:#888;">建议 > 30° 以产生跨越</div>
+        </div>
+
+        <div class="control-group">
+            <label>磁场阻尼系数: <span id="val-damping">1.0</span></label>
+            <input type="range" id="input-damping" min="0" max="3.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <div class="status-box">
+                <div id="status-location" class="status-text">位置: 磁场外</div>
+                <div id="status-action" class="status-text">状态: ---</div>
+            </div>
+            <button class="btn-toggle-chart" onclick="toggleChart(true)">显示图表</button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. 初始化 Three.js 场景
+        // ==========================================
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xe0e0e0);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 2, 22);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 15, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        let controls;
+        if (typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+        else if (typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+        else if (window.OrbitControls) controls = new window.OrbitControls(camera, renderer.domElement);
+
+        // ==========================================
+        // 2. 构建物理模型
+        // ==========================================
+        
+        // 支点
+        const pivotGroup = new THREE.Group();
+        pivotGroup.position.set(0, 6, 0);
+        scene.add(pivotGroup);
+
+        const pivotGeo = new THREE.SphereGeometry(0.2);
+        const pivotMat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+        const pivotMesh = new THREE.Mesh(pivotGeo, pivotMat);
+        pivotGroup.add(pivotMesh);
+
+        const beam = new THREE.Mesh(new THREE.BoxGeometry(8, 0.2, 0.5), pivotMat);
+        beam.position.y = 0.2;
+        pivotGroup.add(beam);
+
+        // 摆锤组
+        const pendulumGroup = new THREE.Group();
+        pivotGroup.add(pendulumGroup);
+
+        // 参数
+        const L = 9;  // 摆长
+        const ringRadius = 0.7; // 圆环半径
+        
+        // 绳子
+        const stringGeo = new THREE.CylinderGeometry(0.03, 0.03, L, 8);
+        stringGeo.translate(0, -L / 2, 0);
+        const stringMesh = new THREE.Mesh(stringGeo, new THREE.MeshBasicMaterial({ color: 0x000000 }));
+        pendulumGroup.add(stringMesh);
+
+        // 圆环
+        const ringGeo = new THREE.TorusGeometry(ringRadius, 0.12, 16, 60);
+        const matGold = new THREE.MeshPhongMaterial({ color: 0xffaa00, shininess: 80 });
+        const matRed = new THREE.MeshPhongMaterial({ color: 0xff3333, emissive: 0x550000 }); // 阻尼发热
+        const matGreen = new THREE.MeshPhongMaterial({ color: 0x33ff33, emissive: 0x003300 }); // 框内自由
+        
+        const ringMesh = new THREE.Mesh(ringGeo, matGold);
+        ringMesh.position.y = -L;
+        pendulumGroup.add(ringMesh);
+
+        // 磁场区域
+        const fieldWidth = 6.0;  // 宽度
+        const fieldHeight = 4.5;
+        const fieldDepth = 3;
+        const fieldY = 6 - L; // 以圆环静止位置为中心
+        
+        const fieldGroup = new THREE.Group();
+        fieldGroup.position.set(0, fieldY, 0);
+        scene.add(fieldGroup);
+
+        // 磁场边框
+        const boxGeo = new THREE.BoxGeometry(fieldWidth, fieldHeight, fieldDepth);
+        const edges = new THREE.EdgesGeometry(boxGeo);
+        const fieldBox = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x0000aa }));
+        fieldGroup.add(fieldBox);
+
+        // 磁场填充
+        const fillMesh = new THREE.Mesh(boxGeo, new THREE.MeshBasicMaterial({ color: 0xaaccff, opacity: 0.1, transparent: true, depthWrite: false }));
+        fieldGroup.add(fillMesh);
+
+        // 磁感线 'X'
+        for(let i=0; i<15; i++) {
+            const xSize = 0.3;
+            const xg = new THREE.Group();
+            const lm = new THREE.LineBasicMaterial({ color: 0x000088 });
+            const pts1 = [new THREE.Vector3(-xSize,-xSize,0), new THREE.Vector3(xSize,xSize,0)];
+            const pts2 = [new THREE.Vector3(-xSize,xSize,0), new THREE.Vector3(xSize,-xSize,0)];
+            xg.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts1), lm));
+            xg.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts2), lm));
+            xg.position.set(
+                (Math.random()-0.5)*(fieldWidth-0.5),
+                (Math.random()-0.5)*(fieldHeight-0.5),
+                (Math.random()-0.5)*(fieldDepth-0.5)
+            );
+            fieldGroup.add(xg);
+        }
+
+        // ==========================================
+        // 3. 物理逻辑 (核心修改)
+        // ==========================================
+        let isRunning = false;
+        let time = 0;
+        let angle = 45 * Math.PI / 180;
+        let velocity = 0;
+        const dt = 0.015;
+        const g = 9.8;
+        let dampingK = 1.0;
+        
+        // 边界定义 (世界坐标 x)
+        // fieldGroup 在 x=0，所以左右边界是 ±fieldWidth/2
+        const boundaryRight = fieldWidth / 2;
+        const boundaryLeft = -fieldWidth / 2;
+
+        const statusLoc = document.getElementById('status-location');
+        const statusAct = document.getElementById('status-action');
+
+        function updatePhysics() {
+            if (!isRunning) return;
+
+            // 1. 计算圆环中心的世界坐标 X
+            const ringX = L * Math.sin(angle);
+            const ringY = 6 - L * Math.cos(angle); // Pivot at y=6
+
+            // 2. 判断圆环与磁场的关系
+            // 圆环水平跨度: [ringX - r, ringX + r]
+            const r = ringRadius;
+            const ringLeft = ringX - r;
+            const ringRight = ringX + r;
+
+            // 状态检测
+            // 完全在内: 环左 > 场左 且 环右 < 场右
+            const isFullyInside = (ringLeft > boundaryLeft) && (ringRight < boundaryRight);
+            // 完全在外: 环右 < 场左 或 环左 > 场右
+            const isFullyOutside = (ringRight < boundaryLeft) || (ringLeft > boundaryRight);
+            // 正在穿越: 既不全在内，也不全在外
+            const isCrossing = !isFullyInside && !isFullyOutside;
+
+            // 仅在Y轴高度合适时才生效 (简化的碰撞盒检测)
+            const fieldTop = fieldGroup.position.y + fieldHeight/2;
+            const fieldBottom = fieldGroup.position.y - fieldHeight/2;
+            const inYRange = (ringY < fieldTop) && (ringY > fieldBottom);
+
+            let isDamping = false;
+
+            if (inYRange) {
+                if (isCrossing) {
+                    isDamping = true;
+                    statusLoc.innerHTML = "位置: <span class='highlight-red'>穿越边界</span>";
+                    statusAct.innerHTML = "状态: 磁通量变化 -> <b>感应电流阻尼</b>";
+                    ringMesh.material = matRed;
+                } else if (isFullyInside) {
+                    statusLoc.innerHTML = "位置: <span class='highlight-green'>完全在框内</span>";
+                    statusAct.innerHTML = "状态: 磁通量不变 -> <b>自由摆动 (无阻尼)</b>";
+                    ringMesh.material = matGreen;
+                } else {
+                    statusLoc.innerHTML = "位置: <span class='highlight-gold'>完全在框外</span>";
+                    statusAct.innerHTML = "状态: 无磁场 -> 自由摆动";
+                    ringMesh.material = matGold;
+                }
+            } else {
+                // 高度太高，碰不到磁场
+                ringMesh.material = matGold;
+                statusLoc.innerText = "位置: 磁场上方";
+                statusAct.innerText = "状态: 自由摆动";
+            }
+
+            // 3. 受力分析
+            // 重力矩
+            let alpha = -(g / L) * Math.sin(angle);
+
+            // 磁阻尼力矩
+            if (isDamping) {
+                alpha -= dampingK * velocity;
+            }
+
+            // 空气阻力
+            // 关键修改：为了演示“最终在框内自由摆动”，我们将空气阻力设为极小
+            // 只有当有磁阻尼时，能量才显著损失。
+            alpha -= 0.001 * velocity; 
+
+            // 4. 积分
+            velocity += alpha * dt;
+            angle += velocity * dt;
+            time += dt;
+
+            pendulumGroup.rotation.z = angle;
+            updateChartData(time, angle * 180 / Math.PI);
+        }
+
+        // ==========================================
+        // 4. 图表
+        // ==========================================
+        const ctx = document.getElementById('myChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '摆角 (°)',
+                    data: [],
+                    borderColor: '#2196F3',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                scales: {
+                    x: { type: 'linear', min: 0, title: {display:true, text:'时间 (s)'} },
+                    y: { min: -70, max: 70, title: {display:true, text:'角度 (°)'} }
+                }
+            }
+        });
+
+        let frameCount = 0;
+        function updateChartData(t, ang) {
+            frameCount++;
+            if (frameCount % 4 !== 0) return; // 降频
+
+            chart.data.labels.push(t);
+            chart.data.datasets[0].data.push(ang);
+
+            if (chart.data.labels.length > 200) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+                chart.options.scales.x.min = chart.data.labels[0];
+            }
+            chart.options.scales.x.max = t;
+            chart.update();
+        }
+
+        function resetChart() {
+            chart.data.labels = [];
+            chart.data.datasets[0].data = [];
+            chart.update();
+        }
+
+        // ==========================================
+        // 5. 交互
+        // ==========================================
+        const btnStart = document.getElementById('btn-start');
+        btnStart.onclick = () => {
+            isRunning = !isRunning;
+            btnStart.innerText = isRunning ? "暂停" : "继续";
+        };
+
+        const btnReset = document.getElementById('btn-reset');
+        const inpAngle = document.getElementById('input-angle');
+        const inpDamping = document.getElementById('input-damping');
+
+        btnReset.onclick = () => {
+            isRunning = false;
+            btnStart.innerText = "开始";
+            time = 0;
+            angle = parseFloat(inpAngle.value) * Math.PI / 180;
+            velocity = 0;
+            pendulumGroup.rotation.z = angle;
+            ringMesh.material = matGold;
+            statusLoc.innerText = "位置: 初始状态";
+            statusAct.innerText = "状态: ---";
+            resetChart();
+        };
+
+        inpAngle.oninput = (e) => {
+            document.getElementById('val-angle').innerText = e.target.value;
+            if (!isRunning) {
+                angle = parseFloat(e.target.value) * Math.PI / 180;
+                pendulumGroup.rotation.z = angle;
+                velocity = 0;
+                resetChart();
+            }
+        };
+
+        inpDamping.oninput = (e) => {
+            dampingK = parseFloat(e.target.value);
+            document.getElementById('val-damping').innerText = dampingK.toFixed(1);
+        };
+
+        // 窗口适配
+        window.onresize = () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        };
+
+        // 拖动图表
+        const chartDiv = document.getElementById('chart-container');
+        let isDrag = false, offX, offY;
+        chartDiv.onmousedown = (e) => { isDrag = true; offX = e.clientX - chartDiv.offsetLeft; offY = e.clientY - chartDiv.offsetTop; };
+        document.onmousemove = (e) => { if(isDrag) { chartDiv.style.left=(e.clientX-offX)+'px'; chartDiv.style.top=(e.clientY-offY)+'px'; }};
+        document.onmouseup = () => isDrag = false;
+        
+        window.toggleChart = (show) => { chartDiv.style.display = show ? 'block' : 'none'; };
+
+        // 循环
+        function animateLoop() {
+            requestAnimationFrame(animateLoop);
+            updatePhysics();
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+        
+        // 初始渲染
+        pendulumGroup.rotation.z = angle;
+        animateLoop();
+
+    </script>
+</body>
+</html>

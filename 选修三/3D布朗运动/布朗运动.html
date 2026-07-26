@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>水面花粉布朗运动 (Surface Brownian Motion)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; background-color: #000; }
+        
+        /* --- 右侧功能区 --- */
+        #controls-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 100vh;
+            background: rgba(30, 33, 40, 0.95);
+            border-left: 2px solid #555;
+            padding: 20px;
+            box-sizing: border-box;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 100;
+            user-select: none;
+            overflow-y: auto;
+        }
+
+        h2 { margin: 0 0 15px 0; font-size: 22px; color: #ffd700; text-align: center; border-bottom: 2px solid #555; padding-bottom: 10px; }
+        
+        .section-title { color: #aaa; font-size: 14px; margin-top: 5px; font-weight: bold; border-left: 3px solid #00d2ff; padding-left: 8px;}
+
+        .control-group { background: rgba(255,255,255,0.08); padding: 10px; border-radius: 6px; }
+        label { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 5px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        /* --- 按钮样式 --- */
+        button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 14px;
+            color: white;
+            transition: all 0.2s;
+            margin-bottom: 5px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        button:hover { filter: brightness(1.2); transform: translateY(-1px); }
+        button:active { transform: translateY(1px); }
+
+        .btn-row { display: flex; gap: 10px; margin-bottom: 5px; }
+        .btn-pause { background-color: #f39c12; flex: 1; }
+        .btn-start { background-color: #27ae60; flex: 1; }
+        .btn-reset { background-color: #c0392b; margin-top: 10px;}
+        .btn-chart { background-color: #17a2b8; margin-top: 5px; border: 1px solid #fff; }
+
+        /* --- 左上角图表 (可拖动) --- */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 400px;
+            height: 260px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.6);
+            display: flex; 
+            flex-direction: column;
+            z-index: 200;
+        }
+        
+        #chart-header {
+            background: #e0e0e0;
+            padding: 10px 15px;
+            font-size: 14px;
+            color: #333;
+            font-weight: bold;
+            cursor: move;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+        }
+        
+        #close-chart-btn {
+            background: #ff5555; color: white; border: none; 
+            width: 20px; height: 20px; line-height: 18px; 
+            text-align: center; border-radius: 50%; cursor: pointer; padding: 0;
+            font-size: 12px;
+        }
+
+        #chart-content { flex: 1; position: relative; padding: 10px; }
+
+        /* 图例 */
+        .legend { font-size: 12px; color: #aaa; text-align: center; margin-bottom: 10px; background:rgba(0,0,0,0.2); padding:5px; border-radius:4px;}
+        .yellow-dot { display:inline-block; width:10px; height:10px; background:#ffd700; border-radius:50%; margin-right:5px;}
+        .blue-dot { display:inline-block; width:6px; height:6px; background:#00d2ff; border-radius:50%; margin-right:5px; margin-left: 10px;}
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>📈 花粉位移距离 (Displacement)</span>
+            <button id="close-chart-btn" onclick="toggleChart(false)" title="关闭图表">×</button>
+        </div>
+        <div id="chart-content">
+            <canvas id="myChart"></canvas>
+        </div>
+    </div>
+
+    <div id="controls-panel">
+        <h2>🌊 水面花粉布朗运动</h2>
+
+        <div class="btn-row">
+            <button class="btn-start" onclick="setRunning(true)">▶ 开始 (Start)</button>
+            <button class="btn-pause" onclick="setRunning(false)">⏸ 暂停 (Pause)</button>
+        </div>
+        
+        <button class="btn-chart" onclick="toggleChart('toggle')">📊 显示 / 隐藏 图表</button>
+
+        <hr style="border:0; border-top:1px solid #555; width:100%; margin: 15px 0;">
+        
+        <div class="legend">
+            <span class="yellow-dot"></span>花粉
+            <span class="blue-dot"></span>水下分子
+        </div>
+
+        <div class="section-title">环境参数</div>
+        <div class="control-group">
+            <label>水温 (活跃度) <span id="val-temp">1.0</span></label>
+            <input type="range" id="slider-temp" min="0" max="3.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="section-title">粒子参数</div>
+        <div class="control-group">
+            <label>花粉质量 (惯性) <span id="val-mass">1.0</span></label>
+            <input type="range" id="slider-mass" min="0.5" max="5.0" step="0.5" value="1.0">
+        </div>
+        
+        <div class="control-group">
+            <label>轨迹保留长度 <span id="val-trail">400</span></label>
+            <input type="range" id="slider-trail" min="50" max="1000" step="50" value="400">
+        </div>
+
+        <button class="btn-reset" onclick="resetSim()">↺ 全面还原 (Reset All)</button>
+    </div>
+
+    <script>
+        // ================= 全局变量 =================
+        let isRunning = true;
+        
+        const defaultParams = {
+            temperature: 1.0,
+            pollenMass: 1.0,
+            trailLength: 400
+        };
+        let params = { ...defaultParams };
+
+        let scene, camera, renderer, controls;
+        let pollenMesh, trailLine, waterParticles;
+        // 花粉初始高度设定在水面上方一点点
+        const POLLEN_Y = 1.6; 
+        let pollenPosition = new THREE.Vector3(0, POLLEN_Y, 0);
+        let trailPoints = [];
+        let chartInstance;
+        let frameCount = 0;
+
+        // ================= 1. 初始化 3D 场景 =================
+        function init3D() {
+            scene = new THREE.Scene();
+            // 背景色改为深蓝色，模拟深水
+            scene.background = new THREE.Color(0x001133); 
+            scene.fog = new THREE.FogExp2(0x001133, 0.015);
+
+            camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // 调整相机视角，稍微俯视水面
+            camera.position.set(0, 30, 40);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            if (THREE.OrbitControls || window.OrbitControls) {
+                const OrbitControls = THREE.OrbitControls || window.OrbitControls;
+                controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                // 限制相机不要钻到水面底下太深
+                controls.maxPolarAngle = Math.PI / 2 + 0.2; 
+                controls.saveState();
+            }
+
+            // 灯光系统优化
+            scene.add(new THREE.AmbientLight(0x444444)); // 环境光
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1); // 模拟太阳光
+            sunLight.position.set(10, 50, 20);
+            scene.add(sunLight);
+            const waterLight = new THREE.PointLight(0x00aaff, 2, 50); // 水面反光
+            waterLight.position.set(0, 5, 0);
+            scene.add(waterLight);
+
+            // --- 创建水面 ---
+            const waterGeo = new THREE.PlaneGeometry(200, 200);
+            const waterMat = new THREE.MeshPhongMaterial({
+                color: 0x006994, // 海洋蓝
+                transparent: true,
+                opacity: 0.7,
+                shininess: 80,
+                side: THREE.DoubleSide
+            });
+            const waterPlane = new THREE.Mesh(waterGeo, waterMat);
+            waterPlane.rotation.x = -Math.PI / 2; // 旋转为水平面
+            waterPlane.position.y = 0;
+            scene.add(waterPlane);
+
+            // --- 花粉 (黄球) ---
+            const pollenGeo = new THREE.IcosahedronGeometry(1.5, 2);
+            const pollenMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffd700, roughness: 0.7, metalness: 0.2,
+                emissive: 0xaa6600, emissiveIntensity: 0.2
+            });
+            pollenMesh = new THREE.Mesh(pollenGeo, pollenMat);
+            // 设置初始位置
+            pollenMesh.position.copy(pollenPosition);
+            scene.add(pollenMesh);
+
+            // --- 水下分子 (蓝点背景) ---
+            const waterPartGeo = new THREE.BufferGeometry();
+            const waterPos = [];
+            for(let i=0; i<1200; i++) {
+                // XZ轴分布广，Y轴只分布在水面以下 (-30 到 -1)
+                waterPos.push(
+                    (Math.random()-0.5)*100, // x
+                    -Math.random()*30 - 1,   // y (水下)
+                    (Math.random()-0.5)*100  // z
+                );
+            }
+            waterPartGeo.setAttribute('position', new THREE.Float32BufferAttribute(waterPos, 3));
+            const waterPartMat = new THREE.PointsMaterial({ color: 0x00d2ff, size: 0.4, transparent: true, opacity: 0.5 });
+            waterParticles = new THREE.Points(waterPartGeo, waterPartMat);
+            scene.add(waterParticles);
+
+            // --- 轨迹线 ---
+            const trailGeo = new THREE.BufferGeometry();
+            const positions = new Float32Array(3000 * 3);
+            trailGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            trailGeo.setDrawRange(0, 0);
+            // 轨迹线稍微抬高一点点，防止和水面重叠闪烁
+            trailLine = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2, opacity: 0.6 }));
+            trailLine.position.y = 0.1; 
+            scene.add(trailLine);
+        }
+
+        // ================= 2. 初始化图表 (保持不变) =================
+        function initChart() {
+            if (typeof Chart === 'undefined') return;
+            const ctx = document.getElementById('myChart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '位移',
+                        data: [],
+                        borderColor: '#ffd700',
+                        backgroundColor: 'rgba(255, 215, 0, 0.2)',
+                        borderWidth: 2,
+                        fill: true,
+                        pointRadius: 0,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: { x: { display: false }, y: { beginAtZero: true } },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // ================= 3. 物理逻辑 (关键修改：限制在二维平面) =================
+        function updatePhysics() {
+            if (!isRunning) return;
+
+            // A. 水下分子背景运动 (仅视觉效果)
+            const wPos = waterParticles.geometry.attributes.position.array;
+            const wSpeed = 0.3 * params.temperature;
+            for(let i=0; i < wPos.length / 3; i++) {
+                wPos[i*3] += (Math.random()-0.5) * wSpeed; // X
+                // Y轴运动很小，保持在水下
+                wPos[i*3+1] += (Math.random()-0.5) * wSpeed * 0.2; 
+                wPos[i*3+2] += (Math.random()-0.5) * wSpeed; // Z
+                
+                // 边界限制，让它们待在水下
+                if(wPos[i*3+1] > -0.5) wPos[i*3+1] = -0.5;
+                if(wPos[i*3+1] < -30) wPos[i*3+1] = -30;
+            }
+            waterParticles.geometry.attributes.position.needsUpdate = true;
+
+            // B. 花粉受力运动 (核心修改：只在 X 和 Z 轴上受力)
+            const force = 0.4 * params.temperature; // 稍微加大力度适应平面
+            const inertialMass = Math.sqrt(params.pollenMass);
+
+            // ⚠️ 关键：Y轴受力为 0
+            const dx = ((Math.random() - 0.5) * force) / inertialMass;
+            const dy = 0; 
+            const dz = ((Math.random() - 0.5) * force) / inertialMass;
+
+            pollenPosition.x += dx;
+            // pollenPosition.y 保持不变 (POLLEN_Y)
+            pollenPosition.z += dz;
+            
+            pollenMesh.position.copy(pollenPosition);
+            // 只绕 X 和 Z 轴滚动
+            pollenMesh.rotation.x += dz; // 沿Z轴移动绕X轴转
+            pollenMesh.rotation.z -= dx; // 沿X轴移动绕Z轴转
+
+            // C. 轨迹更新
+            trailPoints.push(pollenPosition.clone());
+            if (trailPoints.length > params.trailLength) trailPoints.shift();
+            
+            const trailArr = trailLine.geometry.attributes.position.array;
+            for (let i = 0; i < trailPoints.length; i++) {
+                trailArr[i*3] = trailPoints[i].x;
+                // 轨迹线Y坐标设为0 (贴在水面上)
+                trailArr[i*3+1] = 0; 
+                trailArr[i*3+2] = trailPoints[i].z;
+            }
+            trailLine.geometry.setDrawRange(0, trailPoints.length);
+            trailLine.geometry.attributes.position.needsUpdate = true;
+
+            // D. 图表更新
+            frameCount++;
+            if (frameCount % 5 === 0 && chartInstance) {
+                // 计算平面距离 (忽略高度差)
+                const dist = Math.sqrt(pollenPosition.x * pollenPosition.x + pollenPosition.z * pollenPosition.z);
+                chartInstance.data.labels.push(frameCount);
+                chartInstance.data.datasets[0].data.push(dist);
+                if (chartInstance.data.labels.length > 60) {
+                    chartInstance.data.labels.shift();
+                    chartInstance.data.datasets[0].data.shift();
+                }
+                chartInstance.update();
+            }
+        }
+
+        // ================= 4. 控制功能实现 =================
+        
+        function setRunning(state) { 
+            isRunning = state;
+            // 移除了这里的 pause overlay 操作
+        }
+        
+        function toggleChart(action) {
+            const el = document.getElementById('chart-wrapper');
+            if (action === false) el.style.display = 'none';
+            else if (action === 'toggle') el.style.display = (el.style.display === 'none') ? 'flex' : 'none';
+        }
+
+        function resetSim() {
+            setRunning(false);
+            // 重置位置到中心
+            pollenPosition.set(0, POLLEN_Y, 0);
+            pollenMesh.position.copy(pollenPosition);
+            pollenMesh.rotation.set(0,0,0);
+            trailPoints = [];
+            trailLine.geometry.setDrawRange(0, 0);
+            
+            if(chartInstance) {
+                chartInstance.data.labels = [];
+                chartInstance.data.datasets[0].data = [];
+                chartInstance.update();
+            }
+            frameCount = 0;
+
+            params = { ...defaultParams };
+            document.getElementById('slider-temp').value = params.temperature;
+            document.getElementById('val-temp').innerText = params.temperature.toFixed(1);
+            document.getElementById('slider-mass').value = params.pollenMass;
+            document.getElementById('val-mass').innerText = params.pollenMass.toFixed(1);
+            document.getElementById('slider-trail').value = params.trailLength;
+            document.getElementById('val-trail').innerText = params.trailLength;
+
+            if (controls) controls.reset();
+        }
+
+        // 事件监听
+        document.getElementById('slider-temp').addEventListener('input', (e) => {
+            params.temperature = parseFloat(e.target.value);
+            document.getElementById('val-temp').innerText = params.temperature.toFixed(1);
+        });
+        document.getElementById('slider-mass').addEventListener('input', (e) => {
+            params.pollenMass = parseFloat(e.target.value);
+            document.getElementById('val-mass').innerText = params.pollenMass.toFixed(1);
+        });
+        document.getElementById('slider-trail').addEventListener('input', (e) => {
+            params.trailLength = parseInt(e.target.value);
+            document.getElementById('val-trail').innerText = params.trailLength;
+        });
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        const chartBox = document.getElementById('chart-wrapper');
+        const chartHead = document.getElementById('chart-header');
+        let dragInfo = { active: false, x: 0, y: 0, l: 0, t: 0 };
+        chartHead.addEventListener('mousedown', (e) => {
+            if(e.target.tagName === 'BUTTON') return;
+            dragInfo.active = true;
+            dragInfo.x = e.clientX; dragInfo.y = e.clientY;
+            dragInfo.l = chartBox.offsetLeft; dragInfo.t = chartBox.offsetTop;
+            e.preventDefault();
+        });
+        window.addEventListener('mousemove', (e) => {
+            if (!dragInfo.active) return;
+            chartBox.style.left = (dragInfo.l + e.clientX - dragInfo.x) + 'px';
+            chartBox.style.top = (dragInfo.t + e.clientY - dragInfo.y) + 'px';
+        });
+        window.addEventListener('mouseup', () => dragInfo.active = false);
+
+        // 启动
+        init3D();
+        initChart();
+        animate();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePhysics();
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

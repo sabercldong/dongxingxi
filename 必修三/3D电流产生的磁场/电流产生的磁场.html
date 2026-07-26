@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>电流磁场分布 (高亮白线版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; font-family: 'Segoe UI', sans-serif; }
+        
+        #container { display: flex; width: 100vw; height: 100vh; }
+        #canvas-container { flex: 1; position: relative; background: radial-gradient(circle at center, #222, #000); }
+        
+        #sidebar {
+            width: 320px;
+            background: rgba(30, 30, 30, 0.95);
+            border-left: 1px solid #444;
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -10px 0 30px rgba(0,0,0,0.5);
+            overflow-y: auto;
+        }
+
+        h2 { color: #00bcd4; margin: 0 0 10px 0; border-bottom: 2px solid #00bcd4; padding-bottom: 5px; font-size: 18px; }
+        
+        .control-block { background: #2a2a2a; padding: 15px; border-radius: 6px; border: 1px solid #333; }
+        label { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #aaa; }
+        select { width: 100%; padding: 8px; background: #111; color: white; border: 1px solid #555; border-radius: 4px; outline: none; margin-bottom: 10px; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #e040fb; }
+        .value-text { color: #e040fb; font-weight: bold; font-family: monospace; }
+        button { width: 100%; padding: 10px; background: #00bcd4; color: #000; font-weight: bold; border: none; border-radius: 4px; cursor: pointer; transition: 0.2s; }
+        button:hover { background: #26c6da; }
+        
+        .legend { font-size: 13px; line-height: 2.0; }
+        .dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; vertical-align: middle; border: 1px solid #555; }
+        #desc-text { font-size:13px; color:#bbb; margin-top:10px; line-height:1.5; border-top:1px solid #444; padding-top:10px;}
+    </style>
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container"></div>
+    <div id="sidebar">
+        <h2>磁场分布控制台</h2>
+        <div class="control-block">
+            <label>选择演示模型：</label>
+            <select id="mode-select">
+                <option value="wire">1. 无限长直导线</option>
+                <option value="loop">2. 环形电流 (立体)</option>
+                <option value="solenoid">3. 通电螺线管</option>
+            </select>
+        </div>
+        <div class="control-block">
+            <label>电流大小 (I) <span id="current-val" class="value-text">1.0 A</span></label>
+            <input type="range" id="current-slider" min="-3.0" max="3.0" step="0.1" value="1.0">
+            <div style="font-size:12px; color:#888; margin-top:5px;">提示：负值可改变电流方向</div>
+        </div>
+        <div class="control-block legend">
+            <div style="margin-bottom:5px; font-weight:bold; color:#ddd;">图例说明</div>
+            <div><span class="dot" style="background:#ff8f00"></span>导线实体</div>
+            <div><span class="dot" style="background:#e040fb"></span><b>电流方向 (粉色大箭头)</b></div>
+            <div><span class="dot" style="background:#ffffff"></span><b>磁感线 B (白色高亮)</b></div>
+            <div><span class="dot" style="background:#ffff00"></span>磁场方向 (黄色箭头)</div>
+        </div>
+        <div class="control-block">
+            <button id="btn-reset">重置视角</button>
+        </div>
+        <div id="desc-text"></div>
+    </div>
+</div>
+
+<script>
+    // --- 1. 场景初始化 ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 2000);
+    camera.position.set(30, 25, 40);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    let controls;
+    if (typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+    else if (typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+    if(controls) { controls.enableDamping = true; controls.dampingFactor = 0.05; }
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6)); // 增加环境光
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    mainLight.position.set(10, 20, 20);
+    scene.add(mainLight);
+    
+    const modelGroup = new THREE.Group();
+    scene.add(modelGroup);
+
+    const state = { mode: 'wire', current: 1.0, sign: 1 };
+
+    // --- 2. 材质与形状 ---
+    
+    // 【修改点】磁感线改为纯白色，且初始不透明度提高
+    const matLine = new THREE.LineBasicMaterial({ 
+        color: 0xffffff, 
+        transparent: true, 
+        opacity: 0.8 // 默认更亮
+    });
+    
+    const matArrowB = new THREE.MeshBasicMaterial({ color: 0xffff00 }); // 磁场箭头保持黄色，对比度高
+    const matArrowI = new THREE.MeshPhongMaterial({ color: 0xe040fb, shininess: 100, emissive: 0x440044 });
+
+    const coneGeoB = new THREE.ConeGeometry(0.3, 0.8, 8); coneGeoB.rotateX(Math.PI / 2);
+    const coneGeoI = new THREE.ConeGeometry(0.8, 2.5, 16); coneGeoI.rotateX(Math.PI / 2); 
+
+    // --- 3. 辅助函数 ---
+
+    // 绘制磁感线
+    function drawFieldLine(points, arrowCount = 2, close = true, reverseDirection = false) {
+        if (points.length < 2) return new THREE.Group();
+        const curve = new THREE.CatmullRomCurve3(points, close);
+        const smoothPoints = curve.getPoints(80); 
+        const geometry = new THREE.BufferGeometry().setFromPoints(smoothPoints);
+        const line = new THREE.Line(geometry, matLine.clone());
+        const group = new THREE.Group();
+        group.add(line);
+        group.userData = { type: 'fieldLine', lineMesh: line };
+
+        for(let i = 0; i < arrowCount; i++) {
+            const t = (i + 1) / (arrowCount + 1);
+            const pos = curve.getPointAt(t);
+            let tangent = curve.getTangentAt(t).normalize();
+            if(reverseDirection) tangent.negate();
+            const arrow = new THREE.Mesh(coneGeoB, matArrowB);
+            arrow.position.copy(pos);
+            arrow.lookAt(pos.clone().add(tangent));
+            group.add(arrow);
+        }
+        return group;
+    }
+
+    // 创建电流大箭头
+    function createCurrentArrow(pos, dir) {
+        const arrowGroup = new THREE.Group();
+        const stemGeo = new THREE.CylinderGeometry(0.3, 0.3, 5, 12);
+        stemGeo.rotateX(Math.PI / 2);
+        const stem = new THREE.Mesh(stemGeo, matArrowI);
+        stem.position.z = -2.5; 
+        const head = new THREE.Mesh(coneGeoI, matArrowI);
+        arrowGroup.add(stem);
+        arrowGroup.add(head);
+        arrowGroup.position.copy(pos);
+        arrowGroup.lookAt(pos.clone().add(dir));
+        arrowGroup.userData = { type: 'currentArrow', baseScale: 1.0 };
+        return arrowGroup;
+    }
+
+    // --- 4. 场景构建 ---
+
+    // A. 直导线
+    function createWire() {
+        modelGroup.clear();
+        document.getElementById('desc-text').innerHTML = "<b>直导线：</b>白色磁感线环绕导线。<br>I 向上时，B 逆时针。";
+
+        const geo = new THREE.CylinderGeometry(0.5, 0.5, 100, 32);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xff8f00, metalness:0.4, roughness:0.4 });
+        modelGroup.add(new THREE.Mesh(geo, mat));
+
+        const iDir = new THREE.Vector3(0, state.sign, 0); 
+        const arrowPos = new THREE.Vector3(2.5, 0, 0); 
+        const iArrow = createCurrentArrow(arrowPos, iDir);
+        modelGroup.add(iArrow);
+
+        const layers = [-20, -10, 0, 10, 20];
+        const radii = [4, 8, 12]; 
+        layers.forEach(y => {
+            radii.forEach(r => {
+                const pts = [];
+                for(let i=0; i<36; i++) {
+                    const theta = (i/36) * Math.PI * 2;
+                    pts.push(new THREE.Vector3(Math.cos(theta)*r, y, Math.sin(theta)*r));
+                }
+                // 【已修正】直线电流：state.sign > 0 时反转切线，使磁场方向匹配右手定则
+                modelGroup.add(drawFieldLine(pts, 3, true, state.sign > 0));
+            });
+        });
+    }
+
+    // B. 环形电流
+    function createLoop() {
+        modelGroup.clear();
+        document.getElementById('desc-text').innerHTML = "<b>环形电流：</b>立体磁感线清晰可见，内部磁场密集。";
+
+        const R = 8;
+        const tubeR = 0.5;
+        const geo = new THREE.TorusGeometry(R, tubeR, 16, 64);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xff8f00 });
+        const loop = new THREE.Mesh(geo, mat);
+        loop.rotation.x = Math.PI/2; 
+        modelGroup.add(loop);
+
+        for(let i=0; i<4; i++) {
+            const angle = (i/4) * Math.PI * 2;
+            const x = Math.cos(angle) * R;
+            const z = Math.sin(angle) * R;
+            let tx = -Math.sin(angle) * state.sign;
+            let tz = Math.cos(angle) * state.sign;
+            const pos = new THREE.Vector3(x, 1.5, z); 
+            const dir = new THREE.Vector3(tx, 0, tz).normalize();
+            const arr = createCurrentArrow(pos, dir);
+            arr.scale.set(0.6, 0.6, 0.6); 
+            arr.userData.baseScale = 0.6;
+            modelGroup.add(arr);
+        }
+
+        const configs = [{ cd: 2, od: 12 }, { cd: 5, od: 20 }];
+        configs.forEach(conf => {
+            const basePts = [];
+            for(let i=0; i<50; i++) {
+                const t = (i/50) * Math.PI * 2;
+                const a = (conf.od - conf.cd) / 2;
+                const cx = conf.cd + a;
+                const b = a * 0.9;
+                let x = cx + a * Math.cos(t);
+                if(x < cx) x = conf.cd + (x - conf.cd) * 0.4;
+                basePts.push(new THREE.Vector2(x, b * Math.sin(t) * 2.5));
+            }
+            for(let r=0; r<12; r++) {
+                const angle = (r / 12) * Math.PI * 2;
+                const pts3d = basePts.map(p => new THREE.Vector3(p.x*Math.cos(angle), p.y, p.x*Math.sin(angle))).reverse();
+                // 【已修正】环形电流：state.sign > 0 时反转切线，使磁场方向匹配右手定则
+                modelGroup.add(drawFieldLine(pts3d, 2, true, state.sign > 0));
+            }
+        });
+        const axisPts = [new THREE.Vector3(0,-40,0), new THREE.Vector3(0,40,0)];
+        // 【已修正】环形电流中心轴线
+        modelGroup.add(drawFieldLine(axisPts, 3, false, state.sign > 0));
+    }
+
+    // C. 通电螺线管
+    function createSolenoid() {
+        modelGroup.clear();
+        document.getElementById('desc-text').innerHTML = "<b>通电螺线管：</b>内部匀强磁场（白线平行）。";
+
+        const L = 20; const R = 4; const loops = 12;
+        
+        const curvePath = new THREE.Curve();
+        curvePath.getPoint = function(t) {
+            const x = (t - 0.5) * L;
+            const angle = t * Math.PI * 2 * loops;
+            return new THREE.Vector3(x, Math.cos(angle)*R, Math.sin(angle)*R);
+        };
+        const geo = new THREE.TubeGeometry(curvePath, 200, 0.3, 8, false);
+        const mat = new THREE.MeshStandardMaterial({ color: 0xff8f00, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
+        modelGroup.add(new THREE.Mesh(geo, mat));
+
+        for(let i=0; i<6; i++) {
+            const t = (i+0.5)/6;
+            const centerPos = curvePath.getPoint(t);
+            const tangent = curvePath.getTangent(t).normalize();
+            if(state.sign < 0) tangent.negate();
+            const axisPoint = new THREE.Vector3(centerPos.x, 0, 0);
+            const radialDir = new THREE.Vector3().subVectors(centerPos, axisPoint).normalize();
+            const arrowPos = centerPos.clone().add(radialDir.multiplyScalar(1.5));
+            const arr = createCurrentArrow(arrowPos, tangent);
+            arr.scale.set(0.5, 0.5, 0.5);
+            arr.userData.baseScale = 0.5;
+            modelGroup.add(arr);
+        }
+
+        for(let i=0; i<8; i++) {
+            const angle = (i/8) * Math.PI * 2;
+            const y = Math.cos(angle); const z = Math.sin(angle);
+            [0, 1.5, 3.0].forEach(r => {
+                const pts = [];
+                if(r < 0.1) {
+                    pts.push(new THREE.Vector3(-L*2, 0, 0), new THREE.Vector3(L*2, 0, 0));
+                    modelGroup.add(drawFieldLine(pts, 3, false, state.sign < 0));
+                    return;
+                }
+                const ry = r*y; const rz = r*z;
+                pts.push(new THREE.Vector3(-L/2 - 2, ry, rz), new THREE.Vector3(L/2 + 2, ry, rz));
+                const spread = 3;
+                const oy = ry * spread * 4 + (ry>0?6:-6); const oz = rz * spread * 4 + (rz>0?6:-6);
+                const curve = new THREE.CubicBezierCurve3(
+                    new THREE.Vector3(L/2 + 2, ry, rz), new THREE.Vector3(L*1.5, oy, oz),
+                    new THREE.Vector3(-L*1.5, oy, oz), new THREE.Vector3(-L/2 - 2, ry, rz)
+                );
+                pts.push(...curve.getPoints(40));
+                modelGroup.add(drawFieldLine(pts, 4, true, state.sign < 0));
+            });
+        }
+    }
+
+    // --- 5. 交互 ---
+    function updateScene() {
+        const val = document.getElementById('mode-select').value;
+        state.mode = val;
+        if(val === 'wire') createWire();
+        else if(val === 'loop') createLoop();
+        else if(val === 'solenoid') createSolenoid();
+        updateCurrentVisuals();
+    }
+
+    function updateCurrentVisuals() {
+        const absCurrent = Math.abs(state.current);
+        modelGroup.traverse(obj => {
+            if(obj.userData?.type === 'currentArrow') {
+                const base = obj.userData.baseScale || 1.0;
+                const scale = base * (0.3 + absCurrent * 0.4); 
+                obj.scale.set(scale, scale, scale);
+            }
+            if(obj.userData?.type === 'fieldLine') {
+                // 【修改点】调高亮度计算公式
+                // 即使电流很小(0.1A)，透明度也有0.3+
+                // 电流大时，透明度接近 1.0
+                obj.userData.lineMesh.material.opacity = 0.3 + (absCurrent / 3.0) * 0.7;
+            }
+        });
+    }
+
+    const slider = document.getElementById('current-slider');
+    const valDisplay = document.getElementById('current-val');
+    slider.addEventListener('input', (e) => {
+        const newCurrent = parseFloat(e.target.value);
+        const oldSign = state.sign;
+        const newSign = newCurrent >= 0 ? 1 : -1;
+        state.current = newCurrent;
+        state.sign = newSign;
+        valDisplay.innerText = newCurrent.toFixed(1) + " A";
+        if (oldSign !== newSign) updateScene();
+        else updateCurrentVisuals();
+    });
+
+    document.getElementById('mode-select').addEventListener('change', updateScene);
+    document.getElementById('btn-reset').onclick = () => {
+        controls.reset(); slider.value = 1.0; state.current = 1.0; state.sign = 1;
+        valDisplay.innerText = "1.0 A"; updateScene();
+    };
+
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        if(controls) controls.update();
+        renderer.render(scene, camera);
+    }
+    
+    updateScene();
+    animate();
+</script>
+</body>
+</html>

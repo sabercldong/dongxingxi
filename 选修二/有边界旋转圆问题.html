@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>带电粒子磁场运动演示 (含半径显示)</title>
+    <style>
+        /* --- 1. 布局框架 --- */
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh; /* 强制单屏 */
+            overflow: hidden; /* 禁止整个网页滚动 */
+            display: flex; /* 左右布局 */
+            background-color: #f4f4f9;
+        }
+
+        /* --- 2. 左侧：演示区域 --- */
+        .simulation-area {
+            flex: 1; /* 占据剩余空间 */
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #e9ecef;
+            padding: 20px;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        canvas {
+            background-color: #fff;
+            border: 1px solid #ddd;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+            /* 响应式缩放 */
+            max-width: 100%;
+            max-height: 95%;
+            object-fit: contain;
+        }
+
+        /* --- 3. 右侧：功能控制区 --- */
+        .sidebar {
+            width: 340px; /* 固定宽度 */
+            min-width: 300px;
+            height: 100%;
+            background: white;
+            border-left: 1px solid #ccc;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.05);
+            padding: 25px 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            
+            /* 允许侧边栏滚动 */
+            overflow-y: auto; 
+        }
+
+        /* 侧边栏标题 */
+        h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+
+        /* --- 控件样式 --- */
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        button {
+            padding: 12px 20px;
+            font-size: 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: white;
+            font-weight: bold;
+            width: 100%;
+            text-align: center;
+        }
+        
+        .btn-play { background-color: #28a745; }
+        .btn-play:hover { background-color: #218838; }
+        
+        .btn-special { background-color: #007bff; }
+        .btn-special:hover { background-color: #0069d9; }
+        
+        .btn-reset { background-color: #dc3545; }
+        .btn-reset:hover { background-color: #c82333; }
+
+        .slider-container {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #eee;
+        }
+
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .info-panel {
+            padding: 15px;
+            background: #e9ecef;
+            border-radius: 6px;
+            font-family: monospace;
+            color: #333;
+            line-height: 1.6;
+            font-size: 14px;
+            border: 1px solid #dcdcdc;
+        }
+
+        /* 强调文字 */
+        .highlight-text {
+            color: #d63384; 
+            font-weight: bold;
+        }
+
+        /* 美化滚动条 */
+        .sidebar::-webkit-scrollbar { width: 8px; }
+        .sidebar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .sidebar::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
+        .sidebar::-webkit-scrollbar-thumb:hover { background: #aaa; }
+
+    </style>
+</head>
+<body>
+
+    <div class="simulation-area">
+        <canvas id="simCanvas" width="800" height="600"></canvas>
+    </div>
+
+    <div class="sidebar">
+        <h3>控制面板</h3>
+
+        <div class="control-group">
+            <button class="btn-play" onclick="startScan()">▶ 开始角度扫描</button>
+            <button class="btn-special" onclick="showSolution()">★ 演示特殊情况 (沿+y轴)</button>
+            <button class="btn-reset" onclick="resetSim()">↺ 重置系统</button>
+        </div>
+
+        <div class="slider-container">
+            <div class="slider-label">
+                <span>手动发射角度:</span>
+                <span id="angleVal" style="color: #007bff;">0°</span>
+            </div>
+            <input type="range" id="angleSlider" min="0" max="180" value="0" step="1" oninput="updateManual(this.value)">
+        </div>
+
+        <div class="info-panel" id="infoText">
+            <strong>系统状态：</strong>准备就绪。<br>
+            <span class="highlight-text">运动半径 R = 2a/√3 ≈ 1.15a</span><br>
+            <br>
+            点击“开始角度扫描”查看所有粒子的运动分布。
+        </div>
+
+        <div style="height: 20px;"></div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // --- 物理参数 ---
+    const a = 120; 
+    const OriginX = 100; 
+    const OriginY = 280; 
+
+    // 题目给定参数
+    const FieldWidth = Math.sqrt(3) * a;
+    const R = (2 * a) / Math.sqrt(3);
+
+    // 状态变量
+    let isAnimating = false;
+    let scanAngle = 0;
+    let particles = [];
+    let manualMode = false;
+
+    // --- 坐标转换 ---
+    function toCanvas(x, y) {
+        return {
+            x: OriginX + x,
+            y: OriginY - y
+        };
+    }
+
+    // --- 绘图 ---
+    function drawBackground() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 绘制磁场区域
+        ctx.fillStyle = "#f0f8ff";
+        const startX = toCanvas(0, 0).x;
+        ctx.fillRect(startX, 0, FieldWidth, canvas.height);
+        
+        // 磁场右边界(虚线)
+        ctx.beginPath();
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = "#666";
+        const boundaryX = toCanvas(FieldWidth, 0).x;
+        ctx.moveTo(boundaryX, 0);
+        ctx.lineTo(boundaryX, canvas.height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // y轴
+        ctx.beginPath();
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 2;
+        ctx.moveTo(startX, 0);
+        ctx.lineTo(startX, canvas.height);
+        ctx.stroke();
+
+        // x轴
+        ctx.beginPath();
+        const startY = toCanvas(0, 0).y;
+        ctx.moveTo(0, startY);
+        ctx.lineTo(canvas.width, startY);
+        ctx.stroke();
+
+        // 磁场符号
+        ctx.fillStyle = "#ccc";
+        for(let i=20; i<FieldWidth; i+=40) {
+            for(let j=20; j<canvas.height; j+=40) {
+                ctx.beginPath();
+                ctx.arc(startX + i, j, 1.5, 0, Math.PI*2);
+                ctx.fill(); 
+            }
+        }
+
+        // 标记关键点
+        drawPoint(0, 0, "O", "black");
+        drawPoint(FieldWidth, a, "P(√3a, a)", "red");
+        
+        // 边界标注
+        ctx.fillStyle = "#666";
+        ctx.font = "14px Arial";
+        ctx.fillText("x = √3a", boundaryX + 5, startY + 20);
+        ctx.fillText("y", startX - 15, 20);
+        ctx.fillText("x", canvas.width - 20, startY + 20);
+    }
+
+    function drawPoint(px, py, label, color) {
+        const p = toCanvas(px, py);
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.arc(p.x, p.y, 5, 0, Math.PI*2);
+        ctx.fill();
+        ctx.font = "bold 14px Arial";
+        let labelY = p.y - 10;
+        if (py < 0) labelY = p.y + 20; 
+        ctx.fillText(label, p.x + 8, labelY);
+    }
+
+    // --- 轨迹绘制 ---
+    function drawTrajectory(angleDeg, isHighlight = false) {
+        const theta = (90 - angleDeg) * Math.PI / 180;
+        
+        const cx = R * Math.cos(theta - Math.PI/2);
+        const cy = R * Math.sin(theta - Math.PI/2);
+
+        const startPhase = Math.atan2(-cy, -cx);
+
+        ctx.beginPath();
+        ctx.lineWidth = isHighlight ? 3 : 1.5;
+        ctx.strokeStyle = isHighlight ? "#ff0000" : "rgba(0, 123, 255, 0.5)";
+        
+        let currentAngle = startPhase;
+        const step = -0.01; 
+        
+        ctx.moveTo(toCanvas(0, 0).x, toCanvas(0, 0).y);
+
+        for(let i=0; i<800; i++) { 
+            currentAngle += step;
+            const px = cx + R * Math.cos(currentAngle);
+            const py = cy + R * Math.sin(currentAngle);
+            
+            const p_canv = toCanvas(px, py);
+            ctx.lineTo(p_canv.x, p_canv.y);
+
+            if (px >= FieldWidth) break;
+            if (px < 0) break;
+            if (p_canv.y > canvas.height || p_canv.y < 0) break;
+        }
+        ctx.stroke();
+    }
+
+    // --- 交互逻辑 ---
+    function startScan() {
+        if(isAnimating) return;
+        isAnimating = true;
+        scanAngle = 0;
+        manualMode = false;
+        particles = []; 
+        animate();
+    }
+
+    function animate() {
+        if(!isAnimating) return;
+        drawBackground();
+        particles.forEach(a => drawTrajectory(a, false));
+        drawTrajectory(scanAngle, true);
+        
+        document.getElementById('angleSlider').value = scanAngle;
+        document.getElementById('angleVal').innerText = scanAngle + "°";
+        updateInfoText(scanAngle);
+
+        if(scanAngle % 4 === 0) particles.push(scanAngle); 
+        scanAngle += 1; 
+
+        if(scanAngle > 180) {
+            isAnimating = false;
+            document.getElementById('infoText').innerHTML = `
+                <strong>状态：</strong>扫描完成。<br>
+                <span class="highlight-text">半径 R = 2a/√3 ≈ 1.15a</span><br>
+                现在可以清晰看到从左边界返回的粒子在 x 轴下方的完整轨迹。
+            `;
+        } else {
+            requestAnimationFrame(animate);
+        }
+    }
+
+    function showSolution() {
+        isAnimating = false;
+        manualMode = true;
+        scanAngle = 0;
+        document.getElementById('angleSlider').value = 0;
+        updateManual(0);
+        document.getElementById('infoText').innerHTML = `
+            <strong>特殊情况演示：</strong><br>
+            发射角 = 0° (沿+y轴)。<br>
+            <span class="highlight-text">半径 R = 2a/√3</span><br>
+            粒子轨迹精确经过点 P(√3a, a)。
+        `;
+    }
+
+    function updateManual(val) {
+        scanAngle = parseInt(val);
+        document.getElementById('angleVal').innerText = scanAngle + "°";
+        updateInfoText(scanAngle);
+        drawBackground();
+        drawTrajectory(scanAngle, true);
+    }
+
+    function updateInfoText(angle) {
+        let text = `<strong>当前发射角:</strong> ${angle}° (与+y夹角)<br><span class="highlight-text">半径 R = 2a/√3</span>`;
+        if (angle > 90) {
+            text += "<br>说明: 发射方向指向下方，粒子随后从 y 轴(x=0)离开磁场。";
+        }
+        if(!manualMode && isAnimating) document.getElementById('infoText').innerHTML = text;
+    }
+
+    function resetSim() {
+        isAnimating = false;
+        particles = [];
+        scanAngle = 0;
+        document.getElementById('angleSlider').value = 0;
+        document.getElementById('angleVal').innerText = "0°";
+        drawBackground();
+        document.getElementById('infoText').innerHTML = `
+            <strong>系统状态：</strong>已重置。<br>
+            <span class="highlight-text">运动半径 R = 2a/√3 ≈ 1.15a</span><br>
+            <br>
+            点击“开始角度扫描”查看所有粒子的运动分布。
+        `;
+    }
+
+    // 初始化
+    drawBackground();
+
+</script>
+</body>
+</html>

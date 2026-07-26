@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>带电粒子运动 (键盘平移版)</title>
+    <style>
+        body { 
+            margin: 0; overflow: hidden; background-color: #050505; 
+            font-family: 'Microsoft YaHei', sans-serif;
+            display: flex; height: 100vh;
+        }
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        #sidebar {
+            width: 320px; background-color: #1e1e1e; color: #eee;
+            border-left: 1px solid #444; padding: 20px;
+            box-sizing: border-box; display: flex; flex-direction: column; gap: 15px;
+            overflow-y: auto; z-index: 20;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+        }
+        h2 { margin: 0 0 10px 0; font-size: 18px; border-bottom: 2px solid #00aaff; padding-bottom: 10px; }
+        .control-group { background: #2b2b2b; padding: 12px; border-radius: 6px; }
+        label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; color: #bbb; }
+        span.value { color: #00aaff; font-weight: bold; }
+        input[type=range] { width: 100%; cursor: pointer; margin-bottom: 8px; accent-color: #00aaff; }
+        
+        .btn-row { display: flex; gap: 8px; margin-top: 5px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px;
+            font-weight: bold; cursor: pointer; transition: 0.2s;
+            color: white; font-size: 13px;
+        }
+        .btn-start { background-color: #2e7d32; } 
+        .btn-start:hover { background-color: #1b5e20; }
+        .btn-pause { background-color: #f9a825; color: #222; }
+        .btn-pause:hover { background-color: #fbc02d; }
+        .btn-reset { background-color: #c62828; } 
+        .btn-reset:hover { background-color: #b71c1c; }
+        .btn-disabled { background-color: #444; color: #888; cursor: not-allowed; }
+
+        .legend { font-size: 12px; color: #888; margin-top: 5px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 4px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+        
+        .instruction { font-size: 11px; color: #aaa; margin-top: 5px; line-height: 1.5; border-top: 1px solid #444; padding-top: 5px;}
+        .key { display: inline-block; padding: 1px 4px; background: #444; border-radius: 3px; color: #fff; font-family: monospace;}
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>控制中心</h2>
+
+        <div class="control-group">
+            <div class="btn-row">
+                <button id="btn-start" class="btn-start">▶ 开始发射</button>
+                <button id="btn-pause" class="btn-pause">暂停</button>
+                <button id="btn-reset" class="btn-reset">↺ 重置</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>磁感应强度 B (Z轴) <span id="val-B" class="value">5.0</span></label>
+            <input type="range" id="input-B" min="0" max="20" step="0.1" value="5.0">
+            
+            <label>初速度大小 v₀ <span id="val-v" class="value">5.0</span></label>
+            <input type="range" id="input-v" min="0" max="20" step="0.5" value="5.0">
+
+            <label>发射角度 (X-Y平面) <span id="val-angle" class="value">0°</span></label>
+            <input type="range" id="input-angle" min="-180" max="180" step="5" value="0">
+        </div>
+
+        <div class="control-group">
+            <div class="legend">
+                <div class="legend-item"><div class="dot" style="background:red"></div> 粒子 (+q)</div>
+                <div class="legend-item"><div class="dot" style="background:yellow"></div> 轨迹</div>
+                <div class="legend-item"><div class="dot" style="background:#00ff00"></div> 重力 g (向下)</div>
+                <div class="legend-item"><div class="dot" style="background:#0044aa"></div> 磁场 B (向外)</div>
+            </div>
+            <div class="instruction">
+                <strong>视角操作：</strong><br>
+                左键拖动：旋转<br>
+                右键拖动：平移<br>
+                <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> 或 <span class="key">←</span><span class="key">↑</span><span class="key">→</span><span class="key">↓</span> 亦可移动视角
+            </div>
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let particle, trail;
+        let trailPositions, trailGeometry;
+        let arrowHelpers = [];
+        
+        let hasStarted = false; 
+        let isPaused = false;
+        
+        // 键盘按键状态追踪
+        const keyState = {};
+
+        const MAX_POINTS = 10000; 
+
+        const params = {
+            q: 1.0, m: 1.0,
+            g: new THREE.Vector3(0, -2.0, 0),
+            B: new THREE.Vector3(0, 0, 5.0),
+            v0: 5.0, angle: 0
+        };
+
+        let state = {
+            pos: new THREE.Vector3(0, 0, 0),
+            vel: new THREE.Vector3(5, 0, 0)
+        };
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 2000);
+            camera.position.set(30, 20, 50);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            scene.add(new THREE.AmbientLight(0x888888));
+            const dLight = new THREE.DirectionalLight(0xffffff, 1);
+            dLight.position.set(10, 20, 10);
+            scene.add(dLight);
+
+            // OrbitControls 设置
+            if (typeof THREE.OrbitControls === 'function') controls = new THREE.OrbitControls(camera, renderer.domElement);
+            else if (typeof OrbitControls === 'function') controls = new OrbitControls(camera, renderer.domElement);
+            
+            if(controls) {
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = true; // 确保右键拖动是平面移动而不是旋转
+            }
+
+            particle = new THREE.Mesh(new THREE.SphereGeometry(0.4, 32, 32), new THREE.MeshPhongMaterial({ color: 0xff3333, shininess: 100 }));
+            scene.add(particle);
+
+            trailPositions = new Float32Array(MAX_POINTS * 3).fill(0);
+            trailGeometry = new THREE.BufferGeometry();
+            trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+            trail = new THREE.Line(trailGeometry, new THREE.LineBasicMaterial({ color: 0xffff00 }));
+            trail.frustumCulled = false;
+            scene.add(trail);
+
+            createFullSpaceMagneticField();
+            createInsideGravityArrow(); 
+
+            bindUI();
+            bindInputEvents(); // 绑定键盘事件
+            resetSimulation(); 
+            animate();
+        }
+
+        // --- 键盘事件绑定 ---
+        function bindInputEvents() {
+            window.addEventListener('keydown', (e) => { keyState[e.code] = true; });
+            window.addEventListener('keyup', (e) => { keyState[e.code] = false; });
+        }
+
+        // --- 处理视角平移 ---
+        function handleCameraPan() {
+            if (!controls) return;
+
+            const panSpeed = 0.5; // 移动速度
+            const right = new THREE.Vector3();
+            const up = new THREE.Vector3();
+
+            // 获取相机本地的“右”方向 (红色X轴)
+            right.set(1, 0, 0).applyQuaternion(camera.quaternion);
+            // 获取相机本地的“上”方向 (绿色Y轴)
+            up.set(0, 1, 0).applyQuaternion(camera.quaternion);
+            
+            // 忽略Z轴分量（可选），或者保持屏幕空间的移动
+            // 这里直接使用屏幕空间方向，符合WASD直觉
+
+            const panOffset = new THREE.Vector3();
+
+            if (keyState['KeyA'] || keyState['ArrowLeft']) {
+                panOffset.addScaledVector(right, -panSpeed);
+            }
+            if (keyState['KeyD'] || keyState['ArrowRight']) {
+                panOffset.addScaledVector(right, panSpeed);
+            }
+            if (keyState['KeyW'] || keyState['ArrowUp']) {
+                panOffset.addScaledVector(up, panSpeed);
+            }
+            if (keyState['KeyS'] || keyState['ArrowDown']) {
+                panOffset.addScaledVector(up, -panSpeed);
+            }
+
+            if (panOffset.lengthSq() > 0) {
+                // 同时移动相机位置和控制器目标点
+                camera.position.add(panOffset);
+                controls.target.add(panOffset);
+            }
+        }
+
+        function createInsideGravityArrow() {
+            const dir = params.g.clone().normalize(); 
+            const origin = new THREE.Vector3(8, 10, 0); 
+            const length = 12; 
+            const color = 0x00ff00;
+            const arrow = new THREE.ArrowHelper(dir, origin, length, color, 2.5, 1.2);
+            scene.add(arrow);
+
+            const label = createTextSprite("g", "bold 60px Arial", "#00ff00");
+            label.position.set(origin.x + 2, origin.y - length/2, origin.z); 
+            label.scale.set(6, 3, 1);
+            scene.add(label);
+        }
+
+        function createTextSprite(message, font, color) {
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = 128;
+            canvas.height = 64;
+            context.font = font;
+            context.fillStyle = color;
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillText(message, canvas.width / 2, canvas.height / 2);
+            return new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas) }));
+        }
+
+        function createFullSpaceMagneticField() {
+            arrowHelpers.forEach(a => scene.remove(a));
+            arrowHelpers = [];
+            const rangeX = 40; const rangeY = 20; const rangeZ = 20; const spacing = 15;
+            for(let x = -rangeX; x <= rangeX; x += spacing) {
+                for(let y = -rangeY; y <= rangeY; y += spacing) { 
+                    for(let z = -rangeZ; z <= rangeZ; z += spacing) { 
+                        const dir = new THREE.Vector3(0, 0, 1);
+                        const origin = new THREE.Vector3(x, y, z - 20); 
+                        const length = 40; 
+                        const color = 0x0044aa;
+                        const arrow = new THREE.ArrowHelper(dir, origin, length, color, 2, 1);
+                        scene.add(arrow);
+                        arrowHelpers.push(arrow);
+                    }
+                }
+            }
+        }
+
+        function bindUI() {
+            const btnStart = document.getElementById('btn-start');
+            const btnPause = document.getElementById('btn-pause');
+            const btnReset = document.getElementById('btn-reset');
+
+            btnPause.disabled = true;
+            btnPause.classList.add('btn-disabled');
+
+            btnStart.addEventListener('click', () => {
+                hasStarted = true;
+                isPaused = false;
+                
+                btnStart.disabled = true;
+                btnStart.classList.add('btn-disabled');
+                btnStart.innerText = "运行中...";
+                
+                btnPause.disabled = false;
+                btnPause.classList.remove('btn-disabled');
+                btnPause.innerText = "暂停";
+                btnPause.classList.remove('btn-active');
+            });
+
+            btnPause.addEventListener('click', () => {
+                if(!hasStarted) return;
+                isPaused = !isPaused;
+                if(isPaused) {
+                    btnPause.innerText = "继续 >";
+                    btnPause.classList.add('btn-active');
+                } else {
+                    btnPause.innerText = "暂停 ||";
+                    btnPause.classList.remove('btn-active');
+                }
+            });
+
+            btnReset.addEventListener('click', () => {
+                resetSimulation();
+                
+                hasStarted = false;
+                isPaused = false;
+                
+                btnStart.disabled = false;
+                btnStart.classList.remove('btn-disabled');
+                btnStart.innerText = "▶ 开始发射";
+
+                btnPause.disabled = true;
+                btnPause.classList.add('btn-disabled');
+                btnPause.innerText = "暂停";
+                btnPause.classList.remove('btn-active');
+            });
+
+            document.getElementById('input-B').addEventListener('input', (e) => {
+                params.B.set(0, 0, parseFloat(e.target.value));
+                document.getElementById('val-B').innerText = parseFloat(e.target.value).toFixed(1);
+            });
+            document.getElementById('input-v').addEventListener('input', (e) => {
+                params.v0 = parseFloat(e.target.value);
+                document.getElementById('val-v').innerText = params.v0.toFixed(1);
+                if(!hasStarted) updateInitialVelocity();
+            });
+            document.getElementById('input-angle').addEventListener('input', (e) => {
+                params.angle = parseFloat(e.target.value);
+                document.getElementById('val-angle').innerText = params.angle + "°";
+                if(!hasStarted) updateInitialVelocity();
+            });
+        }
+
+        function updateInitialVelocity() {
+            const rad = params.angle * (Math.PI / 180);
+            state.vel.set(params.v0 * Math.cos(rad), params.v0 * Math.sin(rad), 0);
+        }
+
+        function resetSimulation() {
+            state.pos.set(0, 0, 0);
+            updateInitialVelocity();
+            particle.position.copy(state.pos); 
+            trailPositions.fill(0);
+            trailGeometry.attributes.position.needsUpdate = true;
+            
+            // 重置时，也可以选择是否把视角拉回原点（这里暂时保留当前视角，体验更好）
+            // if(controls) controls.target.set(0,0,0);
+        }
+
+        function getAcceleration(v) {
+            const vCrossB = new THREE.Vector3().copy(v).cross(params.B);
+            return new THREE.Vector3().copy(params.g).add(vCrossB.multiplyScalar(params.q / params.m));
+        }
+
+        function stepPhysicsRK4(dt) {
+            const v = state.vel;
+            const k1_v = getAcceleration(v);
+            const v_k2 = v.clone().add(k1_v.clone().multiplyScalar(dt * 0.5));
+            const k2_v = getAcceleration(v_k2);
+            const v_k3 = v.clone().add(k2_v.clone().multiplyScalar(dt * 0.5));
+            const k3_v = getAcceleration(v_k3);
+            const v_k4 = v.clone().add(k3_v.clone().multiplyScalar(dt));
+            const k4_v = getAcceleration(v_k4);
+            state.vel.add(k1_v.add(k2_v.multiplyScalar(2)).add(k3_v.multiplyScalar(2)).add(k4_v).multiplyScalar(dt / 6));
+            state.pos.add(state.vel.clone().multiplyScalar(dt));
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // 处理键盘移动视角
+            handleCameraPan();
+
+            if (hasStarted && !isPaused) {
+                const dt = 0.015;
+                for(let i=0; i<4; i++) stepPhysicsRK4(dt);
+
+                particle.position.copy(state.pos);
+                trailPositions.copyWithin(0, 3);
+                const lastIdx = (MAX_POINTS - 1) * 3;
+                trailPositions[lastIdx] = state.pos.x;
+                trailPositions[lastIdx + 1] = state.pos.y;
+                trailPositions[lastIdx + 2] = state.pos.z;
+                trailGeometry.attributes.position.needsUpdate = true;
+            }
+
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>

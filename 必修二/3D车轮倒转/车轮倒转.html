@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>频闪圆盘物理原理演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; background-color: #0d0d0d; color: #e0e0e0; }
+        
+        /* 布局容器 */
+        #container { display: flex; height: 100vh; width: 100vw; }
+        
+        /* 3D 视图区 */
+        #canvas-wrapper { flex-grow: 1; position: relative; overflow: hidden; background: radial-gradient(circle at center, #1a1a1a 0%, #000000 100%); }
+        
+        /* 右侧功能区 */
+        #sidebar {
+            width: 380px; 
+            min-width: 380px;
+            background: #1e1e1e;
+            border-left: 1px solid #333;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto; 
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        /* 滚动条样式 */
+        #sidebar::-webkit-scrollbar { width: 8px; }
+        #sidebar::-webkit-scrollbar-track { background: #222; }
+        #sidebar::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        #sidebar::-webkit-scrollbar-thumb:hover { background: #555; }
+
+        /* 控件样式 */
+        h2 { margin-top: 0; font-size: 20px; color: #4fc3f7; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 15px; }
+        h3 { font-size: 16px; color: #81d4fa; margin: 15px 0 5px 0; }
+        
+        .control-group { background: #2a2a2a; padding: 12px; border-radius: 6px; border: 1px solid #333; }
+        label { display: block; margin-bottom: 8px; font-size: 14px; color: #bbb; }
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: #4fc3f7; }
+        .value-display { float: right; color: #4fc3f7; font-weight: bold; font-family: monospace; font-size: 1.1em; }
+        
+        /* 按钮组 */
+        .btn-group { display: flex; gap: 10px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.2s;
+            color: white;
+        }
+        .btn-start { background: #388e3c; }
+        .btn-pause { background: #fbc02d; color: #000; }
+        .btn-reset { background: #d32f2f; }
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+        button:active { transform: translateY(1px); }
+
+        /* 原理说明文本区域 */
+        .explanation-box {
+            background: #252525;
+            padding: 15px;
+            border-radius: 6px;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #ccc;
+            border: 1px solid #333;
+        }
+        
+        .math-step {
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px dashed #444;
+        }
+        .math-step:last-child { border-bottom: none; }
+
+        .highlight { color: #ffeb3b; font-weight: bold; }
+        .highlight-green { color: #69f0ae; font-weight: bold; }
+        .highlight-red { color: #ff5252; font-weight: bold; }
+        
+        .formula {
+            background: #111;
+            padding: 5px;
+            border-radius: 3px;
+            font-family: monospace;
+            text-align: center;
+            margin: 5px 0;
+            color: #fff;
+        }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-wrapper">
+        <div style="position:absolute; top:10px; left:10px; color:#666; font-size:12px;">
+            左键旋转视图 / 右键平移 / 滚轮缩放
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <h2>🔧 实验控制台</h2>
+        
+        <div class="btn-group">
+            <button class="btn-start" onclick="startSim()">▶ 开始</button>
+            <button class="btn-pause" onclick="pauseSim()">⏸ 暂停</button>
+            <button class="btn-reset" onclick="resetSim()">↺ 还原</button>
+        </div>
+
+        <div class="control-group">
+            <label>圆盘转速 (顺时针)<br><span style="font-size:12px; color:#666;">真实物体转速</span> <span id="val-speed" class="value-display">30</span> r/s</label>
+            <input type="range" id="input-speed" min="1" max="60" step="1" value="30">
+        </div>
+
+        <div class="control-group">
+            <label>频闪光源频率<br><span style="font-size:12px; color:#666;">采样/观测频率</span> <span id="val-strobe" class="value-display">31</span> Hz</label>
+            <input type="range" id="input-strobe" min="1" max="60" step="1" value="31">
+        </div>
+
+        <h2>📖 物理原理详解</h2>
+        <div class="explanation-box" id="explanation">
+            正在计算...
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 1. 变量初始化 ---
+    let scene, camera, renderer, controls;
+    let diskGroup, realDot, strobeDot;
+    let isRunning = false;
+    let time = 0;
+    
+    // 物理参数
+    let diskSpeed = 30; // 转速 (圈/秒)
+    let strobeFreq = 31; // 频闪频率 (次/秒)
+    let lastStrobeTime = 0;
+
+    // --- 2. Three.js 场景搭建 ---
+    function initThree() {
+        const container = document.getElementById('canvas-wrapper');
+        
+        // 场景
+        scene = new THREE.Scene();
+        // 稍微做点网格辅助线，增加空间感
+        const gridHelper = new THREE.GridHelper(20, 20, 0x333333, 0x111111);
+        gridHelper.rotation.x = Math.PI / 2;
+        gridHelper.position.z = -1;
+        scene.add(gridHelper);
+
+        // 相机
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 0, 14);
+
+        // 渲染器
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        // 控制器
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        }
+        
+        if(controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+        }
+
+        // --- 物体构建 ---
+        diskGroup = new THREE.Group();
+        scene.add(diskGroup);
+
+        // 1. 黑色圆盘主体
+        const geometry = new THREE.CircleGeometry(4, 64);
+        const material = new THREE.MeshBasicMaterial({ color: 0x222222 }); 
+        const disk = new THREE.Mesh(geometry, material);
+        diskGroup.add(disk);
+
+        // 2. 轴心
+        const centerGeo = new THREE.CircleGeometry(0.15, 32);
+        const centerMat = new THREE.MeshBasicMaterial({ color: 0x888888 });
+        const center = new THREE.Mesh(centerGeo, centerMat);
+        center.position.z = 0.01;
+        diskGroup.add(center);
+
+        // 3. 真实白点 (半透明，表示快速运动的模糊残影)
+        const dotGeo = new THREE.CircleGeometry(0.3, 32);
+        const realDotMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.15 });
+        realDot = new THREE.Mesh(dotGeo, realDotMat);
+        realDot.position.set(0, 2.5, 0.02); // 半径 2.5
+        diskGroup.add(realDot);
+
+        // 4. 频闪观测点 (高亮，模拟人眼看到的点)
+        const strobeMat = new THREE.MeshBasicMaterial({ color: 0x00ff00 }); 
+        strobeDot = new THREE.Mesh(dotGeo, strobeMat);
+        strobeDot.position.set(0, 2.5, 0.05); // 初始位置重合
+        scene.add(strobeDot);
+
+        window.addEventListener('resize', onWindowResize, false);
+    }
+
+    function onWindowResize() {
+        const container = document.getElementById('canvas-wrapper');
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    // --- 3. 动画循环 ---
+    const clock = new THREE.Clock();
+
+    function animate() {
+        requestAnimationFrame(animate);
+        if (controls) controls.update();
+
+        if (isRunning) {
+            const dt = clock.getDelta();
+            time += dt;
+
+            // 1. 真实圆盘旋转 (顺时针，ThreeJS中Z轴正向旋转是逆时针，所以用负号)
+            const currentRealAngle = -(diskSpeed * 2 * Math.PI * time);
+            diskGroup.rotation.z = currentRealAngle;
+
+            // 2. 频闪逻辑
+            const strobeInterval = 1 / strobeFreq;
+            
+            // 判断是否到达下一次闪光时间
+            if (time - lastStrobeTime >= strobeInterval) {
+                // 计算"理论闪光时刻"的角度
+                const idealStrobeTime = Math.floor(time / strobeInterval) * strobeInterval;
+                const idealAngle = -(diskSpeed * 2 * Math.PI * idealStrobeTime);
+                
+                updateStrobeVisual(idealAngle);
+                lastStrobeTime = idealStrobeTime;
+            }
+        } else {
+            clock.getDelta(); // 暂停时消耗掉时间差
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    function updateStrobeVisual(angle) {
+        const r = 2.5;
+        // 初始位置在 (0, 2.5) 即 90度 (PI/2)
+        // 新角度 = PI/2 + 旋转角度
+        const finalAngle = (Math.PI / 2) + angle;
+        
+        const x = r * Math.cos(finalAngle);
+        const y = r * Math.sin(finalAngle);
+        
+        strobeDot.position.set(x, y, 0.05);
+    }
+
+
+    // --- 4. 物理原理解释生成器 ---
+    function updateExplanation() {
+        const el = document.getElementById('explanation');
+        
+        // 核心计算
+        const T_flash = 1 / strobeFreq; // 闪光间隔
+        const Revs_per_flash = diskSpeed * T_flash; // 每次闪光转过的圈数 (float)
+        
+        // 视觉偏移量计算
+        const Nearest_Int = Math.round(Revs_per_flash);
+        const Diff = Revs_per_flash - Nearest_Int; // 差异值
+        
+        let directionText = "";
+        let visualSpeed = 0;
+        
+        // 计算视觉频率
+        let visualRevsPerSec = Diff * strobeFreq;
+        
+        if (Math.abs(visualRevsPerSec) < 0.01) {
+            directionText = "静止不动";
+            visualSpeed = 0;
+        } else if (visualRevsPerSec > 0) {
+            directionText = "顺时针旋转";
+            visualSpeed = Math.abs(visualRevsPerSec);
+        } else {
+            directionText = "逆时针旋转";
+            visualSpeed = Math.abs(visualRevsPerSec);
+        }
+
+        // 构造HTML字符串
+        let html = "";
+        
+        // 第一步：时间与圈数
+        html += `<div class="math-step">
+            <h3>1. 每次闪光经过的时间</h3>
+            T = 1 / ${strobeFreq} 秒
+        </div>`;
+
+        html += `<div class="math-step">
+            <h3>2. 每次闪光圆盘转过的圈数</h3>
+            <div>圆盘转速 n = ${diskSpeed} 圈/秒</div>
+            <div class="formula">转动圈数 = n × T = ${diskSpeed} / ${strobeFreq} ≈ ${Revs_per_flash.toFixed(4)} 圈</div>
+        </div>`;
+
+        // 第二步：位置分析
+        html += `<div class="math-step">
+            <h3>3. 视觉位置分析</h3>`;
+            
+        if (Math.abs(Diff) < 0.0001) {
+             html += `<div class="highlight">它正好转了整数圈！</div>
+                      <div>每次闪光时，白点都回到了同一个位置。</div>`;
+        } else if (Diff < 0) {
+            // 逆时针情况
+            let fractionDisplay = Math.abs(Diff).toFixed(4);
+            // 特定情况显示分数让逻辑更清晰
+            if(diskSpeed === 30 && strobeFreq === 31) fractionDisplay = "1/31";
+
+            html += `<div>它转了 <span class="highlight">不到 1 圈</span> (或者 N 圈差一点)。</div>
+                     <div>具体来说，距离回到原点还差 <span class="highlight-green">${fractionDisplay} 圈</span>。</div>
+                     <div>因为圆盘是顺时针转，"没转够"在视觉上表现为落后，即向<span class="highlight-red">逆时针方向</span>移动。</div>`;
+        } else {
+            // 顺时针情况
+            html += `<div>它转了 <span class="highlight">多于 1 圈</span> (或者多于整数圈)。</div>
+                     <div>比原点多转了 <span class="highlight-green">${Diff.toFixed(4)} 圈</span>。</div>
+                     <div>视觉上表现为继续向<span class="highlight-red">顺时针方向</span>移动。</div>`;
+        }
+        html += `</div>`;
+
+        // 第三步：结论
+        html += `<div class="math-step" style="border:none;">
+            <h3>4. 最终结论 (视觉速度)</h3>
+            <div class="formula">视觉速度 = 偏移量 × 闪光频率</div>
+            <div>速度 = |${Diff.toFixed(4)}| × ${strobeFreq} = <span class="highlight">${visualSpeed.toFixed(2)} 圈/秒</span></div>
+            <div style="margin-top:10px; font-size:15px;">
+                人眼看到白点在：<br>
+                <span class="highlight-red">${directionText}</span>，速度为 <span class="highlight">${visualSpeed.toFixed(2)} 圈/秒</span>
+            </div>`;
+            
+        // 注意：此处已删除原先的“符合题目答案”提示框代码
+            
+        html += `</div>`;
+
+        el.innerHTML = html;
+    }
+
+
+    // --- 5. 交互逻辑 ---
+    const sliderSpeed = document.getElementById('input-speed');
+    const sliderStrobe = document.getElementById('input-strobe');
+
+    function onParamChange() {
+        diskSpeed = parseInt(sliderSpeed.value);
+        strobeFreq = parseInt(sliderStrobe.value);
+        
+        document.getElementById('val-speed').innerText = diskSpeed;
+        document.getElementById('val-strobe').innerText = strobeFreq;
+        
+        updateExplanation();
+        resetSim(); // 参数改变时重置动画，方便观察初始状态
+        startSim(); // 自动开始
+    }
+
+    sliderSpeed.addEventListener('input', onParamChange);
+    sliderStrobe.addEventListener('input', onParamChange);
+
+    function startSim() { isRunning = true; }
+    function pauseSim() { isRunning = false; }
+    function resetSim() {
+        isRunning = false;
+        time = 0;
+        lastStrobeTime = 0;
+        diskGroup.rotation.z = 0;
+        strobeDot.position.set(0, 2.5, 0.05);
+    }
+
+    // 初始化
+    initThree();
+    updateExplanation();
+    animate();
+
+</script>
+</body>
+</html>

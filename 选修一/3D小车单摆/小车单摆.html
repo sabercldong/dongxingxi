@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>小车单摆守恒模拟</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #1e1e1e; color: #fff; }
+        
+        /* 布局容器 */
+        #container { display: flex; width: 100vw; height: 100vh; }
+        
+        /* 3D 视图区域 */
+        #scene-container { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        /* 右侧功能区 */
+        #sidebar {
+            width: 300px;
+            background: #252526;
+            padding: 20px;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        h3 { margin-top: 0; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        
+        /* 控件样式 */
+        .control-group { margin-bottom: 10px; }
+        label { display: block; font-size: 14px; color: #ccc; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #4caf50; font-weight: bold; }
+
+        /* 按钮组 */
+        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .btn-start { background-color: #2e7d32; color: white; }
+        .btn-pause { background-color: #f57f17; color: white; }
+        .btn-reset { background-color: #c62828; color: white; }
+        button:hover { opacity: 0.8; }
+
+        /* 可拖动图表容器 (左上角图标) */
+        #chart-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 320px;
+            height: 220px;
+            background: rgba(30, 30, 30, 0.9);
+            border: 1px solid #444;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            z-index: 100;
+            cursor: move; /* 指示可拖动 */
+        }
+        #chart-header {
+            padding: 5px 10px;
+            background: #333;
+            border-bottom: 1px solid #444;
+            border-radius: 8px 8px 0 0;
+            font-size: 12px;
+            color: #aaa;
+            user-select: none;
+        }
+        #chart-content { padding: 5px; height: 180px; }
+
+    </style>
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script> <script src="chart.min.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="scene-container"></div>
+
+    <div id="sidebar">
+        <h3>控制面板</h3>
+        
+        <div class="control-group">
+            <label>小车质量 (M) <span id="val-M" class="value-display">2.0 kg</span></label>
+            <input type="range" id="input-M" min="0.5" max="10" step="0.1" value="2.0">
+        </div>
+
+        <div class="control-group">
+            <label>摆球质量 (m) <span id="val-m" class="value-display">1.0 kg</span></label>
+            <input type="range" id="input-m" min="0.1" max="5" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label>摆长 (L) <span id="val-L" class="value-display">2.0 m</span></label>
+            <input type="range" id="input-L" min="0.5" max="5" step="0.1" value="2.0">
+        </div>
+
+        <div class="control-group">
+            <label>初始角度 (°) <span id="val-theta" class="value-display">45°</span></label>
+            <input type="range" id="input-theta" min="-90" max="90" step="1" value="45">
+        </div>
+
+        <div class="btn-group">
+            <button class="btn-start" id="btn-start">开始</button>
+            <button class="btn-pause" id="btn-pause">暂停</button>
+            <button class="btn-reset" id="btn-reset">还原</button>
+        </div>
+        
+        <div style="margin-top: 20px; font-size: 12px; color: #888; line-height: 1.5;">
+            <p><strong>物理原理：</strong></p>
+            <p>水平方向动量守恒。</p>
+            <p>当摆球向右摆动时，小车会向左移动以保持质心位置不变（假设无摩擦）。</p>
+        </div>
+    </div>
+</div>
+
+<div id="chart-card">
+    <div id="chart-header">:: 小车速度 V(t) - 拖动此处移动</div>
+    <div id="chart-content">
+        <canvas id="velocityChart"></canvas>
+    </div>
+</div>
+
+<script>
+    // ================= 全局变量与参数 =================
+    let scene, camera, renderer, controls;
+    let cartMesh, pendulumLine, bobMesh, pendulumGroup;
+    let isRunning = false;
+    let time = 0;
+    
+    // 物理参数
+    let params = {
+        M: 2.0,      // 小车质量
+        m: 1.0,      // 摆球质量
+        L: 2.0,      // 摆长
+        theta0: Math.PI / 4, // 初始角度 (弧度)
+        g: 9.81
+    };
+
+    // 动态变量
+    let state = {
+        x: 0,        // 小车位置
+        v: 0,        // 小车速度
+        theta: params.theta0, // 摆角
+        omega: 0     // 角速度
+    };
+
+    // Chart.js 实例
+    let vChart;
+    let chartDataBuffer = []; 
+    const MAX_DATA_POINTS = 100;
+
+    // ================= 初始化 Three.js =================
+    function initThree() {
+        const container = document.getElementById('scene-container');
+
+        // 场景
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x333333);
+        
+        // 地板网格
+        const gridHelper = new THREE.GridHelper(50, 50);
+        scene.add(gridHelper);
+
+        // 相机
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 5, 15);
+
+        // 渲染器
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // 灯光
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        // --- 构建物理模型对象 ---
+        
+        // 1. 小车组
+        pendulumGroup = new THREE.Group();
+        scene.add(pendulumGroup);
+
+        // 小车本体
+        const cartGeo = new THREE.BoxGeometry(2, 0.5, 1);
+        const cartMat = new THREE.MeshStandardMaterial({ color: 0x2196f3 });
+        cartMesh = new THREE.Mesh(cartGeo, cartMat);
+        cartMesh.position.y = 0.5; // 抬高放在地上
+        cartMesh.castShadow = true;
+        pendulumGroup.add(cartMesh);
+
+        // 轮子 (装饰)
+        const wheelGeo = new THREE.CylinderGeometry(0.2, 0.2, 1.1, 16);
+        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+        const w1 = new THREE.Mesh(wheelGeo, wheelMat); w1.rotation.x = Math.PI/2; w1.position.set(-0.8, 0.2, 0);
+        const w2 = new THREE.Mesh(wheelGeo, wheelMat); w2.rotation.x = Math.PI/2; w2.position.set(0.8, 0.2, 0);
+        pendulumGroup.add(w1);
+        pendulumGroup.add(w2);
+
+        // 摆杆 (初始是一条向下的线，后续在 render 中更新)
+        // 使用 BufferGeometry 以便动态更新顶点
+        const lineGeo = new THREE.BufferGeometry();
+        const vertices = new Float32Array([0, 0.5, 0, 0, -1, 0]); // 初始点
+        lineGeo.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+        const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+        pendulumLine = new THREE.Line(lineGeo, lineMat);
+        pendulumGroup.add(pendulumLine);
+
+        // 摆球
+        const bobGeo = new THREE.SphereGeometry(0.3, 32, 32);
+        const bobMat = new THREE.MeshStandardMaterial({ color: 0xff5722 });
+        bobMesh = new THREE.Mesh(bobGeo, bobMat);
+        bobMesh.castShadow = true;
+        pendulumGroup.add(bobMesh);
+
+        // 控制器
+        // 尝试检测 OrbitControls 是否挂载在 THREE 下，或者全局
+        if (THREE.OrbitControls) {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        } else {
+            console.warn("未找到 OrbitControls，请检查文件名或版本");
+        }
+        
+        if(controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+        }
+
+        // 窗口缩放适配
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+    }
+
+    // ================= 初始化 Chart.js =================
+    function initChart() {
+        const ctx = document.getElementById('velocityChart').getContext('2d');
+        
+        // 初始化空数据
+        let initialData = [];
+        for(let i=0; i<50; i++) initialData.push(0);
+
+        vChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(50).fill(''),
+                datasets: [{
+                    label: '小车速度 (m/s)',
+                    data: initialData,
+                    borderColor: 'rgba(76, 175, 80, 1)',
+                    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.4,
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false, // 禁用动画以提高实时性能
+                scales: {
+                    x: { display: false },
+                    y: { 
+                        suggestedMin: -2, 
+                        suggestedMax: 2,
+                        grid: { color: '#444' },
+                        ticks: { color: '#aaa' }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { enabled: false }
+                }
+            }
+        });
+    }
+
+    // ================= 物理计算核心 (Lagrangian Dynamics) =================
+    // 系统：小车(M)在水平无摩擦轨道，单摆(m, L)挂在车上。
+    // 守恒：水平方向动量守恒。
+    // 方程：
+    // (M+m)*x_ddot + m*L*(theta_ddot*cos(theta) - theta_dot^2*sin(theta)) = 0  (水平受力为0)
+    // 摆球切向方程耦合...
+    // 最终解出 theta_ddot 的表达式：
+    // theta_ddot = ( -g(M+m)sin(theta) - m*L*theta_dot^2*sin(theta)cos(theta) ) / ( L*(M + m*sin^2(theta)) )
+    // 小车速度通过动量守恒计算: v_cart = - (m*L*theta_dot*cos(theta)) / (M+m)  (假设初始总动量为0)
+
+    function updatePhysics(dt) {
+        // 防止 dt 过大导致积分发散
+        const steps = 5; 
+        const subDt = dt / steps;
+
+        for(let i=0; i<steps; i++) {
+            let sinT = Math.sin(state.theta);
+            let cosT = Math.cos(state.theta);
+            
+            // 计算角加速度 alpha
+            let numerator = -params.g * (params.M + params.m) * sinT - params.m * params.L * state.omega * state.omega * sinT * cosT;
+            let denominator = params.L * (params.M + params.m * sinT * sinT);
+            
+            let alpha = numerator / denominator;
+
+            // 欧拉积分 (半隐式)
+            state.omega += alpha * subDt;
+            // 添加一点点阻尼模拟空气阻力，防止无限摆动看起来不自然（虽然题目要求守恒，但纯理想环境容易数值飘逸，给极小阻尼）
+            state.omega *= 0.999; 
+            state.theta += state.omega * subDt;
+            
+            // 计算小车速度 (由动量守恒导出)
+            // Px = M*v + m*(v + v_bob_x_rel) = 0
+            // v_bob_x_rel = L * omega * cos(theta)
+            // (M+m)v + m*L*omega*cos(theta) = 0
+            state.v = - (params.m * params.L * state.omega * Math.cos(state.theta)) / (params.M + params.m);
+
+            // 更新小车位置
+            state.x += state.v * subDt;
+        }
+    }
+
+    // ================= 渲染循环 =================
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (isRunning) {
+            // 固定时间步长约 16ms
+            updatePhysics(0.016);
+            
+            // 更新图表数据
+            chartDataBuffer.push(state.v);
+            if(chartDataBuffer.length > 5) { // 降频更新图表
+                // 移除旧数据
+                vChart.data.datasets[0].data.shift();
+                // 添加新数据 (取平均值或最新值)
+                vChart.data.datasets[0].data.push(state.v);
+                vChart.update();
+                chartDataBuffer = [];
+            }
+        }
+
+        // --- 更新 3D 视觉 ---
+        
+        // 1. 小车位置
+        // 让小车始终在视野内，可以选择移动相机或移动物体
+        // 这里移动物体，相机跟随
+        cartMesh.position.x = state.x;
+        // 轮子跟随
+        pendulumGroup.children[1].position.x = state.x - 0.8;
+        pendulumGroup.children[2].position.x = state.x + 0.8;
+
+        // 2. 摆球位置
+        // 相对于小车支点 (x, 0.5, 0)
+        let bobX = state.x + params.L * Math.sin(state.theta);
+        let bobY = 0.5 - params.L * Math.cos(state.theta);
+        
+        bobMesh.position.set(bobX, bobY, 0);
+
+        // 3. 更新绳子
+        // 顶点0: 小车支点 (state.x, 0.5, 0)
+        // 顶点1: 摆球位置 (bobX, bobY, 0)
+        const positions = pendulumLine.geometry.attributes.position.array;
+        positions[0] = state.x; positions[1] = 0.5; positions[2] = 0;
+        positions[3] = bobX;    positions[4] = bobY; positions[5] = 0;
+        pendulumLine.geometry.attributes.position.needsUpdate = true;
+
+        // 相机跟随 (平滑跟随 x 轴)
+        if(controls) {
+            controls.target.set(state.x, 0, 0);
+            controls.update();
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    // ================= UI 交互逻辑 =================
+    function initUI() {
+        // 绑定 Range 输入
+        const bindInput = (id, paramKey, displayId, isAngle = false) => {
+            const el = document.getElementById(id);
+            const disp = document.getElementById(displayId);
+            el.addEventListener('input', (e) => {
+                let val = parseFloat(e.target.value);
+                params[paramKey] = isAngle ? val * Math.PI / 180 : val;
+                disp.innerText = val + (isAngle ? '°' : (paramKey === 'M' || paramKey === 'm' ? ' kg' : ' m'));
+                if(!isRunning) resetSimulation(); // 调整参数时重置状态
+            });
+        };
+
+        bindInput('input-M', 'M', 'val-M');
+        bindInput('input-m', 'm', 'val-m');
+        bindInput('input-L', 'L', 'val-L');
+        bindInput('input-theta', 'theta0', 'val-theta', true);
+
+        // 按钮
+        document.getElementById('btn-start').onclick = () => isRunning = true;
+        document.getElementById('btn-pause').onclick = () => isRunning = false;
+        document.getElementById('btn-reset').onclick = resetSimulation;
+
+        // 拖动逻辑 (Chart)
+        const chartCard = document.getElementById('chart-card');
+        const chartHeader = document.getElementById('chart-header');
+        let isDragging = false;
+        let offset = { x: 0, y: 0 };
+
+        chartHeader.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            offset.x = e.clientX - chartCard.offsetLeft;
+            offset.y = e.clientY - chartCard.offsetTop;
+            chartCard.style.opacity = '0.8';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                e.preventDefault(); // 防止选中文字
+                chartCard.style.left = (e.clientX - offset.x) + 'px';
+                chartCard.style.top = (e.clientY - offset.y) + 'px';
+            }
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            chartCard.style.opacity = '1';
+        });
+    }
+
+    function resetSimulation() {
+        isRunning = false;
+        state.x = 0;
+        state.v = 0;
+        state.theta = params.theta0;
+        state.omega = 0;
+        
+        // 重置图表
+        if(vChart) {
+            vChart.data.datasets[0].data = Array(50).fill(0);
+            vChart.update();
+        }
+
+        // 强制重绘一次位置
+        updatePhysics(0); 
+    }
+
+    // ================= 启动程序 =================
+    window.onload = function() {
+        initThree();
+        initChart();
+        initUI();
+        resetSimulation(); // 初始位置设定
+        animate();
+    };
+
+</script>
+</body>
+</html>

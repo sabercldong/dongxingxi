@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>3D空间斜抛：全轨迹与图表包络线</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; }
+        
+        #container { width: 100vw; height: 100vh; display: block; }
+        
+        /* 右侧功能区 */
+        #sidebar {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 100%;
+            background: rgba(40, 40, 40, 0.95);
+            color: #fff;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.2);
+        }
+
+        h2 { margin-top: 0; font-size: 18px; border-bottom: 1px solid #666; padding-bottom: 10px; }
+        
+        .control-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-size: 14px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            border-radius: 4px;
+            margin-bottom: 8px;
+            transition: all 0.2s;
+            font-weight: bold;
+        }
+        button:hover { filter: brightness(1.1); }
+        button#btn-pause { background: #FF9800; }
+        button#btn-reset { background: #f44336; }
+        button#btn-toggle-chart { background: #607d8b; }
+
+        /* 图表容器 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 480px; /* 稍微加宽以容纳更多信息 */
+            height: 350px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #e0e0e0;
+        }
+
+        #chart-header {
+            padding: 10px;
+            background: #f5f5f5;
+            border-bottom: 1px solid #ddd;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            cursor: move;
+            font-weight: bold;
+            color: #333;
+            display: flex;
+            justify-content: space-between;
+            user-select: none;
+            font-size: 14px;
+        }
+        
+        #chart-body { flex: 1; padding: 10px; position: relative; }
+        .close-btn { cursor: pointer; color: #999; font-size: 16px; }
+        .close-btn:hover { color: #f44336; }
+
+        .legend { font-size: 12px; color: #bbb; line-height: 1.6; margin-top:auto;}
+        .dot { width: 10px; height: 10px; display: inline-block; border-radius: 50%; margin-right: 5px; }
+    </style>
+    
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+    <script src="./chart.min.js"></script>
+</head>
+<body>
+
+    <div id="container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>距离 vs 高度 (含理论包络线)</span>
+            <span class="close-btn" onclick="toggleChart()">✕</span>
+        </div>
+        <div id="chart-body">
+            <canvas id="myChart"></canvas>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <h2>全空间抛射控制</h2>
+        
+        <div class="control-group">
+            <label>初速度 (Vo): <span id="val-velocity">25</span> m/s</label>
+            <input type="range" id="slider-velocity" min="10" max="50" value="25">
+        </div>
+
+        <div class="control-group">
+            <label>重力 (g): 9.8 m/s²</label>
+        </div>
+
+        <button id="btn-start">▶ 开始 (Start)</button>
+        <button id="btn-pause">⏸ 暂停 (Pause)</button>
+        <button id="btn-reset">↺ 还原 (Reset)</button>
+        <hr style="width:100%; border:0; border-top:1px solid #555;">
+        <button id="btn-toggle-chart">显示/隐藏图表</button>
+        
+        <div class="legend">
+            <div><span class="dot" style="background:#FFA500;"></span>黄色半透罩：3D安全边界</div>
+            <div><span class="dot" style="background:#2196F3;"></span>蓝色粒子：实时位置</div>
+            <div><span class="dot" style="background:#87CEFA;"></span>浅蓝线条：实际运动轨迹</div>
+            <div><strong style="color: #ffcccc;">注意观察：</strong>所有粒子的轨迹线都被完美限制在黄色罩子内部。</div>
+        </div>
+    </div>
+
+    <script>
+        // ================= 全局配置 =================
+        let scene, camera, renderer, controls;
+        let isRunning = false;
+        let time = 0;
+        const dt = 0.05; 
+        const g = 9.8;
+        
+        // 物理对象
+        let projectiles = [];
+        let envelopeMesh = null; // 3D包络面
+        let v0 = 25;
+        
+        // Chart.js
+        let trajectoryChart;
+
+        // ================= 初始化 Three.js =================
+        function initThree() {
+            const container = document.getElementById('container');
+
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+            scene.fog = new THREE.Fog(0xffffff, 50, 200);
+
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(60, 40, 60);
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // 4. 控制器
+            if (THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else if (typeof OrbitControls !== 'undefined') {
+                controls = new OrbitControls(camera, renderer.domElement);
+            }
+            if(controls) {
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.maxPolarAngle = Math.PI / 2 - 0.02;
+            }
+
+            // 5. 辅助设施
+            const gridHelper = new THREE.GridHelper(200, 40, 0xaaaaaa, 0xeeeeee);
+            scene.add(gridHelper);
+            const axesHelper = new THREE.AxesHelper(10);
+            scene.add(axesHelper);
+
+            // 地面
+            const planeGeo = new THREE.PlaneGeometry(300, 300);
+            const planeMat = new THREE.ShadowMaterial({ opacity: 0.05 });
+            const plane = new THREE.Mesh(planeGeo, planeMat);
+            plane.rotation.x = -Math.PI / 2;
+            plane.receiveShadow = true;
+            scene.add(plane);
+
+            // 灯光
+            const ambientLight = new THREE.AmbientLight(0x888888);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(30, 60, 30);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 2048;
+            dirLight.shadow.mapSize.height = 2048;
+            dirLight.shadow.camera.left = -80;
+            dirLight.shadow.camera.right = 80;
+            dirLight.shadow.camera.top = 80;
+            dirLight.shadow.camera.bottom = -80;
+            scene.add(dirLight);
+
+            // 发射台
+            const baseGeo = new THREE.CylinderGeometry(2, 2, 1, 32);
+            const baseMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
+            const base = new THREE.Mesh(baseGeo, baseMat);
+            base.position.y = 0.5;
+            scene.add(base);
+
+            // 初始化
+            createProjectiles();
+            updateEnvelope3D();
+
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        // ================= 物理核心逻辑 =================
+
+        function createProjectiles() {
+            // 清理旧对象
+            projectiles.forEach(p => {
+                scene.remove(p.mesh);
+                if(p.trailLine) {
+                    scene.remove(p.trailLine);
+                    p.trailLine.geometry.dispose();
+                }
+            });
+            projectiles = [];
+
+            const sphereGeo = new THREE.SphereGeometry(0.5, 12, 12);
+            const sphereMat = new THREE.MeshPhongMaterial({ color: 0x1976D2 }); 
+
+            // 轨迹线的材质 (半透明浅蓝)
+            const lineMat = new THREE.LineBasicMaterial({ 
+                color: 0x87CEFA, 
+                opacity: 0.6, 
+                transparent: true,
+                linewidth: 1 
+            });
+
+            // 3D 喷泉式生成
+            // 仰角 (Elev): 15, 30, 45, 60, 75
+            // 方位角 (Azimuth): 每 20 度一个
+            const elevSteps = [15, 30, 45, 60, 75];
+            const azimuthStep = 20; 
+
+            elevSteps.forEach(elevDeg => {
+                const elevRad = elevDeg * Math.PI / 180;
+                const vY = v0 * Math.sin(elevRad);
+                const vH = v0 * Math.cos(elevRad); 
+
+                for (let azDeg = 0; azDeg < 360; azDeg += azimuthStep) {
+                    const azRad = azDeg * Math.PI / 180;
+                    
+                    const vX = vH * Math.cos(azRad);
+                    const vZ = vH * Math.sin(azRad);
+
+                    // 1. 创建粒子球体
+                    const mesh = new THREE.Mesh(sphereGeo, sphereMat);
+                    mesh.castShadow = true;
+                    scene.add(mesh);
+
+                    // 2. 创建轨迹线
+                    // 使用 BufferGeometry 动态更新点
+                    const trailGeo = new THREE.BufferGeometry();
+                    // 初始只包含原点
+                    const points = [new THREE.Vector3(0,0,0)];
+                    trailGeo.setFromPoints(points);
+                    const trailLine = new THREE.Line(trailGeo, lineMat);
+                    // 只有当粒子在运动时才添加到场景
+                    scene.add(trailLine);
+
+                    projectiles.push({
+                        mesh: mesh,
+                        trailLine: trailLine,
+                        pathPoints: points, // 存储路径点数组
+                        elev: elevDeg,
+                        az: azDeg,
+                        vx: vX, vy: vY, vz: vZ,
+                        x: 0, y: 0, z: 0,
+                        active: true
+                    });
+                }
+            });
+        }
+
+        // 创建 3D 包络面 (旋转抛物面)
+        function updateEnvelope3D() {
+            if (envelopeMesh) {
+                scene.remove(envelopeMesh);
+                envelopeMesh.geometry.dispose();
+            }
+
+            const points = [];
+            const maxRadius = (v0 * v0) / g;
+            
+            for (let r = 0; r <= maxRadius + 1; r += 1) {
+                const y = (v0 * v0) / (2 * g) - (g * r * r) / (2 * v0 * v0);
+                if (y >= -1) points.push(new THREE.Vector2(r, y > 0 ? y : 0));
+            }
+            points.push(new THREE.Vector2(0, 0)); 
+
+            const geometry = new THREE.LatheGeometry(points, 32);
+            
+            // 使用线框或高透明度材质，以便看清内部轨迹
+            const material = new THREE.MeshPhongMaterial({ 
+                color: 0xFFA500, 
+                opacity: 0.15,  // 非常透明
+                transparent: true, 
+                side: THREE.DoubleSide,
+                depthWrite: false // 防止遮挡内部线条
+            });
+
+            envelopeMesh = new THREE.Mesh(geometry, material);
+            scene.add(envelopeMesh);
+
+            // 增加轮廓线增强视觉效果
+            const edges = new THREE.EdgesGeometry(geometry);
+            const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffaa00, opacity: 0.2, transparent: true }));
+            envelopeMesh.add(line);
+        }
+
+        function resetSimulation() {
+            isRunning = false;
+            time = 0;
+            createProjectiles();
+            if(trajectoryChart) {
+                // 清空散点数据
+                trajectoryChart.data.datasets.forEach(ds => {
+                    if(ds.label !== '包络线 (理论边界)') {
+                        ds.data = [{x:0, y:0}];
+                    }
+                });
+                trajectoryChart.update();
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            if (isRunning) {
+                time += dt;
+                updatePhysics();
+            }
+            renderer.render(scene, camera);
+        }
+
+        function updatePhysics() {
+            let activeCount = 0;
+
+            projectiles.forEach((p) => {
+                if (!p.active) return;
+
+                // 物理公式
+                p.x = p.vx * time;
+                p.z = p.vz * time;
+                p.y = (p.vy * time) - (0.5 * g * time * time);
+
+                if (p.y < 0) {
+                    p.y = 0;
+                    p.active = false;
+                } else {
+                    activeCount++;
+                    
+                    // === 关键：更新 3D 轨迹 ===
+                    // 每隔几次更新一次以节省性能，这里每帧更新保证平滑
+                    p.pathPoints.push(new THREE.Vector3(p.x, p.y, p.z));
+                    p.trailLine.geometry.setFromPoints(p.pathPoints);
+                }
+
+                p.mesh.position.set(p.x, p.y, p.z);
+                
+                // === 更新图表 (只选几个代表性角度) ===
+                if (p.az === 0) {
+                    const dist = Math.sqrt(p.x*p.x + p.z*p.z);
+                    
+                    // 对应 Chart.js dataset 索引: 0->45deg, 1->75deg, 2->15deg
+                    if (p.elev === 45) updateChartData(0, dist, p.y);
+                    if (p.elev === 75) updateChartData(1, dist, p.y);
+                    if (p.elev === 15) updateChartData(2, dist, p.y);
+                }
+            });
+
+            if (activeCount === 0) isRunning = false;
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ================= Chart.js 逻辑 =================
+        function initChart() {
+            const ctx = document.getElementById('myChart').getContext('2d');
+            
+            trajectoryChart = new Chart(ctx, {
+                type: 'scatter',
+                data: {
+                    datasets: [
+                        {
+                            label: '45° 仰角',
+                            data: [{x: 0, y: 0}],
+                            borderColor: 'rgb(255, 99, 132)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.5)',
+                            showLine: true,
+                            order: 2
+                        },
+                        {
+                            label: '75° 仰角',
+                            data: [{x: 0, y: 0}],
+                            borderColor: 'rgb(54, 162, 235)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.5)',
+                            showLine: true,
+                            order: 3
+                        },
+                        {
+                            label: '15° 仰角',
+                            data: [{x: 0, y: 0}],
+                            borderColor: 'rgb(75, 192, 192)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.5)',
+                            showLine: true,
+                            order: 4
+                        },
+                        // 新增：包络线数据集
+                        {
+                            label: '包络线 (理论边界)',
+                            data: [], // 稍后计算
+                            borderColor: 'rgb(255, 0, 0)', // 红色
+                            borderWidth: 2,
+                            borderDash: [5, 5], // 虚线
+                            pointRadius: 0, // 不显示点，只显示线
+                            showLine: true,
+                            fill: false,
+                            order: 1 // 确保显示在最上层或最下层
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { 
+                            type: 'linear', 
+                            position: 'bottom', 
+                            title: {display: true, text: '水平距离 Distance (m)'},
+                            min: 0, max: 100 
+                        },
+                        y: { 
+                            title: {display: true, text: '高度 Height (m)'},
+                            min: 0, max: 80 
+                        }
+                    },
+                    animation: false,
+                    plugins: {
+                        legend: {
+                            labels: { boxWidth: 10, font: {size: 10} }
+                        }
+                    }
+                }
+            });
+            
+            // 初始化计算一次包络线
+            updateChartEnvelope();
+        }
+
+        function updateChartData(datasetIndex, x, y) {
+            if (trajectoryChart) {
+                trajectoryChart.data.datasets[datasetIndex].data.push({x: x, y: y});
+                trajectoryChart.update('none');
+            }
+        }
+
+        // 计算并在图表中绘制包络线
+        function updateChartEnvelope() {
+            if(!trajectoryChart) return;
+
+            const envelopeData = [];
+            const maxR = (v0 * v0) / g;
+            
+            // 生成包络线数据点
+            for (let r = 0; r <= maxR; r += 2) {
+                const y = (v0 * v0) / (2 * g) - (g * r * r) / (2 * v0 * v0);
+                if (y >= 0) envelopeData.push({x: r, y: y});
+            }
+            // 确保最后一个点落地
+            envelopeData.push({x: maxR, y: 0});
+
+            // 更新数据集 (索引3是包络线)
+            trajectoryChart.data.datasets[3].data = envelopeData;
+            
+            // 更新坐标轴范围以适应新数据
+            trajectoryChart.options.scales.x.max = maxR + 10;
+            trajectoryChart.options.scales.y.max = ((v0*v0)/(2*g)) + 10;
+            
+            trajectoryChart.update();
+        }
+
+        // ================= UI 事件 =================
+        document.getElementById('btn-start').onclick = () => isRunning = true;
+        document.getElementById('btn-pause').onclick = () => isRunning = false;
+        document.getElementById('btn-reset').onclick = resetSimulation;
+        
+        const sliderV = document.getElementById('slider-velocity');
+        const valV = document.getElementById('val-velocity');
+        
+        sliderV.oninput = function() {
+            v0 = parseFloat(this.value);
+            valV.textContent = v0;
+            resetSimulation();
+            updateEnvelope3D();
+            updateChartEnvelope(); // 同时更新图表包络线
+        };
+
+        function toggleChart() {
+            const wrapper = document.getElementById('chart-wrapper');
+            wrapper.style.display = (wrapper.style.display === 'none') ? 'flex' : 'none';
+        }
+        document.getElementById('btn-toggle-chart').onclick = toggleChart;
+
+        // 拖拽逻辑
+        const chartWrapper = document.getElementById('chart-wrapper');
+        const chartHeader = document.getElementById('chart-header');
+        let isDragging = false;
+        let dragOffsetX, dragOffsetY;
+
+        chartHeader.addEventListener('mousedown', (e) => {
+            if(e.target.classList.contains('close-btn')) return;
+            isDragging = true;
+            dragOffsetX = e.clientX - chartWrapper.offsetLeft;
+            dragOffsetY = e.clientY - chartWrapper.offsetTop;
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                chartWrapper.style.left = (e.clientX - dragOffsetX) + 'px';
+                chartWrapper.style.top = (e.clientY - dragOffsetY) + 'px';
+            }
+        });
+        document.addEventListener('mouseup', () => isDragging = false);
+
+        // 启动
+        window.onload = function() {
+            initThree();
+            initChart();
+            animate();
+            sliderV.oninput();
+        };
+
+    </script>
+</body>
+</html>

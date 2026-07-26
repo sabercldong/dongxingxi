@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>人拉船三维物理演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; user-select: none; }
+        
+        /* 1. 三维画布全屏，但在右侧留出空间 */
+        #canvas-container {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: calc(100% - 250px); /* 留出右侧功能区宽度 */
+            height: 100vh;
+            background-color: #87CEEB; /* 天空蓝背景 */
+        }
+
+        /* 2. 右侧功能区 */
+        #sidebar {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 250px;
+            height: 100vh;
+            background: #f0f0f0;
+            border-left: 2px solid #ccc;
+            padding: 10px;
+            box-sizing: border-box;
+            overflow-y: auto; /* 滚轮支持 */
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .control-group {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        h3 { margin-top: 0; margin-bottom: 10px; font-size: 16px; color: #333; }
+        label { display: block; font-size: 12px; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; }
+        
+        .btn-group { display: flex; gap: 5px; margin-top: 10px; }
+        button {
+            flex: 1;
+            padding: 8px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            font-weight: bold;
+        }
+        button:hover { background: #0056b3; }
+        button.stop { background: #dc3545; }
+        button.reset { background: #6c757d; }
+
+        /* 5. 左上角可拖动图表 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            height: 250px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #chart-header {
+            padding: 5px 10px;
+            background: #333;
+            color: white;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            cursor: move; /* 拖动手势 */
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        #chart-body {
+            flex: 1;
+            padding: 5px;
+            position: relative;
+        }
+        
+        #data-display {
+            font-size: 12px;
+            margin-top: 5px;
+        }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>速度变化图表 (拖动我)</span>
+            <span>▼</span>
+        </div>
+        <div id="chart-body">
+            <canvas id="velocityChart"></canvas>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <div class="control-group">
+            <h3>控制面板</h3>
+            <div class="btn-group">
+                <button id="btn-start">开始</button>
+                <button id="btn-pause" class="stop">暂停</button>
+                <button id="btn-reset" class="reset">还原</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>参数设置</h3>
+            <label>岸高 (h): <span id="val-h">5</span>m</label>
+            <input type="range" id="input-h" min="2" max="10" step="0.5" value="5">
+            
+            <label>收绳速度 (v): <span id="val-v">1</span>m/s</label>
+            <input type="range" id="input-v" min="0.1" max="5" step="0.1" value="1">
+
+            <label>初始距离 (x): <span id="val-x">15</span>m</label>
+            <input type="range" id="input-x" min="5" max="30" step="1" value="15">
+        </div>
+
+        <div class="control-group">
+            <h3>实时数据</h3>
+            <div id="data-display">
+                船距岸边: 0.00 m<br>
+                绳索长度: 0.00 m<br>
+                船速: 0.00 m/s
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <h3>说明</h3>
+            <p style="font-size:12px; color:#666;">
+                演示"人拉船"模型。<br>
+                当绳索匀速收缩时，船的速度并非匀速，而是越来越快。<br>
+                v船 = v绳 * (绳长/水平距离)
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let boat, man, ropeLine, water, dock; // 3D对象
+        let animationId = null;
+        let isRunning = false;
+        
+        // 物理参数
+        let params = {
+            h: 5,        // 岸高
+            vRope: 1,    // 绳速
+            startX: 15,  // 初始水平距离
+            currentX: 15,// 当前水平距离
+            currentL: 0  // 当前绳长 (计算得出)
+        };
+
+        // 图表相关
+        let chart;
+        let timeElapsed = 0;
+
+        // ================= 初始化程序 =================
+        window.onload = function() {
+            initThree();
+            initSceneObjects();
+            initChart();
+            setupUI();
+            resetSimulation();
+            animate();
+        };
+
+        // ================= 1. Three.js 基础设置 =================
+        function initThree() {
+            const container = document.getElementById('canvas-container');
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+
+            scene = new THREE.Scene();
+            // 添加雾效增加纵深感
+            scene.fog = new THREE.FogExp2(0x87CEEB, 0.02);
+
+            camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
+            camera.position.set(20, 15, 30);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(width, height);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // 3. 鼠标控制 (OrbitControls)
+            // 兼容性处理：检查 THREE.OrbitControls 是否存在
+            if (THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+            } else {
+                console.warn('OrbitControls 未找到，请检查文件名是否正确或文件内容是否支持非Module模式');
+            }
+
+            // 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // 窗口自适应
+            window.addEventListener('resize', () => {
+                const newWidth = container.clientWidth;
+                const newHeight = container.clientHeight;
+                camera.aspect = newWidth / newHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(newWidth, newHeight);
+            });
+        }
+
+        // ================= 2. 场景物体 (船, 人, 岸, 水) =================
+        function initSceneObjects() {
+            // 水面
+            const waterGeo = new THREE.PlaneGeometry(100, 100);
+            const waterMat = new THREE.MeshPhongMaterial({ color: 0x006994, transparent: true, opacity: 0.8 });
+            water = new THREE.Mesh(waterGeo, waterMat);
+            water.rotation.x = -Math.PI / 2;
+            water.receiveShadow = true;
+            scene.add(water);
+
+            // 岸边 (Dock)
+            const dockGeo = new THREE.BoxGeometry(10, 20, 10); // 高度后续动态调整
+            const dockMat = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            dock = new THREE.Mesh(dockGeo, dockMat);
+            dock.position.set(-5, 0, 0); // 岸在左侧
+            dock.castShadow = true;
+            dock.receiveShadow = true;
+            scene.add(dock);
+
+            // 人 (简化为一个圆柱体 + 球体头部)
+            const manGroup = new THREE.Group();
+            
+            const bodyGeo = new THREE.CylinderGeometry(0.5, 0.5, 3);
+            const bodyMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 1.5;
+            
+            const headGeo = new THREE.SphereGeometry(0.6);
+            const headMat = new THREE.MeshLambertMaterial({ color: 0xffccaa });
+            const head = new THREE.Mesh(headGeo, headMat);
+            head.position.y = 3.5;
+
+            manGroup.add(body);
+            manGroup.add(head);
+            man = manGroup;
+            scene.add(man);
+
+            // 船 (简化组合体)
+            const boatGroup = new THREE.Group();
+            
+            const hullGeo = new THREE.BoxGeometry(4, 1, 2);
+            const hullMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+            const hull = new THREE.Mesh(hullGeo, hullMat);
+            hull.position.y = 0.5;
+
+            const mastGeo = new THREE.CylinderGeometry(0.1, 0.1, 3);
+            const mastMat = new THREE.MeshLambertMaterial({ color: 0x666666 });
+            const mast = new THREE.Mesh(mastGeo, mastMat);
+            mast.position.y = 2;
+
+            boatGroup.add(hull);
+            boatGroup.add(mast);
+            boat = boatGroup;
+            boat.castShadow = true;
+            scene.add(boat);
+
+            // 绳子 (Line)
+            const ropeMaterial = new THREE.LineBasicMaterial({ color: 0xffff00, linewidth: 2 });
+            const ropeGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, 0)
+            ]);
+            ropeLine = new THREE.Line(ropeGeometry, ropeMaterial);
+            scene.add(ropeLine);
+        }
+
+        // ================= 3. 逻辑更新与渲染 =================
+        function updatePhysics(dt) {
+            if (!isRunning) return;
+
+            // 物理核心：绳子缩短
+            // 1. 减少绳长
+            const deltaL = params.vRope * dt;
+            params.currentL -= deltaL;
+
+            // 2. 根据绳长计算新的X坐标 (勾股定理 x = sqrt(L^2 - h^2))
+            // 临界条件：如果绳长小于高度，说明船已经撞岸或被拉起
+            if (params.currentL <= params.h) {
+                params.currentX = 0;
+                isRunning = false;
+                alert("演示结束：船已到达岸边");
+            } else {
+                params.currentX = Math.sqrt(Math.pow(params.currentL, 2) - Math.pow(params.h, 2));
+            }
+
+            // 3. 计算此时的船速用于显示和图表
+            // v船 = v绳 * (L / x)
+            let vBoat = 0;
+            if (params.currentX > 0.1) {
+                vBoat = params.vRope * (params.currentL / params.currentX);
+            }
+
+            timeElapsed += dt;
+
+            // 更新图表 (每10帧或者特定间隔更新一次以优化性能，这里简单每帧更新但限制数据量)
+            if (timeElapsed % 0.1 < dt) { // 简单降频
+                updateChart(params.currentX, vBoat);
+            }
+
+            updateHTMLDisplay(vBoat);
+        }
+
+        function updateSceneVisuals() {
+            // 1. 更新岸的高度和位置
+            // 为了让人的手部位置对应 params.h，我们需要调整岸和人的Y坐标
+            // 假设人手高度相对于人脚底是 3米 (模型设定)，岸高实际显示高度调整
+            // 简单化：岸的顶部就是 params.h, 人的位置固定在岸顶
+            
+            dock.scale.y = params.h / 10; // 基础高度10，缩放
+            dock.position.y = params.h / 2; // 中心点上移
+            
+            man.position.set(-2, params.h, 0); // 人站在岸上
+
+            // 2. 更新船的位置
+            boat.position.set(params.currentX, 0, 0);
+
+            // 3. 更新绳子几何体
+            const handPos = new THREE.Vector3(-2, params.h + 2, 0); // 假定手在人中心上方2m处
+            const boatPos = new THREE.Vector3(params.currentX, 1, 0); // 假定系绳点在船高1m处
+            
+            // 重新计算实际物理高度差 (h_physics) 用于公式，这里为了视觉对齐微调
+            // 物理模型中的 h 是手到系绳点的垂直距离
+            // 视觉上：hand.y = params.h + 2, boat.y = 1 -> visual_h = params.h + 1
+            // *为保持演示严谨性，我们忽略微小的模型偏差，认为 params.h 就是垂直高差*
+
+            const points = [handPos, boatPos];
+            ropeLine.geometry.setFromPoints(points);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            const dt = 0.016; // 假设60fps, delta time
+            updatePhysics(dt);
+            updateSceneVisuals();
+
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // ================= 4. UI 交互逻辑 =================
+        function setupUI() {
+            // 按钮
+            document.getElementById('btn-start').onclick = () => { isRunning = true; };
+            document.getElementById('btn-pause').onclick = () => { isRunning = false; };
+            document.getElementById('btn-reset').onclick = resetSimulation;
+
+            // 滑动条
+            const inputH = document.getElementById('input-h');
+            const inputV = document.getElementById('input-v');
+            const inputX = document.getElementById('input-x');
+
+            inputH.oninput = (e) => { 
+                params.h = parseFloat(e.target.value); 
+                document.getElementById('val-h').innerText = params.h;
+                if(!isRunning) resetSimulation(false); // 仅更新视觉
+            };
+            inputV.oninput = (e) => { 
+                params.vRope = parseFloat(e.target.value); 
+                document.getElementById('val-v').innerText = params.vRope;
+            };
+            inputX.oninput = (e) => { 
+                params.startX = parseFloat(e.target.value); 
+                document.getElementById('val-x').innerText = params.startX;
+                if(!isRunning) resetSimulation(false);
+            };
+
+            // 拖动图表逻辑
+            setupDraggableChart();
+        }
+
+        function resetSimulation(clearChart = true) {
+            isRunning = false;
+            timeElapsed = 0;
+            params.currentX = params.startX;
+            // 计算初始绳长 L^2 = x^2 + h^2
+            params.currentL = Math.sqrt(Math.pow(params.currentX, 2) + Math.pow(params.h, 2));
+
+            updateSceneVisuals();
+            updateHTMLDisplay(0);
+
+            if (clearChart && chart) {
+                chart.data.labels = [];
+                chart.data.datasets[0].data = [];
+                chart.update();
+            }
+        }
+
+        function updateHTMLDisplay(vBoat) {
+            const div = document.getElementById('data-display');
+            div.innerHTML = `
+                船距岸边: ${params.currentX.toFixed(2)} m<br>
+                绳索长度: ${params.currentL.toFixed(2)} m<br>
+                <b>船速: ${vBoat.toFixed(2)} m/s</b>
+            `;
+        }
+
+        // ================= 5. 图表功能 (Chart.js) =================
+        function initChart() {
+            const ctx = document.getElementById('velocityChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '船速 (vBoat)',
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        data: [],
+                        fill: true,
+                        pointRadius: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false, // 禁用动画提高性能
+                    scales: {
+                        x: { 
+                            title: { display: true, text: '距离岸边 (m)' },
+                            reverse: true // 让X轴从大到小（船靠近岸）
+                        },
+                        y: { 
+                            title: { display: true, text: '速度 (m/s)' },
+                            min: 0
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateChart(distance, velocity) {
+            // 为了防止数据过多，每隔一定距离记录一次
+            if (!chart) return;
+            
+            // Chart.js 实时更新
+            chart.data.labels.push(distance.toFixed(1));
+            chart.data.datasets[0].data.push(velocity);
+
+            // 保持数据点数量在一个合理范围 (例如只显示最近50个点，或者累积显示)
+            // 这里我们累积显示完整的运动过程
+            
+            chart.update();
+        }
+
+        // ================= 6. 拖动功能实现 =================
+        function setupDraggableChart() {
+            const wrapper = document.getElementById('chart-wrapper');
+            const header = document.getElementById('chart-header');
+            
+            let isDragging = false;
+            let startX, startY, initialLeft, initialTop;
+
+            header.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                initialLeft = wrapper.offsetLeft;
+                initialTop = wrapper.offsetTop;
+                wrapper.style.cursor = 'grabbing';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                wrapper.style.left = `${initialLeft + dx}px`;
+                wrapper.style.top = `${initialTop + dy}px`;
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+                wrapper.style.cursor = 'default';
+            });
+        }
+    </script>
+</body>
+</html>

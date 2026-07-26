@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物理题22动态演示 - 完美修复版</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f0f0; }
+        
+        /* Flex 布局容器 */
+        #container { display: flex; width: 100vw; height: 100vh; }
+        
+        /* Canvas 容器 */
+        #canvas-container { flex-grow: 1; position: relative; background: linear-gradient(to bottom, #e0eafc, #cfdef3); overflow: hidden; }
+        
+        /* 强制 canvas 填满父容器 */
+        canvas { display: block; width: 100%; height: 100%; }
+
+        /* 右侧功能区 */
+        #ui-panel { width: 320px; min-width: 320px; background-color: #ffffff; box-shadow: -2px 0 5px rgba(0,0,0,0.1); display: flex; flex-direction: column; z-index: 10; }
+        #ui-content { flex-grow: 1; overflow-y: auto; padding: 20px; }
+
+        /* 样式细节 */
+        .problem-box { background: #f9f9f9; border-left: 4px solid #4a90e2; padding: 10px; margin-bottom: 20px; font-size: 14px; line-height: 1.6; color: #333; }
+        .problem-title { font-weight: bold; margin-bottom: 8px; font-size: 16px; }
+        .math-tex { font-family: 'Times New Roman', serif; font-style: italic; }
+        
+        .control-group { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #eee; }
+        .btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        .btn-start { background-color: #4CAF50; color: white; }
+        .btn-start:hover { background-color: #45a049; }
+        .btn-pause { background-color: #FF9800; color: white; }
+        .btn-pause:hover { background-color: #fb8c00; }
+        .btn-reset { background-color: #f44336; color: white; }
+        .btn-reset:hover { background-color: #d32f2f; }
+        
+        .slider-container { margin-top: 10px; }
+        label { display: block; margin-bottom: 5px; font-size: 13px; color: #666; }
+        input[type=range] { width: 100%; cursor: pointer; }
+
+        .status-display { font-family: monospace; background: #333; color: #0f0; padding: 10px; border-radius: 4px; margin-top: 10px; font-size: 12px; }
+
+        /* 浮动标签说明 */
+        #diagram-label {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255,255,255,0.9);
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none;
+            font-size: 13px;
+            color: #444;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            line-height: 1.8;
+        }
+        .color-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+    </style>
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container">
+        <div id="diagram-label">
+            <div style="font-weight:bold; margin-bottom:5px; font-size:14px;">图左：力的矢量三角形</div>
+            <div><span class="color-dot" style="background:black;"></span>AB: 重力 G</div>
+            <div><span class="color-dot" style="background:#9C27B0;"></span>BC: 拉力 T<sub>MN</sub> (紫)</div>
+            <div><span class="color-dot" style="background:#2196F3;"></span>CA: 拉力 T<sub>OM</sub> (蓝)</div>
+            <hr style="border:0; border-top:1px solid #ddd; margin:8px 0;">
+            <div style="font-weight:bold; margin-bottom:5px; font-size:14px;">图右：实物绳</div>
+            <div>O: 固定点</div>
+            <div>M: 质点 (受力平衡)</div>
+            <div>N: 手拉点</div>
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <div id="ui-content">
+            <div class="problem-box">
+                <div class="problem-title">动态演示</div>
+                <p>
+                    <span class="math-tex">OM</span> 竖直被拉到水平。保持夹角 <span class="math-tex">α</span> 不变。
+                </p>
+                <p>
+                    <strong>矢量圆：</strong> 顶点 C 沿圆周运动。初始时 C 与 B 重合。
+                </p>
+            </div>
+
+            <div class="control-group">
+                <div class="btn-row">
+                    <button class="btn-start" onclick="animStart()">▶ 开始</button>
+                    <button class="btn-pause" onclick="animPause()">⏸ 暂停</button>
+                    <button class="btn-reset" onclick="animReset()">↺ 还原</button>
+                </div>
+                
+                <div class="slider-container">
+                    <label>设定夹角 α (度): <span id="alpha-val">120</span>°</label>
+                    <input type="range" id="alpha-slider" min="95" max="160" value="120" oninput="updateAlpha(this.value)">
+                </div>
+                
+                <div class="slider-container">
+                    <label>手动进度 (θ):</label>
+                    <input type="range" id="progress-slider" min="0" max="90" value="0" step="0.1" oninput="manualProgress(this.value)">
+                </div>
+            </div>
+
+            <div class="status-display" id="data-monitor">
+                等待开始...
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 全局变量 ---
+    let scene, camera, renderer, controls;
+    let ropeOM, ropeMN, massM, pointO, handN, angleArc;
+    let sceneLabelO, sceneLabelM, sceneLabelN; 
+    let gridHelper;
+    
+    // 力学图示变量
+    let forceGroup;
+    let arrowG, arrowTMN, arrowTOM;
+    let forceCircle, forceLabelGroup;
+    let labelA, labelB, labelC; 
+    
+    // 物理参数
+    const lengthOM = 3;
+    const lengthMN = 2.5;
+    let alphaDeg = 120; 
+    let thetaDeg = 0;   
+    let isPlaying = false;
+    let animationSpeed = 0.2; 
+
+    // 初始化
+    init3D();
+    initForceDiagram();
+    updatePhysics(0); 
+    animate();
+
+    // --- Three.js 初始化 ---
+    function init3D() {
+        const container = document.getElementById('canvas-container');
+
+        // 场景
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf0f5ff);
+        scene.fog = new THREE.Fog(0xf0f5ff, 10, 60);
+
+        // 相机
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+        camera.position.set(0, 2, 14);
+
+        // 渲染器
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio); 
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // 控制器
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        // 灯光
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // 地面网格
+        gridHelper = new THREE.GridHelper(30, 30, 0xcccccc, 0xe5e5e5);
+        gridHelper.position.y = -5; 
+        scene.add(gridHelper);
+
+        // --- 物理实体 ---
+        // O 点
+        pointO = new THREE.Mesh(new THREE.SphereGeometry(0.15), new THREE.MeshPhongMaterial({ color: 0x333333 }));
+        pointO.position.set(2, 2, 0);
+        scene.add(pointO);
+        sceneLabelO = createPointLabel("O", "#000", 32);
+        scene.add(sceneLabelO);
+
+        // 绳 OM
+        const geoRope = new THREE.CylinderGeometry(0.04, 0.04, 1, 16);
+        geoRope.translate(0, 0.5, 0); 
+        geoRope.rotateX(Math.PI);
+        ropeOM = new THREE.Mesh(geoRope, new THREE.MeshPhongMaterial({ color: 0x2196F3 }));
+        ropeOM.position.copy(pointO.position);
+        scene.add(ropeOM);
+
+        // 质点 M
+        massM = new THREE.Mesh(new THREE.SphereGeometry(0.3), new THREE.MeshPhongMaterial({ color: 0xFF5722 }));
+        scene.add(massM);
+        sceneLabelM = createPointLabel("M", "#d84315", 32);
+        scene.add(sceneLabelM);
+
+        // 绳 MN
+        ropeMN = new THREE.Mesh(geoRope, new THREE.MeshPhongMaterial({ color: 0x9C27B0 })); 
+        scene.add(ropeMN);
+
+        // 手 N
+        handN = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, 0.25), new THREE.MeshPhongMaterial({ color: 0x9C27B0 }));
+        scene.add(handN);
+        sceneLabelN = createPointLabel("N", "#7b1fa2", 32);
+        scene.add(sceneLabelN);
+
+        // 角度弧
+        angleArc = new THREE.Mesh(new THREE.TorusGeometry(0.8, 0.03, 16, 50, Math.PI/2), new THREE.MeshBasicMaterial({ color: 0x555555 }));
+        scene.add(angleArc);
+    }
+
+    // --- 初始化力三角形图 ---
+    function initForceDiagram() {
+        forceGroup = new THREE.Group();
+        forceGroup.position.set(-4.5, 1, 0); 
+        scene.add(forceGroup);
+
+        // 重力 G
+        const dirG = new THREE.Vector3(0, -1, 0);
+        arrowG = new THREE.ArrowHelper(dirG, new THREE.Vector3(0, 1, 0), 2, 0x000000, 0.2, 0.15);
+        forceGroup.add(arrowG);
+
+        // 张力 T_MN 和 T_OM
+        arrowTMN = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), new THREE.Vector3(0,-1,0), 0, 0x9C27B0, 0.2, 0.15);
+        forceGroup.add(arrowTMN);
+        
+        arrowTOM = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(0,-1,0), 0, 0x2196F3, 0.2, 0.15);
+        forceGroup.add(arrowTOM);
+
+        // 辅助圆
+        const circleGeo = new THREE.BufferGeometry();
+        const circleMat = new THREE.LineBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.5 });
+        forceCircle = new THREE.LineLoop(circleGeo, circleMat);
+        forceGroup.add(forceCircle);
+
+        // 标签
+        forceLabelGroup = new THREE.Group();
+        forceGroup.add(forceLabelGroup);
+        
+        labelA = createPointLabel("A", "#333", 40);
+        labelA.position.set(0, 1.3, 0); 
+        forceLabelGroup.add(labelA);
+
+        labelB = createPointLabel("B", "#333", 40);
+        labelB.position.set(0, -1.3, 0); 
+        forceLabelGroup.add(labelB);
+
+        labelC = createPointLabel("C", "#333", 40);
+        forceLabelGroup.add(labelC);
+
+        updateForceCircleGeometry();
+    }
+
+    // 更新辅助圆形状 (关键修复：全圆绘制)
+    function updateForceCircleGeometry() {
+        const G_len = 2; 
+        const betaRad = THREE.MathUtils.degToRad(180 - alphaDeg);
+        const radius = (G_len / 2) / Math.sin(betaRad);
+        const d = (G_len / 2) / Math.tan(betaRad);
+        const centerX = d;
+        const centerY = 0;
+
+        const points = [];
+        const segments = 128; // 增加分段，确保平滑
+        
+        // 使用 0 到 2PI 完整循环，消除“一侧直线”的问题
+        for (let i = 0; i <= segments; i++) {
+            const angle = (i / segments) * Math.PI * 2;
+            points.push(new THREE.Vector3(
+                centerX + radius * Math.cos(angle), 
+                centerY + radius * Math.sin(angle), 
+                0
+            ));
+        }
+        forceCircle.geometry.setFromPoints(points);
+    }
+
+    // --- 核心物理逻辑 ---
+    function updatePhysics(theta) {
+        const thetaRad = THREE.MathUtils.degToRad(theta);
+        const alphaRad = THREE.MathUtils.degToRad(alphaDeg);
+
+        // --- 1. 更新实物 ---
+        const curMx = pointO.position.x + lengthOM * Math.sin(thetaRad); 
+        const curMy = pointO.position.y - lengthOM * Math.cos(thetaRad);
+        massM.position.set(curMx, curMy, 0);
+        
+        ropeOM.scale.set(1, lengthOM, 1);
+        ropeOM.lookAt(massM.position);
+        ropeOM.rotateX(-Math.PI/2);
+
+        const vMO = new THREE.Vector3().subVectors(pointO.position, massM.position);
+        const vMN = vMO.clone().applyAxisAngle(new THREE.Vector3(0, 0, 1), -alphaRad).normalize().multiplyScalar(lengthMN);
+        handN.position.copy(massM.position).add(vMN);
+
+        ropeMN.position.copy(massM.position);
+        ropeMN.scale.set(1, lengthMN, 1);
+        ropeMN.lookAt(handN.position);
+        ropeMN.rotateX(-Math.PI/2);
+
+        sceneLabelO.position.set(pointO.position.x - 0.3, pointO.position.y, 0);
+        sceneLabelM.position.set(curMx - 0.4, curMy, 0);
+        sceneLabelN.position.set(handN.position.x + 0.3, handN.position.y, 0);
+
+        const angleMO = Math.atan2(vMO.y, vMO.x);
+        angleArc.position.copy(massM.position);
+        angleArc.rotation.set(0, 0, angleMO - alphaRad);
+        if(angleArc.geometry.parameters.arc !== alphaRad) {
+             angleArc.geometry.dispose();
+             angleArc.geometry = new THREE.TorusGeometry(0.5, 0.02, 8, 30, alphaRad);
+        }
+
+        // --- 2. 更新力矢量 ---
+        
+        // 初始状态判断
+        const isInitial = (theta <= 0.01);
+        const sinAlpha = Math.sin(alphaRad);
+        const val_T_MN = isInitial ? 0 : Math.sin(thetaRad) / sinAlpha;
+        const val_T_OM = isInitial ? 1 : Math.sin(alphaRad - thetaRad) / sinAlpha;
+
+        const G_visual_len = 2; 
+        const scale = G_visual_len; 
+        
+        const startB = new THREE.Vector3(0, -1, 0);
+        
+        let pointC;
+        if (isInitial) {
+            pointC = startB.clone(); 
+            arrowTMN.visible = false; // 初始时隐藏拉力MN
+        } else {
+            arrowTMN.visible = true;
+            const angle_MN_vert = alphaRad - thetaRad; 
+            const len_MN_draw = val_T_MN * scale;
+            const Vx = startB.x + len_MN_draw * Math.sin(angle_MN_vert);
+            const Vy = startB.y + len_MN_draw * Math.cos(angle_MN_vert);
+            pointC = new THREE.Vector3(Vx, Vy, 0);
+            
+            const vecBC = new THREE.Vector3().subVectors(pointC, startB);
+            if(vecBC.length() > 0.001) {
+                arrowTMN.setLength(vecBC.length(), 0.2, 0.15);
+                arrowTMN.setDirection(vecBC.normalize());
+            }
+            arrowTMN.position.copy(startB);
+        }
+
+        const endA = new THREE.Vector3(0, 1, 0);
+        const vecCA = new THREE.Vector3().subVectors(endA, pointC);
+        
+        if (isInitial) {
+            arrowTOM.position.copy(startB);
+            arrowTOM.setLength(2, 0.2, 0.15);
+            arrowTOM.setDirection(new THREE.Vector3(0, 1, 0));
+        } else {
+            arrowTOM.position.copy(pointC);
+            if(vecCA.length() > 0.001) {
+                arrowTOM.setLength(vecCA.length(), 0.2, 0.15);
+                arrowTOM.setDirection(vecCA.normalize()); 
+            }
+        }
+
+        labelC.position.set(pointC.x + 0.3, pointC.y, 0);
+
+        // UI 数据更新
+        document.getElementById('data-monitor').innerHTML = 
+            `θ (OM角度): ${theta.toFixed(1)}°<br>` +
+            `T_MN (紫): ${val_T_MN.toFixed(2)} G<br>` +
+            `T_OM (蓝): ${val_T_OM.toFixed(2)} G`;
+    }
+
+    // --- 动画循环 ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        // 关键：每帧校正画布尺寸，防止圆变形
+        resizeRendererToDisplaySize();
+
+        if (isPlaying && thetaDeg < 90) {
+            thetaDeg += animationSpeed;
+            if (thetaDeg > 90) thetaDeg = 90;
+            document.getElementById('progress-slider').value = thetaDeg;
+            updatePhysics(thetaDeg);
+        } else if (isPlaying && thetaDeg >= 90) {
+            isPlaying = false;
+        }
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // 自动尺寸修正函数
+    function resizeRendererToDisplaySize() {
+        const container = document.getElementById('canvas-container');
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        const canvas = renderer.domElement;
+        
+        if (canvas.width !== width || canvas.height !== height) {
+            renderer.setSize(width, height, false); 
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+        }
+    }
+
+    function animStart() { if(thetaDeg>=90) thetaDeg=0; isPlaying = true; }
+    function animPause() { isPlaying = false; }
+    function animReset() { isPlaying = false; thetaDeg = 0; document.getElementById('progress-slider').value = 0; updatePhysics(0); }
+    function manualProgress(val) { isPlaying = false; thetaDeg = parseFloat(val); updatePhysics(thetaDeg); }
+    function updateAlpha(val) { alphaDeg = parseFloat(val); document.getElementById('alpha-val').innerText = alphaDeg; updateForceCircleGeometry(); animReset(); }
+
+    function createPointLabel(message, colorStr = "#333", fontSize = 40) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = 128; canvas.height = 64;
+        ctx.font = `Bold ${fontSize}px Arial`;
+        ctx.fillStyle = colorStr;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(message, 64, 32);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent:true, depthTest: false }));
+        sprite.scale.set(0.6, 0.3, 1);
+        sprite.renderOrder = 999;
+        return sprite;
+    }
+</script>
+</body>
+</html>

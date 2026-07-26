@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>切线与割线动态演示</title>
+    <style>
+        * { box-sizing: border-box; }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #f8f9fa;
+        }
+
+        /* 左右平铺布局 */
+        .main-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* 左侧演示区 */
+        #canvas-container {
+            flex: 1;
+            background-color: #ffffff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            border-right: 2px solid #e0e0e0;
+        }
+
+        canvas {
+            cursor: crosshair;
+        }
+
+        /* 右侧文字区 */
+        .info-panel {
+            width: 350px;
+            padding: 40px 30px;
+            background-color: #fdfdfd;
+            overflow-y: auto;
+        }
+
+        h2 { color: #2c3e50; border-bottom: 2px solid #2ecc71; padding-bottom: 10px; }
+        
+        .legend-item {
+            margin: 15px 0;
+            display: flex;
+            align-items: center;
+            font-weight: bold;
+        }
+        .color-box {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+            border-radius: 3px;
+        }
+
+        .instruction {
+            background: #eef2f7;
+            padding: 15px;
+            border-radius: 8px;
+            line-height: 1.6;
+            color: #444;
+        }
+
+        .math-concept {
+            margin-top: 30px;
+            font-size: 0.95em;
+            color: #666;
+        }
+
+        b { color: #333; }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div id="canvas-container">
+        <canvas id="demoCanvas"></canvas>
+    </div>
+
+    <div class="info-panel">
+        <h2>动态演示说明</h2>
+        
+        <div class="legend-item">
+            <div class="color-box" style="background: #e74c3c;"></div>
+            <span style="color: #e74c3c;">红色直线：割线 (Secant)</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: #2ecc71;"></div>
+            <span style="color: #2ecc71;">绿色直线：切线 (Tangent)</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: #3498db;"></div>
+            <span style="color: #3498db;">蓝色圆点：P / Q 点 (可拖拽)</span>
+        </div>
+
+        <div class="instruction">
+            <strong>交互操作：</strong><br>
+            1. 用鼠标点击并拖动圆周上的 <b>P点</b> 或 <b>Q点</b>。<br>
+            2. 观察红色割线的斜率变化。<br>
+            3. 当 <b>Q点</b> 靠近 <b>P点</b> 时，红色线会趋向于覆盖绿色线。
+        </div>
+
+        <div class="math-concept">
+            <strong>核心原理：</strong><br>
+            割线是连接曲线上任意两点 P、Q 的直线。当点 Q 沿着曲线无限向点 P 靠近时，这两点之间的距离趋近于零。在这个过程中，割线的极限位置就是点 P 处的切线。
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('demoCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+
+    let centerX, centerY, radius;
+    let angleP = Math.PI * 1.2; 
+    let angleQ = Math.PI * 1.5;
+    let isDraggingP = false;
+    let isDraggingQ = false;
+
+    // 自适应窗口大小
+    function resize() {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        centerX = canvas.width / 2;
+        centerY = canvas.height / 2;
+        radius = Math.min(canvas.width, canvas.height) * 0.35;
+        draw();
+    }
+
+    function getPosFromAngle(angle) {
+        return {
+            x: centerX + radius * Math.cos(angle),
+            y: centerY + radius * Math.sin(angle)
+        };
+    }
+
+    // 绘制无限延伸的直线
+    function drawInfiniteLine(p1, p2, color, lineWidth = 2) {
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const len = Math.sqrt(dx*dx + dy*dy);
+        if (len < 0.01) return; // 避免重合时除以0
+
+        const ux = dx / len;
+        const uy = dy / len;
+
+        ctx.beginPath();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.moveTo(p1.x - ux * 1000, p1.y - uy * 1000);
+        ctx.lineTo(p1.x + ux * 1000, p1.y + uy * 1000);
+        ctx.stroke();
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. 画辅助圆
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = '#dfe6e9';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        const p = getPosFromAngle(angleP);
+        const q = getPosFromAngle(angleQ);
+
+        // 2. 绘制切线 (在P点，方向垂直于半径)
+        const tangentAngle = angleP + Math.PI / 2;
+        const t2 = { 
+            x: p.x + Math.cos(tangentAngle), 
+            y: p.y + Math.sin(tangentAngle) 
+        };
+        drawInfiniteLine(p, t2, '#2ecc71', 3);
+
+        // 3. 绘制割线 (PQ)
+        const dist = Math.hypot(p.x - q.x, p.y - q.y);
+        if (dist > 1) {
+            drawInfiniteLine(p, q, '#e74c3c', 2);
+        }
+
+        // 4. 绘制控制点
+        const points = [{pos: p, label: 'P'}, {pos: q, label: 'Q'}];
+        points.forEach(item => {
+            ctx.beginPath();
+            ctx.arc(item.pos.x, item.pos.y, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#3498db';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(0,0,0,0.2)';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#2c3e50';
+            ctx.font = 'bold 18px Arial';
+            ctx.fillText(item.label, item.pos.x + 15, item.pos.y - 15);
+        });
+    }
+
+    // 鼠标交互逻辑
+    canvas.onmousedown = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const p = getPosFromAngle(angleP);
+        const q = getPosFromAngle(angleQ);
+
+        if (Math.hypot(mouseX - p.x, mouseY - p.y) < 20) isDraggingP = true;
+        else if (Math.hypot(mouseX - q.x, mouseY - q.y) < 20) isDraggingQ = true;
+    };
+
+    window.onmousemove = (e) => {
+        if (!isDraggingP && !isDraggingQ) return;
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const newAngle = Math.atan2(mouseY - centerY, mouseX - centerX);
+        if (isDraggingP) angleP = newAngle;
+        if (isDraggingQ) angleQ = newAngle;
+        draw();
+    };
+
+    window.onmouseup = () => { isDraggingP = false; isDraggingQ = false; };
+
+    window.addEventListener('resize', resize);
+    resize();
+</script>
+
+</body>
+</html>

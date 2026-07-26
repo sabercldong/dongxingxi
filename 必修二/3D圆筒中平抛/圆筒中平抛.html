@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>圆筒内壁平抛（贴壁滑行）</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        
+        /* 布局 */
+        #container { width: 100vw; height: 100vh; display: block; }
+
+        /* 调试/错误提示 */
+        #debug-console {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.85); color: #ff5555; padding: 40px;
+            z-index: 9999; display: none; box-sizing: border-box; font-size: 16px;
+        }
+
+        /* 右侧功能区 */
+        #ui-panel {
+            position: absolute; top: 0; right: 0; width: 280px; height: 100%;
+            background: rgba(30, 30, 30, 0.95); border-left: 1px solid #555;
+            color: #eee; padding: 20px; box-sizing: border-box;
+            display: flex; flex-direction: column; gap: 15px; overflow-y: auto;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+        }
+
+        /* 图表容器 */
+        #chart-wrapper {
+            position: absolute; top: 20px; left: 20px; width: 380px; height: 240px;
+            background: rgba(240, 240, 240, 0.95); border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+            display: flex; flex-direction: column; overflow: hidden;
+        }
+        #chart-header {
+            height: 28px; background: #ddd; cursor: move; text-align: center;
+            font-size: 13px; color: #555; line-height: 28px; border-bottom: 1px solid #ccc;
+            user-select: none;
+        }
+        #chart-content { flex: 1; position: relative; padding: 5px; }
+
+        /* 控件样式 */
+        h3 { margin: 0 0 15px 0; color: #4db8ff; border-bottom: 2px solid #555; padding-bottom: 8px; }
+        .control-group { margin-bottom: 12px; font-size: 14px; }
+        .control-header { display: flex; justify-content: space-between; margin-bottom: 5px; color: #aaa; }
+        .val-display { color: #fff; font-weight: bold; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #4db8ff; }
+        
+        .btn-row { display: flex; gap: 10px; margin-top: 10px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px;
+            cursor: pointer; font-weight: bold; transition: opacity 0.2s;
+            color: white;
+        }
+        button:hover { opacity: 0.9; }
+        button:disabled { background: #555 !important; cursor: not-allowed; opacity: 0.5; }
+        
+        .btn-start { background: #28a745; }
+        .btn-pause { background: #ffc107; color: #333; }
+        .btn-reset { background: #dc3545; }
+        .btn-chart { background: #17a2b8; width: 100%; margin-top: 5px; }
+
+        .tips { font-size: 12px; color: #888; margin-top: auto; line-height: 1.5; }
+    </style>
+</head>
+<body>
+
+    <div id="debug-console"></div>
+
+    <div id="container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">::: 按住此处拖动图表 :::</div>
+        <div id="chart-content">
+            <canvas id="myChart"></canvas>
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h3>圆筒螺旋运动 </h3>
+        
+        <div class="control-group">
+            <div class="control-header">
+                <span>初始高度 (H)</span>
+                <span id="disp-h" class="val-display">15.0 m</span>
+            </div>
+            <input type="range" id="rng-h" min="1" max="18" step="0.5" value="15">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span>切向初速度 (V0)</span>
+                <span id="disp-v" class="val-display">10.0 m/s</span>
+            </div>
+            <input type="range" id="rng-v" min="1" max="25" step="0.5" value="10">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span>重力加速度 (g)</span>
+                <span id="disp-g" class="val-display">9.8 m/s²</span>
+            </div>
+            <input type="range" id="rng-g" min="1" max="20" step="0.1" value="9.8">
+        </div>
+
+        <div class="btn-row">
+            <button class="btn-start" id="btn-start">开始</button>
+            <button class="btn-pause" id="btn-pause" disabled>暂停</button>
+            <button class="btn-reset" id="btn-reset">还原</button>
+        </div>
+
+        <button class="btn-chart" id="btn-toggle">显示/隐藏图表</button>
+
+        <div class="tips">
+            <p><strong>特性说明：</strong><br>1. 碰到地面直接停止（无反弹）。<br>2. 碰到墙壁紧贴滑行（无弹射）。</p>
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+
+    <script>
+        // === 错误处理工具 ===
+        function logError(msg) {
+            const el = document.getElementById('debug-console');
+            el.style.display = 'block';
+            el.innerHTML += `<p>❌ ${msg}</p>`;
+            console.error(msg);
+        }
+
+        // === 初始化检查 ===
+        window.onload = function() {
+            if (typeof THREE === 'undefined') return logError("找不到 three.min.js，请确认文件存在。");
+            
+            let ControlsCtor = THREE.OrbitControls || window.OrbitControls;
+            if (!ControlsCtor) logError("警告：找不到 OrbitControls，无法控制视角。");
+
+            if (typeof Chart === 'undefined') logError("警告：找不到 chart.min.js，图表无法显示。");
+
+            try {
+                init(ControlsCtor);
+            } catch (e) {
+                logError("初始化错误: " + e.message);
+            }
+        };
+
+        // === 全局变量 ===
+        let scene, camera, renderer, controls;
+        let ball, cylinder, line;
+        let chart;
+        let isRunning = false;
+        
+        // 物理参数
+        const ballRadius = 0.4;
+        let params = { 
+            h: 15,    // 高度
+            v: 10,    // 切向速度
+            g: 9.8,   // 重力
+            r: 8      // 圆筒半径
+        };
+        
+        // 运动状态
+        let state = { x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, t: 0 };
+        let points = []; 
+
+        function init(ControlsCtor) {
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+            
+            scene.add(new THREE.GridHelper(50, 50, 0x333333, 0x222222));
+            scene.add(new THREE.AxesHelper(2));
+
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, (window.innerWidth - 280) / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 25, 35);
+            camera.lookAt(0, 8, 0);
+
+            // 3. 渲染
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth - 280, window.innerHeight);
+            document.getElementById('container').appendChild(renderer.domElement);
+
+            // 4. 控制
+            if (ControlsCtor) {
+                controls = new ControlsCtor(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.target.set(0, 8, 0);
+            }
+
+            // 5. 灯光
+            const dl = new THREE.DirectionalLight(0xffffff, 1);
+            dl.position.set(10, 30, 10);
+            scene.add(dl);
+            scene.add(new THREE.AmbientLight(0x444444));
+
+            // 6. 物体
+            createObjects();
+            
+            // 7. UI与图表
+            setupUI();
+            if (typeof Chart !== 'undefined') setupChart();
+            setupDraggable();
+
+            animate();
+        }
+
+        function createObjects() {
+            // 圆筒
+            const geoCyl = new THREE.CylinderGeometry(params.r, params.r, 22, 64, 1, true);
+            const matCyl = new THREE.MeshPhongMaterial({ 
+                color: 0x00aaff, opacity: 0.15, transparent: true, 
+                side: THREE.DoubleSide, depthWrite: false 
+            });
+            cylinder = new THREE.Mesh(geoCyl, matCyl);
+            cylinder.position.y = 11; 
+            scene.add(cylinder);
+
+            // 装饰环
+            const geoRing = new THREE.TorusGeometry(params.r, 0.05, 16, 100);
+            const matRing = new THREE.MeshBasicMaterial({ color: 0x00aaff, opacity: 0.5, transparent: true });
+            const ringTop = new THREE.Mesh(geoRing, matRing);
+            ringTop.rotation.x = Math.PI / 2;
+            ringTop.position.y = 22;
+            scene.add(ringTop);
+            
+            const ringBot = ringTop.clone();
+            ringBot.position.y = 0;
+            scene.add(ringBot);
+
+            // 小球
+            const geoBall = new THREE.SphereGeometry(ballRadius, 32, 32);
+            const matBall = new THREE.MeshPhongMaterial({ color: 0xff3333, shininess: 100 });
+            ball = new THREE.Mesh(geoBall, matBall);
+            scene.add(ball);
+
+            // 轨迹线
+            const geoLine = new THREE.BufferGeometry();
+            const maxPoints = 5000;
+            const positions = new Float32Array(maxPoints * 3);
+            geoLine.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            geoLine.setDrawRange(0, 0);
+            line = new THREE.Line(geoLine, new THREE.LineBasicMaterial({ color: 0xffff00, linewidth: 2 }));
+            scene.add(line);
+
+            resetBall();
+        }
+
+        function resetBall() {
+            // 初始位置：贴着内壁
+            state.x = params.r - ballRadius - 0.01; 
+            state.y = params.h;
+            state.z = 0;
+
+            // 初始速度：完全沿切线 (z方向)
+            state.vx = 0;
+            state.vy = 0;
+            state.vz = params.v; 
+            
+            state.t = 0;
+
+            ball.position.set(state.x, state.y, state.z);
+            
+            points = [];
+            line.geometry.setDrawRange(0, 0);
+
+            if (chart) {
+                chart.data.labels = [];
+                chart.data.datasets[0].data = [];
+                chart.update();
+            }
+        }
+
+        // === 物理引擎 (修改版：无反弹) ===
+        function updatePhysics(dt) {
+            // 1. 重力
+            state.vy -= params.g * dt;
+
+            // 2. 预计算位置
+            let nx = state.x + state.vx * dt;
+            let ny = state.y + state.vy * dt;
+            let nz = state.z + state.vz * dt;
+
+            // 3. 地面碰撞 (改动：完全不反弹)
+            if (ny <= ballRadius) {
+                ny = ballRadius;
+                // 速度直接清零
+                state.vx = 0;
+                state.vy = 0;
+                state.vz = 0;
+                // 停止模拟
+                isRunning = false;
+                toggleBtn(false);
+            }
+
+            // 4. 墙壁碰撞 (改动：贴壁滑行，无弹性)
+            const distSq = nx*nx + nz*nz;
+            const maxR = params.r - ballRadius;
+            
+            if (distSq >= maxR * maxR) {
+                const angle = Math.atan2(nz, nx);
+                
+                // 位置修正：拉回圆周
+                nx = Math.cos(angle) * maxR;
+                nz = Math.sin(angle) * maxR;
+
+                // 速度修正：投影到切平面 (Projection)
+                // 这意味着去掉垂直于墙壁的速度分量，而不是反转它
+                const nx_n = nx / maxR; // 法向量 X
+                const nz_n = nz / maxR; // 法向量 Z
+                
+                // 计算速度在法线上的分量
+                const v_dot_n = state.vx * nx_n + state.vz * nz_n;
+
+                // 如果速度指向外壁 (v_dot_n > 0)，则抹去该分量
+                if (v_dot_n > 0) {
+                    // V_new = V - (V · N) * N
+                    // 这样只保留切向速度，模拟完美的“贴壁滑行”
+                    state.vx -= v_dot_n * nx_n;
+                    state.vz -= v_dot_n * nz_n;
+                }
+            }
+
+            // 更新状态
+            state.x = nx; state.y = ny; state.z = nz;
+            state.t += dt;
+            ball.position.set(state.x, state.y, state.z);
+            
+            // 自转视效
+            ball.rotation.x += state.vz * dt;
+            ball.rotation.z -= state.vx * dt;
+
+            // 轨迹记录
+            if (frameCount % 2 === 0) {
+                points.push(state.x, state.y, state.z);
+                const arr = line.geometry.attributes.position.array;
+                const idx = (points.length / 3 - 1) * 3;
+                if (idx < arr.length) {
+                    arr[idx] = state.x;
+                    arr[idx+1] = state.y;
+                    arr[idx+2] = state.z;
+                    line.geometry.setDrawRange(0, points.length / 3);
+                    line.geometry.attributes.position.needsUpdate = true;
+                }
+            }
+
+            // 图表更新
+            if (chart && frameCount % 10 === 0) {
+                addDataToChart(state.t.toFixed(1), state.y.toFixed(2));
+            }
+        }
+
+        let frameCount = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+            if (isRunning) {
+                updatePhysics(0.016); 
+                frameCount++;
+            }
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // === UI ===
+        function setupUI() {
+            const $ = (id) => document.getElementById(id);
+
+            $('rng-h').oninput = function() { $('disp-h').innerText = parseFloat(this.value).toFixed(1) + ' m'; params.h = parseFloat(this.value); if(!isRunning) resetBall(); };
+            $('rng-v').oninput = function() { $('disp-v').innerText = parseFloat(this.value).toFixed(1) + ' m/s'; params.v = parseFloat(this.value); if(!isRunning) resetBall(); };
+            $('rng-g').oninput = function() { $('disp-g').innerText = parseFloat(this.value).toFixed(1) + ' m/s²'; params.g = parseFloat(this.value); };
+
+            $('btn-start').onclick = () => { isRunning = true; toggleBtn(true); };
+            $('btn-pause').onclick = () => { isRunning = false; toggleBtn(false); };
+            $('btn-reset').onclick = () => { isRunning = false; toggleBtn(false); resetBall(); };
+            $('btn-toggle').onclick = () => {
+                const w = $('chart-wrapper');
+                w.style.display = w.style.display === 'none' ? 'flex' : 'none';
+            };
+
+            window.onresize = () => {
+                camera.aspect = (window.innerWidth - 280) / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth - 280, window.innerHeight);
+            };
+        }
+
+        function toggleBtn(running) {
+            document.getElementById('btn-start').disabled = running;
+            document.getElementById('btn-pause').disabled = !running;
+        }
+
+        // === Chart ===
+        function setupChart() {
+            const ctx = document.getElementById('myChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '小球高度 (Y)',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.1,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: {
+                        x: { display: true, title: {display: true, text: '时间 (s)'} },
+                        y: { display: true, min: 0, max: 20, title: {display: true, text: '高度 (m)'} }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function addDataToChart(label, data) {
+            if (chart.data.labels.length > 60) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+            chart.data.labels.push(label);
+            chart.data.datasets[0].data.push(data);
+            chart.update();
+        }
+
+        // === Drag ===
+        function setupDraggable() {
+            const el = document.getElementById('chart-wrapper');
+            const handle = document.getElementById('chart-header');
+            let pos1=0, pos2=0, pos3=0, pos4=0;
+
+            handle.onmousedown = function(e) {
+                e.preventDefault();
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                document.onmouseup = closeDrag;
+                document.onmousemove = elementDrag;
+            };
+
+            function elementDrag(e) {
+                e.preventDefault();
+                pos1 = pos3 - e.clientX;
+                pos2 = pos4 - e.clientY;
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                el.style.top = (el.offsetTop - pos2) + "px";
+                el.style.left = (el.offsetLeft - pos1) + "px";
+            }
+
+            function closeDrag() {
+                document.onmouseup = null;
+                document.onmousemove = null;
+            }
+        }
+    </script>
+</body>
+</html>

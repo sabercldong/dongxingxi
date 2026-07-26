@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>地磁场物理演示 (终极修正版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; background-color: #000; color: #fff; }
+        
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%); }
+        
+        #controls { 
+            width: 300px; 
+            background: rgba(20, 20, 20, 0.95); 
+            border-left: 1px solid #444; 
+            padding: 20px; 
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        h2, h3 { margin: 0 0 10px 0; color: #4db8ff; border-bottom: 1px solid #333; padding-bottom: 5px; }
+        
+        button {
+            background: #333; color: #fff; border: 1px solid #555; padding: 12px; cursor: pointer;
+            border-radius: 4px; transition: all 0.2s; width: 100%; text-align: left; margin-bottom: 8px; font-size: 14px;
+        }
+        button:hover { background: #444; border-color: #4db8ff; color: #4db8ff; }
+        button:active { background: #222; }
+        
+        .control-group { background: #252525; padding: 15px; border-radius: 6px; }
+        .btn-row { display: flex; gap: 5px; }
+        .btn-row button { text-align: center; }
+
+        #legend {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #444;
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none;
+            font-size: 13px;
+            line-height: 1.8;
+            max-width: 350px;
+        }
+        .color-box { display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: middle; }
+
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #4db8ff; font-size: 18px; pointer-events: none; }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <div id="loading">正在加载资源...</div>
+        
+        <div id="legend">
+            <h3 style="margin-top:0; border:none; font-size:16px;">物理图示说明</h3>
+            <div><span class="color-box" style="background:#ff3333;"></span><b>红色曲线 & 锥体</b>: 空间磁感线</div>
+            <div style="padding-left: 20px; color:#aaa; font-size:12px;">流向：地理南极(出) → 空间 → 地理北极(入)</div>
+            <br>
+            <div><span class="color-box" style="background:#ffff00;"></span><b>黄色箭头</b>: 地面磁场方向</div>
+            <ul style="margin: 5px 0 0 0; padding-left: 20px; color:#ddd;">
+                <li><b>赤道:</b> 平行 (水平)</li>
+                <li><b>北半球:</b> 扎入地面 (向下)</li>
+                <li><b>南半球:</b> 指向天空 (向上)</li>
+            </ul>
+        </div>
+    </div>
+
+    <div id="controls">
+        <h2>控制面板</h2>
+        
+        <div class="control-group">
+            <h3>播放控制</h3>
+            <div class="btn-row">
+                <button onclick="toggleAnimation(false)">⏸ 暂停</button>
+                <button onclick="toggleAnimation(true)">▶ 继续</button>
+                <button onclick="resetScene()">↺ 复位</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>视角演示 (点击切换)</h3>
+            <button onclick="moveCameraTo('equator')">👁 赤道视角 (水平磁场)</button>
+            <button onclick="moveCameraTo('north')">👁 北半球视角 (向下倾斜)</button>
+            <button onclick="moveCameraTo('south')">👁 南半球视角 (向上倾斜)</button>
+        </div>
+        
+        <div class="control-group">
+            <h3>状态</h3>
+            <div id="view-status" style="color: #ccc; font-size: 13px;">自由视角</div>
+        </div>
+    </div>
+
+<script>
+    let scene, camera, renderer, controls;
+    let earthGroup, magneticGroup;
+    let isAnimating = true;
+    let animationId;
+    
+    // 相机动画变量
+    let isCameraMoving = false;
+    let cameraTargetPos = new THREE.Vector3();
+    let cameraStartPos = new THREE.Vector3();
+    let transitionStartTime = 0;
+    const transitionDuration = 2000;
+
+    window.onload = function() {
+        document.getElementById('loading').style.display = 'none';
+        if (typeof THREE === 'undefined') {
+            alert("错误：未找到 three.min.js。");
+            return;
+        }
+        init();
+        animate();
+    };
+
+    function init() {
+        scene = new THREE.Scene();
+        
+        const container = document.getElementById('canvas-container');
+        camera = new THREE.PerspectiveCamera(40, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(35, 10, 35);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        if (typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+        else if (typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+        
+        if(controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 0.5;
+            controls.minDistance = 15;
+            controls.maxDistance = 100;
+        }
+
+        const ambientLight = new THREE.AmbientLight(0x666666);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        dirLight.position.set(50, 20, 30);
+        scene.add(dirLight);
+        const fillLight = new THREE.DirectionalLight(0x445577, 0.5);
+        fillLight.position.set(-50, 0, -30);
+        scene.add(fillLight);
+
+        earthGroup = new THREE.Group();
+        magneticGroup = new THREE.Group();
+        scene.add(earthGroup);
+        scene.add(magneticGroup);
+
+        createEarth();
+        createMagneticField(); 
+        
+        window.addEventListener('resize', onWindowResize, false);
+    }
+
+    function createEarth() {
+        // 地球半径设置为10
+        const geometry = new THREE.SphereGeometry(10, 64, 64);
+        const material = new THREE.MeshPhongMaterial({ 
+            color: 0x0f1e3d, 
+            emissive: 0x050a1a,
+            specular: 0x111111,
+            shininess: 10 
+        });
+        const earth = new THREE.Mesh(geometry, material);
+        earthGroup.add(earth);
+        
+        const wireGeo = new THREE.WireframeGeometry(geometry);
+        const wireMat = new THREE.LineBasicMaterial({ color: 0x4466aa, transparent: true, opacity: 0.1 });
+        const wireframe = new THREE.LineSegments(wireGeo, wireMat);
+        earthGroup.add(wireframe);
+
+        const axisGeo = new THREE.CylinderGeometry(0.08, 0.08, 26, 8);
+        const axisMat = new THREE.MeshBasicMaterial({ color: 0x88aaff });
+        const axis = new THREE.Mesh(axisGeo, axisMat);
+        earthGroup.add(axis);
+    }
+
+    function createMagneticField() {
+        // 1. 空间磁感线 (红色) - 带方向箭头
+        const numLines = 12; 
+        const layers = [1.3, 1.8, 2.5]; 
+
+        layers.forEach(scale => {
+            const L = 10 * scale; 
+            for (let i = 0; i < numLines; i++) {
+                const phi = (i / numLines) * Math.PI * 2;
+                const points = [];
+                
+                for (let theta = Math.PI - 0.1; theta > 0.1; theta -= 0.05) {
+                    const r = L * Math.pow(Math.sin(theta), 2);
+                    const x = r * Math.sin(theta) * Math.cos(phi);
+                    const z = r * Math.sin(theta) * Math.sin(phi);
+                    const y = r * Math.cos(theta);
+                    points.push(new THREE.Vector3(x, y, z));
+                }
+
+                const lineGeo = new THREE.BufferGeometry().setFromPoints(points);
+                const lineMat = new THREE.LineBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.6 });
+                const line = new THREE.Line(lineGeo, lineMat);
+                magneticGroup.add(line);
+
+                const arrowIndices = [Math.floor(points.length * 0.25), Math.floor(points.length * 0.5), Math.floor(points.length * 0.75)];
+                arrowIndices.forEach(idx => {
+                    if(idx < points.length - 1) {
+                        const p1 = points[idx];
+                        const p2 = points[idx+1];
+                        
+                        const dir = new THREE.Vector3().subVectors(p2, p1).normalize();
+                        const arrowGeo = new THREE.ConeGeometry(0.3, 0.8, 8);
+                        const arrowMat = new THREE.MeshBasicMaterial({ color: 0xff3333 });
+                        const cone = new THREE.Mesh(arrowGeo, arrowMat);
+                        cone.position.copy(p1);
+                        cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+                        magneticGroup.add(cone);
+                    }
+                });
+            }
+        });
+
+        // 2. 地面磁场箭头 (黄色) - 关键修复部分
+        const arrowColor = 0xffff00;
+        const arrowLen = 2.2;
+        const R = 10; // 地球半径
+        
+        for (let latDeg = -75; latDeg <= 75; latDeg += 15) {
+            const lonStep = Math.abs(latDeg) > 60 ? 45 : 30;
+            for (let lonDeg = 0; lonDeg < 360; lonDeg += lonStep) {
+                
+                const latRad = THREE.MathUtils.degToRad(latDeg);
+                const lonRad = THREE.MathUtils.degToRad(lonDeg);
+
+                // 计算表面位置
+                const x = R * Math.cos(latRad) * Math.cos(lonRad);
+                const z = R * Math.cos(latRad) * Math.sin(lonRad);
+                const y = R * Math.sin(latRad);
+                const surfacePos = new THREE.Vector3(x, y, z);
+
+                // 局部坐标
+                const up = surfacePos.clone().normalize();
+                const northRaw = new THREE.Vector3(0, 1, 0); 
+                const north = new THREE.Vector3().subVectors(northRaw, up.clone().multiplyScalar(up.dot(northRaw))).normalize();
+
+                // 磁倾角计算
+                const tanDip = 2 * Math.tan(latRad);
+                const dipRad = Math.atan(tanDip); 
+
+                // 向量合成 (北半球指向地下，南半球指向天空)
+                const dir = new THREE.Vector3()
+                    .addScaledVector(north, Math.cos(dipRad))
+                    .addScaledVector(up, -Math.sin(dipRad)) 
+                    .normalize();
+
+                // --- 修复逻辑 ---
+                let origin = surfacePos.clone();
+                
+                // 为了防止箭头被埋在土里，我们将所有箭头向外微调一点点
+                origin.add(up.clone().multiplyScalar(0.2));
+
+                // 关键点：对于北半球 (latDeg > 0)，箭头是指向地下的。
+                // 如果起点在表面，整个箭头就在球内部。
+                // 所以我们把起点沿着法线向外推一个箭头的长度。
+                // 这样看起来就像是箭头从空中射入地面。
+                if (latDeg > 0) {
+                    origin.add(up.clone().multiplyScalar(arrowLen));
+                }
+
+                const arrow = new THREE.ArrowHelper(dir, origin, arrowLen, arrowColor, 0.6, 0.4);
+                magneticGroup.add(arrow);
+            }
+        }
+    }
+
+    function toggleAnimation(play) {
+        if(!play) isCameraMoving = false;
+        isAnimating = play;
+        if (play && !animationId) animate();
+        if (controls) controls.autoRotate = play;
+        updateStatus(play ? "播放中 (自动旋转)" : "已暂停");
+    }
+
+    function resetScene() {
+        isCameraMoving = false;
+        controls.reset();
+        camera.position.set(35, 10, 35);
+        updateStatus("已复位");
+    }
+
+    function moveCameraTo(type) {
+        controls.autoRotate = false;
+        isAnimating = true;
+        cameraStartPos.copy(camera.position);
+        
+        switch(type) {
+            case 'equator':
+                cameraTargetPos.set(22, 0, 0);
+                updateStatus("赤道视角：观察黄色箭头水平平行于地面");
+                break;
+            case 'north':
+                // 离近一点，高一点，俯视
+                cameraTargetPos.set(0, 18, 5);
+                updateStatus("北半球视角：观察黄色箭头向下扎入地面");
+                break;
+            case 'south':
+                // 离近一点，低一点，仰视
+                cameraTargetPos.set(0, -18, 5);
+                updateStatus("南半球视角：观察黄色箭头向上指向天空");
+                break;
+        }
+
+        isCameraMoving = true;
+        transitionStartTime = performance.now();
+    }
+
+    function updateStatus(text) {
+        document.getElementById('view-status').textContent = text;
+    }
+
+    function animate() {
+        animationId = requestAnimationFrame(animate);
+
+        if (isCameraMoving) {
+            const now = performance.now();
+            let pct = (now - transitionStartTime) / transitionDuration;
+            if (pct >= 1) { pct = 1; isCameraMoving = false; }
+            const ease = -(Math.cos(Math.PI * pct) - 1) / 2;
+            camera.position.lerpVectors(cameraStartPos, cameraTargetPos, ease);
+            camera.lookAt(0,0,0);
+        }
+
+        if (isAnimating || isCameraMoving) {
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+    }
+
+    function onWindowResize() {
+        camera.aspect = document.getElementById('canvas-container').clientWidth / document.getElementById('canvas-container').clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(document.getElementById('canvas-container').clientWidth, document.getElementById('canvas-container').clientHeight);
+    }
+</script>
+</body>
+</html>

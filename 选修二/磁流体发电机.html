@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>磁流体发电机 (MHD) 演示 - 增强版</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --sidebar-color: #16213e;
+            --accent-color: #0f3460;
+            --text-color: #e94560;
+            --text-main: #fff;
+            --pos-color: #ff4757;
+            --neg-color: #1e90ff;
+            --btn-start: #2ecc71;
+            --btn-pause: #f1c40f;
+            --btn-reset: #e74c3c;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* --- 左侧：演示区域 --- */
+        .simulation-area {
+            flex: 1;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #121220;
+            position: relative;
+            padding-right: 80px; 
+            box-sizing: border-box;
+        }
+
+        .canvas-wrapper {
+            position: relative;
+            max-width: 100%;
+        }
+
+        canvas {
+            background: #000;
+            border: 3px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            display: block;
+        }
+
+        /* --- 右侧：功能控制区 --- */
+        .sidebar {
+            width: 340px;
+            min-width: 300px;
+            height: 100%;
+            background-color: var(--sidebar-color);
+            padding: 25px;
+            box-sizing: border-box;
+            border-left: 1px solid #333;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto; 
+        }
+
+        h2 {
+            color: var(--text-color);
+            margin: 0 0 10px 0;
+            font-size: 1.5rem;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 15px;
+            text-align: center;
+        }
+
+        /* --- 按钮组样式 --- */
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            justify-content: space-between;
+        }
+
+        .btn {
+            flex: 1;
+            padding: 10px 0;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+            font-size: 14px;
+        }
+
+        .btn:active { transform: scale(0.95); }
+        .btn:hover { opacity: 0.9; }
+
+        .btn-start { background-color: var(--btn-start); color: #004400; }
+        .btn-pause { background-color: var(--btn-pause); color: #554400; }
+        .btn-reset { background-color: var(--btn-reset); }
+
+        /* --- 外部电路 --- */
+        .external-circuit {
+            position: absolute;
+            top: 50%;
+            right: -100px;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 80px;
+            pointer-events: none;
+        }
+
+        .wire {
+            width: 4px;
+            background-color: #c0392b;
+            position: absolute;
+            z-index: 1;
+        }
+        
+        .wire.top { height: 110px; top: -100px; left: -4px; transform: skewX(30deg); }
+        .wire.bottom { height: 110px; bottom: -100px; left: -4px; transform: skewX(-30deg); }
+
+        .bulb-container {
+            position: relative;
+            width: 60px;
+            height: 80px;
+            z-index: 2;
+        }
+
+        .bulb {
+            width: 100%;
+            height: 100%;
+            background: #555;
+            border-radius: 50% 50% 40% 40% / 60% 60% 30% 30%;
+            position: relative;
+            transition: all 0.2s;
+            border: 2px solid #333;
+        }
+        
+        .bulb.glowing {
+            background: #ffeb3b;
+            box-shadow: 0 0 30px #ffeb3b, 0 0 60px #ffeb3b inset;
+            border-color: #ffeb3b;
+        }
+
+        .bulb::after {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            left: 25%;
+            width: 50%;
+            height: 15px;
+            background: #333;
+            border-radius: 2px;
+            border-top: 2px solid #777;
+        }
+
+        /* --- 控件样式 --- */
+        .control-group {
+            background: var(--accent-color);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+
+        .control-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            font-weight: bold;
+            color: #ddd;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: var(--text-color);
+        }
+
+        .slider-labels {
+            font-size: 0.8em;
+            text-align: center;
+            margin-top: 8px;
+            opacity: 0.7;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .readout-panel {
+            background: rgba(0,0,0,0.3);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            margin-top: auto;
+        }
+
+        .readout-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 1.1em;
+        }
+
+        .val { font-weight: bold; color: #4cd137; }
+
+        .sidebar::-webkit-scrollbar { width: 8px; }
+        .sidebar::-webkit-scrollbar-track { background: #0f1525; }
+        .sidebar::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        .sidebar::-webkit-scrollbar-thumb:hover { background: #666; }
+
+    </style>
+</head>
+<body>
+
+    <div class="simulation-area">
+        <div class="canvas-wrapper">
+            <canvas id="mhdCanvas" width="600" height="300"></canvas>
+            
+            <div class="external-circuit">
+                <div class="wire top"></div>
+                <div class="bulb-container">
+                    <div id="bulb" class="bulb"></div>
+                </div>
+                <div class="wire bottom"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <h2>MHD 发电机原理</h2>
+
+        <div class="btn-group">
+            <button class="btn btn-start" onclick="toggleRun(true)">▶ 开始</button>
+            <button class="btn btn-pause" onclick="toggleRun(false)">⏸ 暂停</button>
+            <button class="btn btn-reset" onclick="resetSim()">↺ 复原</button>
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <label for="velocitySlider">流体速度 (v)</label>
+                <span id="vVal">50%</span>
+            </div>
+            <input type="range" id="velocitySlider" min="0" max="100" value="50">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <label for="bFieldSlider">磁场强度 (B)</label>
+                <span id="bVal">向里 60%</span>
+            </div>
+            <input type="range" id="bFieldSlider" min="0" max="100" value="80">
+            <div class="slider-labels">
+                <span>← 向外</span>
+                <span>零</span>
+                <span>向里 →</span>
+            </div>
+        </div>
+
+        <div class="readout-panel">
+            <div class="readout-item">
+                <span>感应电动势(ε):</span>
+                <span id="emfReading" class="val">0.0 V</span>
+            </div>
+        </div>
+        
+        <div style="height: 20px;"></div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('mhdCanvas');
+    const ctx = canvas.getContext('2d');
+    const bulb = document.getElementById('bulb');
+    const vSlider = document.getElementById('velocitySlider');
+    const bSlider = document.getElementById('bFieldSlider');
+    const vValDisplay = document.getElementById('vVal');
+    const bValDisplay = document.getElementById('bVal');
+    const emfDisplay = document.getElementById('emfReading');
+
+    // --- 参数 ---
+    const width = canvas.width;
+    const height = canvas.height;
+    const electrodeHeight = 30;
+    const channelTop = electrodeHeight;
+    const channelBottom = height - electrodeHeight;
+    const channelHeight = channelBottom - channelTop;
+
+    // --- 状态 ---
+    let flowVelocity = 0.5;
+    let magneticField = 0.6; 
+    let isRunning = true; // 运行状态控制
+    
+    let particles = [];
+    const maxParticles = 250;
+
+    class Particle {
+        constructor() {
+            this.reset();
+        }
+
+        reset() {
+            this.x = -20;
+            this.y = channelTop + Math.random() * channelHeight;
+            this.type = Math.random() > 0.5 ? 'pos' : 'neg';
+            this.charge = this.type === 'pos' ? 1 : -1;
+            this.radius = 3 + Math.random() * 2;
+            this.vx = 0;
+            this.vy = 0;
+            this.randomVy = (Math.random() - 0.5) * 2; 
+        }
+
+        update() {
+            if (!isRunning) return; // 暂停时不更新位置
+
+            this.vx = flowVelocity * 12; 
+            let lorentzForceY = this.charge * this.vx * magneticField * 0.8;
+            this.vy = (this.vy + lorentzForceY + this.randomVy * 0.1) * 0.92;
+
+            this.x += this.vx;
+            this.y += this.vy;
+
+            if (this.y < channelTop + this.radius || this.y > channelBottom - this.radius) {
+                this.reset(); 
+            }
+            if (this.x > width + 20) {
+                this.reset();
+            }
+        }
+
+        draw() {
+            ctx.beginPath();
+            ctx.fillStyle = this.type === 'pos' ? 'var(--pos-color)' : 'var(--neg-color)';
+            
+            if (flowVelocity > 0) {
+                ctx.shadowBlur = 5;
+                ctx.shadowColor = ctx.fillStyle;
+            } else {
+                ctx.shadowBlur = 0;
+            }
+            
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    // 初始化粒子
+    function initParticles() {
+        particles = [];
+        for (let i = 0; i < maxParticles; i++) {
+            let p = new Particle();
+            p.x = Math.random() * width;
+            particles.push(p);
+        }
+    }
+    initParticles();
+
+    function drawEnvironment() {
+        ctx.clearRect(0, 0, width, height);
+
+        let topPlateColor = '#444';
+        let bottomPlateColor = '#444';
+        
+        // 极板颜色逻辑
+        if (flowVelocity > 0.05 && Math.abs(magneticField) > 0.05) {
+            if (magneticField > 0) {
+                topPlateColor = 'var(--pos-color)';
+                bottomPlateColor = 'var(--neg-color)';
+            } else {
+                topPlateColor = 'var(--neg-color)';
+                bottomPlateColor = 'var(--pos-color)';
+            }
+        }
+       
+        // 上下极板
+        ctx.fillStyle = topPlateColor;
+        ctx.fillRect(0, 0, width, electrodeHeight);
+        ctx.strokeStyle = '#888'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, electrodeHeight); ctx.lineTo(width, electrodeHeight); ctx.stroke();
+
+        ctx.fillStyle = bottomPlateColor;
+        ctx.fillRect(0, height - electrodeHeight, width, electrodeHeight);
+        ctx.beginPath(); ctx.moveTo(0, height - electrodeHeight); ctx.lineTo(width, height - electrodeHeight); ctx.stroke();
+
+        // 磁场符号
+        ctx.font = '24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        let bSymbol = '';
+        // 只有绝对值足够大才显示符号，避免0点闪烁
+        if (Math.abs(magneticField) < 0.01) bSymbol = ''; 
+        else bSymbol = magneticField > 0 ? '×' : '•'; 
+
+        if (bSymbol) {
+            let density = 60;
+            let opacity = Math.min(Math.abs(magneticField) + 0.1, 0.6);
+            ctx.fillStyle = `rgba(255, 255, 255, ${opacity})`;
+            for (let x = 30; x < width; x += density) {
+                for (let y = channelTop + 30; y < channelBottom; y += density) {
+                    ctx.fillText(bSymbol, x, y);
+                }
+            }
+        }
+
+        // 流速箭头
+        if (flowVelocity > 0.1) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.lineWidth = 10;
+            let arrowY = height / 2;
+            
+            ctx.beginPath();
+            ctx.moveTo(50, arrowY);
+            ctx.lineTo(width - 80, arrowY);
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.moveTo(width - 80, arrowY - 15);
+            ctx.lineTo(width - 50, arrowY);
+            ctx.lineTo(width - 80, arrowY + 15);
+            ctx.fill();
+            
+            ctx.fillStyle = 'rgba(255,255,255,0.3)';
+            ctx.font = '14px sans-serif';
+            ctx.fillText("流速 v", 60, arrowY - 10);
+        }
+    }
+
+    function updateUI() {
+        let simulatedEMF = Math.abs(flowVelocity * magneticField * 12);
+        emfDisplay.textContent = simulatedEMF.toFixed(1) + " V";
+
+        if (simulatedEMF > 1.0) {
+            bulb.classList.add('glowing');
+            let opacity = Math.min(simulatedEMF / 10, 1.0); 
+            bulb.style.opacity = 0.4 + opacity * 0.6;
+        } else {
+            bulb.classList.remove('glowing');
+            bulb.style.opacity = 1.0;
+        }
+
+        // 更新文本显示
+        vValDisplay.textContent = Math.round(flowVelocity * 100) + "%";
+        
+        // --- 修正后的磁场文字逻辑 ---
+        let bText = "";
+        let bPercent = Math.abs(Math.round(magneticField * 100));
+
+        // 如果磁场为0 (绝对值极小)，强制显示纯净的“零”
+        if (Math.abs(magneticField) === 0) {
+            bText = "零";
+        } else {
+            // 否则显示方向 + 百分比
+            let direction = magneticField > 0 ? "向里" : "向外";
+            bText = `${direction} ${bPercent}%`;
+        }
+        bValDisplay.textContent = bText;
+    }
+
+    // --- 控制逻辑 ---
+    function toggleRun(state) {
+        isRunning = state;
+    }
+
+    function resetSim() {
+        // 重置滑块
+        vSlider.value = 50;
+        flowVelocity = 0.5;
+        
+        bSlider.value = 80;
+        magneticField = 0.6; // 初始设为向里
+        
+        initParticles(); // 重置粒子
+        isRunning = true; // 默认由于重置了，应该可以运行
+        updateUI();
+    }
+
+    function animate() {
+        drawEnvironment(); // 即使暂停也绘制背景（这样调节滑块能看到磁场符号变化）
+
+        for (let p of particles) {
+            p.update(); // 只有 isRunning=true 时位置才会变
+            p.draw();
+        }
+        
+        updateUI();
+        requestAnimationFrame(animate);
+    }
+
+    vSlider.addEventListener('input', (e) => {
+        flowVelocity = parseInt(e.target.value) / 100;
+    });
+
+    bSlider.addEventListener('input', (e) => {
+        let val = parseInt(e.target.value);
+        
+        // --- 关键修正：添加吸附“死区” ---
+        // 如果滑块在 45 到 55 之间，强制磁场为 0
+        // 这样用户很容易就能把磁场关掉，而不是调出 "Zero 3%"
+        if (val > 45 && val < 55) {
+            magneticField = 0;
+        } else {
+            // 正常计算
+            magneticField = (val - 50) / 50; 
+        }
+    });
+
+    // 启动
+    updateUI(); // 初始刷新一次UI文字
+    animate();
+
+</script>
+</body>
+</html>

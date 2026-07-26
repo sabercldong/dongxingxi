@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>安培分子电流假说 3D演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: 'Segoe UI', sans-serif; }
+        
+        /* 主布局容器 */
+        #main-container {
+            display: flex;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* 左侧 3D 画布 */
+        #canvas-container {
+            flex: 1; /* 占据剩余空间 */
+            position: relative;
+            background: radial-gradient(circle at center, #2b2b2b, #000);
+            overflow: hidden;
+        }
+
+        /* 右侧功能区 */
+        #sidebar {
+            width: 300px;
+            background: rgba(40, 40, 40, 0.95);
+            border-left: 1px solid #555;
+            padding: 20px;
+            color: #eee;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto; /* 内容过多时显示滚轮 */
+        }
+
+        /* UI 控件样式 */
+        h2 { color: #4fc3f7; margin-top: 0; border-bottom: 2px solid #4fc3f7; padding-bottom: 10px; }
+        .control-group { background: #333; padding: 15px; border-radius: 8px; border: 1px solid #444; }
+        label { display: block; margin-bottom: 8px; font-size: 14px; color: #ccc; }
+        
+        /* 滑块样式 */
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        /* 按钮样式 */
+        .btn-row { display: flex; gap: 10px; margin-top: 10px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .btn-primary { background: #4fc3f7; color: #000; }
+        .btn-primary:hover { background: #29b6f6; }
+        .btn-danger { background: #e57373; color: white; }
+        .btn-danger:hover { background: #ef5350; }
+        .btn-secondary { background: #666; color: white; }
+        .btn-secondary:hover { background: #777; }
+
+        .info-text { font-size: 13px; line-height: 1.6; color: #aaa; margin-top: 10px; }
+        
+        /* 加载提示 */
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; pointer-events: none; }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    </head>
+<body>
+
+<div id="main-container">
+    <div id="canvas-container">
+        <div id="loading">资源加载中...</div>
+    </div>
+    
+    <div id="sidebar">
+        <h2>安培分子电流假说</h2>
+        
+        <div class="control-group">
+            <label>演示控制</label>
+            <div class="btn-row">
+                <button id="btn-pause" class="btn-secondary">暂停</button>
+                <button id="btn-play" class="btn-primary" style="display:none;">开始</button>
+            </div>
+            <div class="btn-row">
+                <button id="btn-reset" class="btn-danger">还原 / 重置</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>磁化程度 (排列有序度)</label>
+            <input type="range" id="magnet-slider" min="0" max="1" step="0.01" value="0">
+            <div style="display:flex; justify-content:space-between; font-size:12px; margin-top:5px; color:#888;">
+                <span>无磁性(杂乱)</span>
+                <span>强磁性(有序)</span>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>原理说明</label>
+            <div class="info-text">
+                <p>1. 物质内部存在着环形电流——<strong>分子电流</strong>。</p>
+                <p>2. <strong>未磁化时</strong>：分子电流取向杂乱无章，产生的磁场相互抵消，对外不显磁性。</p>
+                <p>3. <strong>磁化时</strong>：在外磁场作用下，分子电流取向变得大致相同，两端显示出较强的磁作用。</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 1. 初始化场景 (Scene Setup) ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    
+    // 相机
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(20, 15, 20);
+
+    // 渲染器
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    // 控制器
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    // 灯光
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
+
+    // --- 2. 创建模型 (Model Creation) ---
+    
+    const molecules = []; // 存储所有的分子对象
+    const moleculeCount = 150; // 分子数量
+    const cylinderRadius = 4;
+    const cylinderHeight = 12;
+
+    // 材质
+    const ringMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.6 });
+    const electronMaterial = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+    const arrowMaterial = new THREE.MeshBasicMaterial({ color: 0xff0055 }); // 分子磁矩箭头颜色
+
+    // 创建透明圆柱体（代表铁棒）
+    const barGeo = new THREE.CylinderGeometry(cylinderRadius + 0.5, cylinderRadius + 0.5, cylinderHeight + 1, 32);
+    const barMat = new THREE.MeshPhongMaterial({ color: 0x888888, transparent: true, opacity: 0.15, side: THREE.DoubleSide });
+    const barMesh = new THREE.Mesh(barGeo, barMat);
+    scene.add(barMesh);
+
+    // 创建单个分子电流的函数
+    function createMolecule() {
+        const group = new THREE.Group();
+
+        // 1. 环形电流 (Torus)
+        const ringGeo = new THREE.TorusGeometry(0.3, 0.02, 8, 24);
+        const ring = new THREE.Mesh(ringGeo, ringMaterial);
+        group.add(ring);
+
+        // 2. 电子 (小球)
+        const electronGeo = new THREE.SphereGeometry(0.06, 8, 8);
+        const electron = new THREE.Mesh(electronGeo, electronMaterial);
+        group.add(electron);
+
+        // 3. 磁矩方向指示 (小箭头，垂直于环面)
+        // 箭头指向环的法线方向 (Z轴)
+        const arrowHelper = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 0.8, 0xff0055, 0.2, 0.1);
+        group.add(arrowHelper);
+
+        // 随机位置 (在圆柱体内)
+        const theta = Math.random() * Math.PI * 2;
+        const r = Math.sqrt(Math.random()) * cylinderRadius; // 均匀分布
+        const x = r * Math.cos(theta);
+        const z = r * Math.sin(theta);
+        const y = (Math.random() - 0.5) * cylinderHeight;
+        
+        group.position.set(x, y, z);
+
+        // 初始化随机旋转
+        const randomEuler = new THREE.Euler(Math.random()*Math.PI*2, Math.random()*Math.PI*2, Math.random()*Math.PI*2);
+        const randomQuat = new THREE.Quaternion().setFromEuler(randomEuler);
+        group.quaternion.copy(randomQuat);
+
+        scene.add(group);
+
+        return {
+            mesh: group,
+            electron: electron,
+            arrow: arrowHelper,
+            baseQuat: randomQuat.clone(), // 记录原始随机朝向
+            angle: Math.random() * Math.PI * 2 // 电子初始角度
+        };
+    }
+
+    // 生成分子
+    for(let i=0; i<moleculeCount; i++) {
+        molecules.push(createMolecule());
+    }
+
+    document.getElementById('loading').style.display = 'none';
+
+    // --- 3. 逻辑与动画 (Logic & Animation) ---
+
+    let isPlaying = true;
+    let magnetizationLevel = 0; // 0 = 随机, 1 = 完全有序
+    const targetAxis = new THREE.Vector3(0, 1, 0); // 磁化后的目标朝向 (Y轴向上)
+    // 分子电流如果平放在 XZ 平面，法线是 Y 轴。我们的圆环默认是 XY 平面 (Threejs Torus)，法线是 Z。
+    // 所以如果我们要让法线指向上方(Y)，我们需要将 Z 转到 Y。
+    // 默认 Torus 法线是 (0,0,1)。
+    
+    // 目标四元数：让物体的 Z 轴(法线) 指向 世界的 Y 轴
+    const alignQuat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), new THREE.Vector3(0,1,0));
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (isPlaying) {
+            molecules.forEach(m => {
+                // 1. 电子绕环旋转动画
+                m.angle += 0.1; 
+                // 环半径 0.3
+                m.electron.position.x = 0.3 * Math.cos(m.angle);
+                m.electron.position.y = 0.3 * Math.sin(m.angle);
+                
+                // 2. 磁化取向插值计算
+                // 我们需要在 "原始随机四元数" 和 "完全对齐四元数" 之间根据 magnetizationLevel 进行插值
+                
+                // 使用 slerp (球面线性插值)
+                const currentTarget = m.baseQuat.clone().slerp(alignQuat, magnetizationLevel);
+                
+                // 稍微平滑地转向目标状态 (视觉效果更柔和)
+                m.mesh.quaternion.slerp(currentTarget, 0.1);
+            });
+        }
+
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // --- 4. UI 交互事件 (Event Listeners) ---
+
+    const btnPause = document.getElementById('btn-pause');
+    const btnPlay = document.getElementById('btn-play');
+    const btnReset = document.getElementById('btn-reset');
+    const slider = document.getElementById('magnet-slider');
+
+    // 播放/暂停
+    function togglePlay(state) {
+        isPlaying = state;
+        if(state) {
+            btnPlay.style.display = 'none';
+            btnPause.style.display = 'inline-block';
+        } else {
+            btnPlay.style.display = 'inline-block';
+            btnPause.style.display = 'none';
+        }
+    }
+
+    btnPause.addEventListener('click', () => togglePlay(false));
+    btnPlay.addEventListener('click', () => togglePlay(true));
+
+    // 滑块控制磁化程度
+    slider.addEventListener('input', (e) => {
+        magnetizationLevel = parseFloat(e.target.value);
+    });
+
+    // 还原按钮
+    btnReset.addEventListener('click', () => {
+        // 1. 滑块归零
+        magnetizationLevel = 0;
+        slider.value = 0;
+        
+        // 2. 重新随机化每个分子的“初始状态”，这样每次重置看起来都不一样
+        molecules.forEach(m => {
+            const randomEuler = new THREE.Euler(Math.random()*Math.PI*2, Math.random()*Math.PI*2, Math.random()*Math.PI*2);
+            m.baseQuat.setFromEuler(randomEuler);
+        });
+
+        // 3. 确保播放
+        togglePlay(true);
+    });
+
+    // 窗口大小自适应
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+</script>
+</body>
+</html>

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>晾衣架模型 (双角度显示版)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            height: 100vh;
+            background-color: #f0f2f5;
+            overflow: hidden;
+        }
+
+        #main-layout {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            background: #ffffff;
+            /* 网格背景 */
+            background-image: 
+                linear-gradient(#eee 1px, transparent 1px),
+                linear-gradient(90deg, #eee 1px, transparent 1px);
+            background-size: 20px 20px;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #sidebar {
+            width: 320px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.2);
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        h2 {
+            margin: 0 0 20px 0;
+            font-size: 1.2rem;
+            border-bottom: 3px solid #e67e22;
+            padding-bottom: 8px;
+            text-align: center;
+        }
+
+        .data-panel {
+            background: rgba(0,0,0,0.2);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            font-family: monospace;
+        }
+        .highlight { color: #f1c40f; font-weight: bold; }
+
+        .control-group {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            margin-bottom: 8px;
+        }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #e67e22; }
+
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: auto;
+        }
+        button {
+            border: none;
+            padding: 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            font-size: 0.9rem;
+            transition: 0.2s;
+        }
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn-demo { background: #3498db; grid-column: span 2; }
+        .btn-pause { background: #f39c12; }
+        .btn-reset { background: #95a5a6; }
+
+    </style>
+</head>
+<body>
+
+<div id="main-layout">
+    <div id="canvas-wrapper">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div id="sidebar">
+        <h2>物理参数面板</h2>
+        
+        <div class="data-panel">
+            <div class="data-row">
+                <span>左绳角度:</span>
+                <span id="disp-theta-l" class="highlight">--</span>
+            </div>
+            <div class="data-row">
+                <span>右绳角度:</span>
+                <span id="disp-theta-r" class="highlight">--</span>
+            </div>
+            <div class="data-row">
+                <span>绳子拉力:</span>
+                <span id="disp-tension" class="highlight">--</span>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>水平间距 d <span id="val-d"></span></label>
+            <input type="range" id="inp-d" min="100" max="600" value="400">
+        </div>
+
+        <div class="control-group">
+            <label>绳子总长 L <span id="val-l"></span></label>
+            <input type="range" id="inp-l" min="200" max="800" value="600">
+        </div>
+
+        <div class="control-group">
+            <label>右端高度 h <span id="val-h"></span></label>
+            <input type="range" id="inp-h" min="-200" max="200" value="50">
+        </div>
+
+        <div class="btn-grid">
+            <button class="btn-demo" onclick="startDemo(1)">▶ 演示：竖直移动</button>
+            <button class="btn-demo" onclick="startDemo(2)">▶ 演示：水平拉开</button>
+            <button class="btn-pause" onclick="togglePause()" id="btn-pause">⏸ 暂停</button>
+            <button class="btn-reset" onclick="resetSim()">⟲ 复位</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    const wrapper = document.getElementById('canvas-wrapper');
+
+    let state = {
+        d: 400,
+        L: 600,
+        h: 50,
+        mass: 10,
+        g: 10
+    };
+    
+    let animId = null;
+    let isPaused = false;
+    let demoType = 0; 
+    let time = 0;
+
+    const ui = {
+        d: document.getElementById('inp-d'),
+        l: document.getElementById('inp-l'),
+        h: document.getElementById('inp-h'),
+        valD: document.getElementById('val-d'),
+        valL: document.getElementById('val-l'),
+        valH: document.getElementById('val-h'),
+        // 修改处：分别获取两个角度的DOM元素
+        thetaL: document.getElementById('disp-theta-l'),
+        thetaR: document.getElementById('disp-theta-r'),
+        tension: document.getElementById('disp-tension'),
+        pauseBtn: document.getElementById('btn-pause')
+    };
+
+    function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = wrapper.getBoundingClientRect();
+        canvas.width = rect.width * dpr;
+        canvas.height = rect.height * dpr;
+        ctx.resetTransform();
+        ctx.scale(dpr, dpr);
+        draw();
+    }
+    window.addEventListener('resize', resize);
+
+    function bindInput(elem, key) {
+        elem.addEventListener('input', e => {
+            state[key] = parseFloat(e.target.value);
+            if(demoType !== 0) stopDemo(); 
+            draw();
+        });
+    }
+    bindInput(ui.d, 'd');
+    bindInput(ui.l, 'L');
+    bindInput(ui.h, 'h');
+
+    function draw() {
+        const w = wrapper.clientWidth;
+        const h = wrapper.clientHeight;
+        ctx.clearRect(0, 0, w, h);
+
+        ui.valD.textContent = Math.round(state.d);
+        ui.valL.textContent = Math.round(state.L);
+        ui.valH.textContent = Math.round(state.h);
+
+        const straightDist = Math.sqrt(state.d**2 + state.h**2);
+        if (state.L <= straightDist + 2) {
+            ctx.fillStyle = "#e74c3c";
+            ctx.font = "20px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("⚠️ 绳子太短", w/2, h/2);
+            return;
+        }
+
+        // 物理计算
+        let sinTheta = state.d / state.L;
+        if (sinTheta > 0.99) sinTheta = 0.99;
+        const theta = Math.asin(sinTheta);
+        const cosTheta = Math.cos(theta);
+
+        let l1 = (state.L + state.h / cosTheta) / 2;
+        
+        const centerX = w / 2;
+        const topY = 100;
+        
+        const leftX = centerX - state.d / 2;
+        const leftY = topY;
+        
+        const rightX = centerX + state.d / 2;
+        const rightY = topY + state.h;
+
+        const hookX = leftX + l1 * sinTheta;
+        const hookY = leftY + l1 * cosTheta;
+        
+        const T = (state.mass * state.g) / (2 * cosTheta);
+
+        // 1. 绘制参考线
+        ctx.strokeStyle = "#eee"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(0, topY); ctx.lineTo(w, topY); ctx.stroke();
+
+        // 2. 绘制杆子
+        ctx.fillStyle = "#7f8c8d";
+        ctx.fillRect(leftX - 6, 0, 6, h);
+        ctx.fillRect(rightX, 0, 6, h);
+
+        // 3. 辅助虚线
+        ctx.setLineDash([4, 6]);
+        ctx.strokeStyle = "#e0e0e0"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(hookX, hookY); ctx.lineTo(hookX, 0); ctx.stroke();
+        ctx.setLineDash([]); 
+
+        // 4. 绘制绳子
+        ctx.strokeStyle = "#e74c3c"; 
+        ctx.lineWidth = 4; 
+        ctx.lineCap = "round"; 
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(leftX, leftY);
+        ctx.lineTo(hookX, hookY);
+        ctx.lineTo(rightX, rightY);
+        ctx.stroke();
+
+        // 5. 绘制固定点
+        ctx.fillStyle = "#2c3e50";
+        ctx.beginPath(); ctx.arc(leftX, leftY, 5, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(rightX, rightY, 5, 0, Math.PI*2); ctx.fill();
+
+        // 6. 绘制重物
+        ctx.fillStyle = "#fff"; ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(hookX, hookY, 6, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+        
+        ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(hookX, hookY + 6); ctx.lineTo(hookX, hookY + 40); ctx.stroke();
+
+        ctx.fillStyle = "#3498db"; 
+        ctx.fillRect(hookX - 15, hookY + 40, 30, 30);
+        
+        ctx.fillStyle = "#fff"; ctx.font="bold 14px Arial"; ctx.textAlign="center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("m", hookX, hookY + 55);
+
+        // 更新侧边栏数据 - 左右角度
+        const angleStr = (theta * 180 / Math.PI).toFixed(1) + "°";
+        ui.thetaL.innerText = angleStr; // 更新左角度
+        ui.thetaR.innerText = angleStr; // 更新右角度
+        ui.tension.innerText = T.toFixed(1) + " N";
+    }
+
+    function loop() {
+        if (!isPaused && demoType !== 0) {
+            time += 0.03;
+            if (demoType === 1) { 
+                state.h = 150 * Math.sin(time);
+            } else if (demoType === 2) { 
+                state.d = 300 + 150 * Math.sin(time);
+                if(state.d > state.L - 50) state.d = state.L - 50;
+            }
+            draw();
+            animId = requestAnimationFrame(loop);
+        }
+    }
+
+    function startDemo(type) {
+        stopDemo();
+        state.L = 600; 
+        if (type === 1) state.d = 400; 
+        demoType = type;
+        isPaused = false;
+        ui.pauseBtn.innerText = "⏸ 暂停";
+        loop();
+    }
+
+    function stopDemo() {
+        demoType = 0;
+        cancelAnimationFrame(animId);
+    }
+
+    function togglePause() {
+        if (demoType === 0) return;
+        isPaused = !isPaused;
+        ui.pauseBtn.innerText = isPaused ? "▶ 继续" : "⏸ 暂停";
+        if (!isPaused) loop();
+    }
+
+    function resetSim() {
+        stopDemo();
+        state = { d: 400, L: 600, h: 50, mass: 10, g: 10 };
+        ui.d.value = 400; ui.l.value = 600; ui.h.value = 50;
+        draw();
+    }
+
+    resize();
+</script>
+</body>
+</html>

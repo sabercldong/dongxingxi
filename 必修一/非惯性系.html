@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>非惯性系：沉浸式车厢切换演示</title>
+    <style>
+        :root {
+            --bg-dark: #121212;
+            --panel-bg: #1e1e1e;
+            --text-main: #e0e0e0;
+            --accent: #00bcd4; /* 青色，更有科技感 */
+            --danger: #ff5252;
+            --btn-hover: #333;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            background-color: var(--bg-dark);
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            color: var(--text-main);
+            overflow: hidden;
+        }
+
+        /* 左侧画布区域 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background: #000;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 覆盖层：当前视角提示 */
+        #overlay-info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+        #view-title {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: white;
+            margin-bottom: 5px;
+            display: block;
+        }
+        #view-desc {
+            font-size: 0.9rem;
+            color: #ddd;
+            background: rgba(0,0,0,0.4);
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        /* 右侧控制区 */
+        #controls {
+            width: 340px;
+            min-width: 300px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            box-shadow: -5px 0 20px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+            height: 100vh;
+            overflow-y: auto;
+            box-sizing: border-box;
+            border-left: 1px solid #333;
+        }
+
+        /* 滚动条样式 */
+        #controls::-webkit-scrollbar { width: 6px; }
+        #controls::-webkit-scrollbar-track { background: #222; }
+        #controls::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+
+        h2 { margin: 0 0 10px 0; font-size: 1.2rem; color: var(--accent); border-bottom: 1px solid #444; padding-bottom: 10px; }
+        
+        .control-section {
+            background: #262626;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+
+        label { display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.9rem; }
+
+        /* 滑块 */
+        input[type=range] {
+            width: 100%;
+            height: 6px;
+            background: #444;
+            border-radius: 3px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 188, 212, 0.5);
+        }
+
+        .data-row {
+            display: flex;
+            justify-content: space-between;
+            font-family: monospace;
+            color: #aaa;
+            font-size: 0.9rem;
+            margin-top: 5px;
+        }
+        .highlight { color: var(--accent); font-weight: bold; }
+
+        /* 按钮 */
+        .btn-group { display: flex; gap: 8px; margin-top: 10px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: white;
+            font-size: 0.85rem;
+        }
+        .btn-acc { background: #37474f; border: 1px solid #546e7a; }
+        .btn-acc:hover { background: #455a64; }
+        .btn-stop { background: var(--danger); opacity: 0.8; }
+        .btn-stop:hover { opacity: 1; }
+
+        /* 视角切换卡片 */
+        .view-card {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 6px;
+            border: 2px solid transparent;
+            background: #333;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .view-card:hover { background: #424242; }
+        .view-card.active { 
+            border-color: var(--accent); 
+            background: rgba(0, 188, 212, 0.1); 
+        }
+        .view-icon { font-size: 1.5rem; margin-right: 12px; }
+        .view-text h4 { margin: 0; font-size: 0.95rem; }
+        .view-text p { margin: 3px 0 0 0; font-size: 0.75rem; color: #999; }
+
+        /* 图例 */
+        .legend-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 0.85rem; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    </style>
+</head>
+<body>
+
+<div id="canvas-container">
+    <canvas id="simCanvas"></canvas>
+    <div id="overlay-info">
+        <span id="view-title">地面参考系</span><br>
+        <span id="view-desc">观察者站在路边，看到车在移动</span>
+    </div>
+</div>
+
+<div id="controls">
+    <h2>沉浸式物理演示</h2>
+
+    <div class="control-section">
+        <label>选择观察者位置</label>
+        <div class="view-card active" onclick="setView('ground', this)">
+            <div class="view-icon">🌍</div>
+            <div class="view-text">
+                <h4>车外 (地面参考系)</h4>
+                <p>看到公交车驶过，吊环因惯性滞后</p>
+            </div>
+        </div>
+        <div class="view-card" onclick="setView('car', this)">
+            <div class="view-icon">🚌</div>
+            <div class="view-text">
+                <h4>车内 (非惯性系)</h4>
+                <p>视野随车移动，感受到"惯性力"</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="control-section">
+        <label>驾驶员操作 (加速度 a)</label>
+        <input type="range" id="acc-slider" min="-6" max="6" step="0.1" value="0">
+        <div class="data-row">
+            <span>当前加速度:</span>
+            <span class="highlight"><span id="acc-val">0.0</span> m/s²</span>
+        </div>
+        <div class="btn-group">
+            <button class="btn-acc" onclick="animateAcc(3)">起步 (+3)</button>
+            <button class="btn-stop" onclick="animateAcc(0)">匀速 (0)</button>
+            <button class="btn-acc" onclick="animateAcc(-3)">刹车 (-3)</button>
+        </div>
+        <div style="margin-top:15px; font-size:0.8rem; color:#888;">
+            提示：试着在"车内"视角点击"刹车"，你会感觉到身体前倾（惯性力向前）。
+        </div>
+    </div>
+
+    <div class="control-section">
+        <label>受力分析 (矢量)</label>
+        <div class="legend-row">
+            <span class="dot" style="background:#333; border:1px solid #555;"></span> 
+            <span>重力 (G)</span>
+        </div>
+        <div class="legend-row">
+            <span class="dot" style="background:#00bcd4;"></span> 
+            <span>绳子拉力 (T)</span>
+        </div>
+        <div class="legend-row" id="inertial-legend" style="opacity:0.3; text-decoration:line-through;">
+            <span class="dot" style="background:#ff5252;"></span> 
+            <span>惯性力 (F = -ma) [仅车内]</span>
+        </div>
+    </div>
+
+    <div style="padding: 10px; font-size: 0.8rem; color: #666; line-height: 1.5;">
+        <p><strong>视角切换原理解析：</strong></p>
+        <p>当切换到<strong>车内视角</strong>时，坐标系原点被锁定在车厢上。为了解释为什么小球会动，我们需要引入一个"虚构"的力——惯性力，它的大小等于 $ma$，方向与加速度相反。</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // UI 元素
+    const ui = {
+        title: document.getElementById('view-title'),
+        desc: document.getElementById('view-desc'),
+        accVal: document.getElementById('acc-val'),
+        accSlider: document.getElementById('acc-slider'),
+        inertialLegend: document.getElementById('inertial-legend')
+    };
+
+    // 核心状态
+    let state = {
+        view: 'ground', // 'ground' or 'car'
+        
+        // 物理变量
+        carX: 0,        // 车的绝对位移 (m)
+        carV: 0,        // 车速 (m/s)
+        carA: 0,        // 加速度 (m/s^2)
+        targetA: 0,     // 目标加速度 (用于平滑过渡)
+        
+        theta: 0,       // 单摆角度 (弧度)
+        omega: 0,       // 单摆角速度
+        
+        ballX: 0,       // 地板球相对位置
+        ballV: 0
+    };
+
+    // 配置常量
+    const CFG = {
+        scale: 80,      // 像素/米 (基础缩放)
+        dt: 1/60,
+        pendulumLen: 1.2,
+        g: 9.8,
+        damping: 0.96   // 阻尼
+    };
+
+    // 背景生成
+    const bgObjects = [];
+    for(let i=0; i<30; i++) {
+        bgObjects.push({
+            x: Math.random() * 3000 - 1000,
+            y: Math.random() * 200 - 100, // 天际线高度变化
+            type: Math.random() > 0.8 ? 'building' : (Math.random() > 0.5 ? 'tree' : 'cloud'),
+            scale: 0.5 + Math.random() * 0.8,
+            speedFactor: Math.random() * 0.2 + 0.8 // 视差因子
+        });
+    }
+
+    // 响应窗口大小
+    function resize() {
+        const container = document.getElementById('canvas-container');
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- 物理引擎 ---
+    function updatePhysics() {
+        // 加速度平滑插值 (模拟真实的油门/刹车反应)
+        state.targetA = parseFloat(ui.accSlider.value);
+        const diff = state.targetA - state.carA;
+        state.carA += diff * 0.1; 
+
+        // 运动学
+        state.carV += state.carA * CFG.dt;
+        state.carX += state.carV * CFG.dt;
+
+        // 单摆动力学 (在非惯性系中计算最简单)
+        // 切向力矩 = -g*sin(theta) - a*cos(theta)
+        const alpha = (-CFG.g * Math.sin(state.theta) - state.carA * Math.cos(state.theta)) / CFG.pendulumLen;
+        state.omega += alpha * CFG.dt;
+        state.omega *= CFG.damping;
+        state.theta += state.omega * CFG.dt;
+
+        // 地板小球
+        state.ballV += -state.carA * CFG.dt; // 惯性力加速度 -a
+        // 模拟滚动摩擦
+        state.ballV *= 0.98;
+        state.ballX += state.ballV * CFG.dt;
+        
+        // 限制小球范围 (车厢壁)
+        if(state.ballX > 3.5) { state.ballX = 3.5; state.ballV *= -0.5; }
+        if(state.ballX < -3.5) { state.ballX = -3.5; state.ballV *= -0.5; }
+
+        // 更新UI
+        ui.accVal.innerText = state.carA.toFixed(1);
+    }
+
+    // --- 渲染引擎 ---
+    function draw() {
+        // 清空背景
+        // 创建渐变天空
+        const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        grad.addColorStop(0, "#87CEEB");
+        grad.addColorStop(1, "#E0F7FA");
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const w = canvas.width;
+        const h = canvas.height;
+        const cx = w / 2;
+        const cy = h * 0.8; // 地面高度
+
+        ctx.save();
+
+        if (state.view === 'ground') {
+            drawGroundView(cx, cy);
+        } else {
+            drawInsideView(cx, h);
+        }
+
+        ctx.restore();
+
+        updatePhysics();
+        requestAnimationFrame(draw);
+    }
+
+    // === 渲染模式 1: 地面视角 (看车跑) ===
+    function drawGroundView(cx, cy) {
+        const zoom = 0.8; //稍微缩小一点看全景
+        
+        // 1. 绘制背景 (相对静态，稍微视差)
+        // 摄像机跟随车，所以背景位置 = 原始位置 - 车位置
+        drawScenery(ctx, cy, -state.carX * CFG.scale, zoom, false);
+
+        // 2. 地面
+        ctx.fillStyle = "#555";
+        ctx.fillRect(0, cy, canvas.width, canvas.height - cy);
+        
+        // 3. 路面标线 (流动感)
+        ctx.beginPath();
+        ctx.strokeStyle = "white";
+        ctx.lineWidth = 4;
+        ctx.setLineDash([30, 50]);
+        // 标线相对于车向后跑
+        const lineOffset = (-state.carX * CFG.scale) % 80;
+        ctx.moveTo(lineOffset - 100, cy + 40);
+        ctx.lineTo(canvas.width + 100, cy + 40);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 4. 绘制公交车 (位于屏幕中心)
+        drawBusExterior(ctx, cx, cy - 10, CFG.scale * zoom);
+    }
+
+    // === 渲染模式 2: 车内视角 (第一人称) ===
+    function drawInsideView(cx, h) {
+        const zoom = 1.3; // 放大，强调内部细节
+        const floorY = h - 20;
+
+        // 1. 绘制窗外风景 (快速移动)
+        // 在车内，风景以 -CarX 的速度移动
+        // 我们通过裁剪区域(Clip)只在窗户里画风景
+        
+        // 定义窗户区域 (简单的大矩形作为背景)
+        // 实际上我们可以全屏画背景，然后用"车厢内壁"遮挡
+        drawScenery(ctx, floorY - 100, -state.carX * CFG.scale, zoom, true);
+
+        // 2. 绘制车厢内饰 (覆盖层)
+        drawBusInteriorOverlay(ctx, cx, h, CFG.scale * zoom);
+    }
+
+    // --- 辅助绘图函数 ---
+
+    function drawScenery(ctx, groundY, offsetX, scale, isInside) {
+        bgObjects.forEach(obj => {
+            // 计算屏幕位置
+            // isInside时，视差更明显
+            let pFactor = isInside ? 1.0 : 0.2; 
+            if(obj.type === 'cloud') pFactor *= 0.5;
+
+            let x = (obj.x + offsetX * pFactor) % 3000;
+            if (x < -500) x += 3000;
+            if (x > 3500) x -= 3000;
+            
+            // 视窗剔除
+            if (x < -200 || x > canvas.width + 200) return;
+
+            ctx.save();
+            ctx.translate(x, groundY - (isInside ? 150 : 0)); // 车内视角稍微把背景提上来一点
+            ctx.scale(obj.scale * scale, obj.scale * scale);
+
+            if (obj.type === 'tree') {
+                ctx.fillStyle = "#388E3C";
+                ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(20,-80); ctx.lineTo(40,0); ctx.fill();
+                ctx.fillStyle = "#5D4037"; ctx.fillRect(15,0,10,15);
+            } else if (obj.type === 'building') {
+                ctx.fillStyle = "#607D8B";
+                ctx.fillRect(0, -100, 60, 100);
+                ctx.fillStyle = "#CFD8DC"; // 窗户
+                ctx.fillRect(10, -80, 15, 15); ctx.fillRect(35, -80, 15, 15);
+                ctx.fillRect(10, -50, 15, 15); ctx.fillRect(35, -50, 15, 15);
+            } else {
+                ctx.fillStyle = "rgba(255,255,255,0.7)";
+                ctx.beginPath(); ctx.arc(0,-100,30,0,Math.PI*2); ctx.arc(40,-90,40,0,Math.PI*2); ctx.fill();
+            }
+            ctx.restore();
+        });
+    }
+
+    function drawBusExterior(ctx, x, y, scale) {
+        const w = 7 * scale;
+        const h = 3.5 * scale;
+        const wheelR = 0.5 * scale;
+
+        ctx.save();
+        ctx.translate(x, y - wheelR); // 坐标原点在后轮底部
+
+        // 车身阴影
+        ctx.fillStyle = "rgba(0,0,0,0.3)";
+        ctx.fillRect(-w/2 + 10, 5, w - 20, 10);
+
+        // 车体
+        ctx.fillStyle = "#ECEFF1"; // 白车身
+        ctx.strokeStyle = "#455A64";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(-w/2, -h, w, h, 10);
+        ctx.fill(); ctx.stroke();
+        
+        // 蓝色条纹
+        ctx.fillStyle = "#00bcd4";
+        ctx.fillRect(-w/2, -h/2, w, h/4);
+
+        // 窗户 (透过窗户看到单摆)
+        ctx.fillStyle = "#81D4FA"; 
+        ctx.fillRect(-w/2 + 20, -h + 30, w - 40, h/2 - 20);
+
+        // --- 画内部单摆 (缩小版) ---
+        const pivotX = 0;
+        const pivotY = -h + 30;
+        const bobX = pivotX + Math.sin(state.theta) * CFG.pendulumLen * scale;
+        const bobY = pivotY + Math.cos(state.theta) * CFG.pendulumLen * scale;
+        
+        ctx.strokeStyle = "#333"; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(pivotX, pivotY); ctx.lineTo(bobX, bobY); ctx.stroke();
+        ctx.fillStyle = "#FF9800";
+        ctx.beginPath(); ctx.arc(bobX, bobY, 8, 0, Math.PI*2); ctx.fill();
+
+        // 轮子
+        drawWheel(ctx, -w/3, 0, wheelR);
+        drawWheel(ctx, w/3, 0, wheelR);
+
+        // 矢量 (地面系只画G和T)
+        drawVector(ctx, bobX, bobY, 0, 40, "#333", "G"); // G
+        drawVector(ctx, bobX, bobY, (pivotX-bobX)*1.5, (pivotY-bobY)*1.5, "#00bcd4", "T"); // T
+
+        ctx.restore();
+    }
+
+    function drawBusInteriorOverlay(ctx, cx, h, scale) {
+        // 这个函数画车厢内部结构，遮挡住背景
+        // 视觉设计：我们站在过道中间，看侧面的大窗户
+        
+        const roofY = h * 0.1;
+        const floorY = h * 0.85;
+        const windowTop = roofY + 40;
+        const windowBottom = floorY - 100;
+
+        ctx.fillStyle = "#263238"; // 车厢内壁深色
+
+        // 1. 顶部 (车顶)
+        ctx.fillRect(0, 0, canvas.width, windowTop);
+        // 2. 底部 (地板)
+        ctx.fillRect(0, windowBottom, canvas.width, h - windowBottom);
+        // 3. 窗框 (竖条)
+        const frameW = 40;
+        for(let x = cx - 300; x <= cx + 300; x += 300) {
+            ctx.fillStyle = "#37474F";
+            ctx.fillRect(x, windowTop, frameW, windowBottom - windowTop);
+        }
+
+        // 4. 座椅 (剪影)
+        ctx.fillStyle = "#455A64";
+        ctx.beginPath();
+        ctx.moveTo(100, h);
+        ctx.lineTo(100, windowBottom - 20);
+        ctx.lineTo(200, windowBottom - 20); // 椅背
+        ctx.lineTo(200, windowBottom + 60); // 椅面
+        ctx.lineTo(250, windowBottom + 60);
+        ctx.lineTo(250, h);
+        ctx.fill();
+
+        // 5. 扶手横杆 (在顶部)
+        ctx.strokeStyle = "#CFD8DC";
+        ctx.lineWidth = 8;
+        ctx.beginPath();
+        ctx.moveTo(0, windowTop + 30);
+        ctx.lineTo(canvas.width, windowTop + 30);
+        ctx.stroke();
+
+        // --- 物理对象：单摆 (挂在扶手上) ---
+        // 挂在屏幕正中心
+        const pivotX = cx;
+        const pivotY = windowTop + 30;
+        const bobX = pivotX + Math.sin(state.theta) * CFG.pendulumLen * scale;
+        const bobY = pivotY + Math.cos(state.theta) * CFG.pendulumLen * scale;
+
+        // 吊环绳
+        ctx.strokeStyle = "#BBB"; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(pivotX, pivotY); ctx.lineTo(bobX, bobY); ctx.stroke();
+        
+        // 吊环/球
+        ctx.fillStyle = "#FF9800";
+        ctx.beginPath(); ctx.arc(bobX, bobY, 20, 0, Math.PI*2); ctx.fill();
+        // 高光
+        ctx.fillStyle = "rgba(255,255,255,0.4)";
+        ctx.beginPath(); ctx.arc(bobX-5, bobY-5, 8, 0, Math.PI*2); ctx.fill();
+
+        // --- 矢量绘制 (车内系：包含惯性力) ---
+        const vecScale = 50;
+        // G
+        drawVector(ctx, bobX, bobY, 0, 1.5*vecScale, "#333", "G");
+        // T
+        drawVector(ctx, bobX, bobY, -Math.sin(state.theta)*1.5*vecScale, -Math.cos(state.theta)*1.5*vecScale, "#00bcd4", "T");
+        
+        // 惯性力 (红色) - 只有当加速度存在且在车内视角时
+        if (Math.abs(state.carA) > 0.1) {
+            // F_in = -ma. 如果 a > 0 (向右加速), F_in 向左.
+            // 画箭头
+            drawVector(ctx, bobX, bobY, -state.carA * 20, 0, "#ff5252", "F_in");
+        }
+
+        // --- 地板球 (紫色) ---
+        const floorBallR = 25;
+        // 球相对于车的位置 state.ballX, 屏幕中心是 cx
+        // 1米 = scale 像素
+        const ballScreenX = cx + state.ballX * scale; 
+        const ballScreenY = floorY - floorBallR; // 地板上
+
+        // 只有球在屏幕内才画
+        if(ballScreenX > -50 && ballScreenX < canvas.width + 50) {
+            ctx.fillStyle = "#9C27B0";
+            ctx.beginPath(); ctx.arc(ballScreenX, ballScreenY, floorBallR, 0, Math.PI*2); ctx.fill();
+            // 滚动的纹理
+            ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = 3;
+            ctx.beginPath();
+            let rot = state.ballX * scale / floorBallR;
+            ctx.moveTo(ballScreenX, ballScreenY);
+            ctx.lineTo(ballScreenX + Math.cos(rot)*floorBallR, ballScreenY + Math.sin(rot)*floorBallR);
+            ctx.stroke();
+            
+            // 球的惯性力
+            if (Math.abs(state.carA) > 0.1) {
+                 drawVector(ctx, ballScreenX, ballScreenY - 30, -state.carA * 20, 0, "#ff5252", "");
+            }
+        }
+    }
+
+    function drawWheel(ctx, x, y, r) {
+        ctx.save();
+        ctx.translate(x, y);
+        // 轮子旋转动画：根据总位移
+        ctx.rotate(state.carX / 0.5); 
+        ctx.fillStyle = "#333";
+        ctx.beginPath(); ctx.arc(0,0,r,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle = "#777"; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(0,-r); ctx.lineTo(0,r); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(-r,0); ctx.lineTo(r,0); ctx.stroke();
+        ctx.restore();
+    }
+
+    function drawVector(ctx, x, y, dx, dy, color, label) {
+        if(Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+        
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 3;
+        
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + dx, y + dy);
+        ctx.stroke();
+
+        // 箭头
+        const angle = Math.atan2(dy, dx);
+        const head = 12;
+        ctx.beginPath();
+        ctx.moveTo(x + dx, y + dy);
+        ctx.lineTo(x + dx - head * Math.cos(angle - Math.PI/6), y + dy - head * Math.sin(angle - Math.PI/6));
+        ctx.lineTo(x + dx - head * Math.cos(angle + Math.PI/6), y + dy - head * Math.sin(angle + Math.PI/6));
+        ctx.fill();
+
+        // 标签
+        if(label) {
+            ctx.font = "bold 16px Arial";
+            ctx.fillText(label, x + dx + (dx>0?10:-30), y + dy + (dy>0?20:-10));
+        }
+
+        ctx.restore();
+    }
+
+    // --- 交互控制 ---
+    function setView(mode, el) {
+        state.view = mode;
+        // UI 更新
+        document.querySelectorAll('.view-card').forEach(c => c.classList.remove('active'));
+        el.classList.add('active');
+        
+        if (mode === 'ground') {
+            ui.title.innerText = "地面参考系";
+            ui.desc.innerText = "观察者站在路边，看到车在移动";
+            ui.title.style.color = "white";
+            ui.inertialLegend.style.opacity = "0.3";
+            ui.inertialLegend.style.textDecoration = "line-through";
+        } else {
+            ui.title.innerText = "车厢参考系";
+            ui.desc.innerText = "观察者在车内，窗外风景在动";
+            ui.title.style.color = "#00bcd4";
+            ui.inertialLegend.style.opacity = "1";
+            ui.inertialLegend.style.textDecoration = "none";
+        }
+    }
+
+    function animateAcc(target) {
+        ui.accSlider.value = target;
+        // updatePhysics 会自动处理平滑插值
+    }
+
+    // 启动
+    updatePhysics();
+    draw();
+
+</script>
+</body>
+</html>

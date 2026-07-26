@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>动量守恒仿真 (可变高度版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: "Microsoft YaHei", sans-serif; display: flex; height: 100vh; background-color: #f5f5f5; }
+        
+        /* 3D 视口 */
+        #viewport {
+            flex-grow: 1;
+            position: relative;
+            background: linear-gradient(to bottom, #ffffff, #dce6f1);
+            overflow: hidden;
+        }
+
+        /* 右侧侧边栏 */
+        #sidebar {
+            width: 280px;
+            background-color: #fff;
+            color: #333;
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            z-index: 10;
+            border-left: 1px solid #e0e0e0;
+            overflow-y: auto;
+        }
+
+        h3 { 
+            font-size: 16px; 
+            margin-top: 0; 
+            padding-bottom: 10px; 
+            border-bottom: 2px solid #3498db; 
+            color: #2c3e50; 
+        }
+
+        .control-group { margin-bottom: 15px; }
+        
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            color: white;
+            transition: opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        
+        #btn-start { background-color: #27ae60; }
+        #btn-pause { background-color: #f39c12; display: none; }
+        #btn-reset { background-color: #c0392b; }
+
+        label { font-size: 13px; font-weight: bold; display: block; margin-bottom: 5px; color: #555; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        
+        .val-display { float: right; color: #3498db; }
+
+        /* 左上角图表容器 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 320px;
+            height: 200px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            padding: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            cursor: move;
+            z-index: 100;
+        }
+        #chart-header {
+            font-size: 12px; font-weight: bold; color: #555;
+            margin-bottom: 5px; border-bottom: 1px solid #eee; padding-bottom: 2px;
+            pointer-events: none;
+        }
+        
+        #myChart { pointer-events: none; }
+    </style>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+    <script src="./chart.min.js"></script>
+</head>
+<body>
+
+    <div id="viewport">
+        <div id="chart-wrapper">
+            <div id="chart-header">📊 实时数据：槽 A 位移</div>
+            <canvas id="myChart"></canvas>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <h3>🔧 仿真控制台</h3>
+        
+        <div class="control-group">
+            <button id="btn-start">开始运行</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">复位 (回到初始状态)</button>
+        </div>
+
+        <div class="control-group">
+            <label>⏱️ 运行倍速: <span id="speed-val" class="val-display">1.0x</span></label>
+            <input type="range" id="speed-slider" min="0" max="100" value="50">
+        </div>
+
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 10px 0;">
+
+        <div class="control-group">
+            <label>📐 初始高度 (角度): <span id="val-theta" class="val-display">60°</span></label>
+            <input type="range" id="slider-theta" min="0" max="85" step="1" value="60">
+        </div>
+
+        <div class="control-group">
+            <label>🔴 小球质量 (m): <span id="val-m" class="val-display">1.0</span> kg</label>
+            <input type="range" id="slider-m" min="0.1" max="5.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label>⬜ 槽质量 (M): <span id="val-M" class="val-display">2.0</span> kg</label>
+            <input type="range" id="slider-M" min="0.5" max="10.0" step="0.5" value="2.0">
+        </div>
+
+        <div style="margin-top: auto; font-size: 12px; color: #888;">
+            <p>提示：<br>• 调整初始高度可改变势能<br>• 无阻尼 (永动模式)<br>• 可拖拽图表标题</p>
+        </div>
+    </div>
+
+    <script>
+        // --- 变量定义 ---
+        let scene, camera, renderer, controls;
+        let troughGroup, ballMesh;
+        let isRunning = false;
+        
+        // 物理参数
+        const R = 5.0; 
+        const r = 0.5; 
+        let M = 2.0;   
+        let m = 1.0;   
+        const g = 9.8;
+        
+        // 运动参数
+        let initialDeg = 60; // 保存设定的初始角度
+        let initialTheta = -Math.PI / 3; // 对应的弧度
+        let theta = initialTheta; // 当前实时角度
+        
+        let omega = 0;
+        let time = 0;
+        let speedMultiplier = 1.0;
+
+        // 图表
+        let chart;
+        const maxPoints = 60;
+
+        // --- 初始化 ---
+        function init() {
+            const container = document.getElementById('viewport');
+
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xf5f5f5);
+
+            // 2. 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // 3. 辅助网格
+            const grid = new THREE.GridHelper(40, 40, 0xcccccc, 0xe5e5e5);
+            scene.add(grid);
+
+            // 4. 物体创建
+            createObjects();
+
+            // 5. 相机
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 8, 25);
+            camera.lookAt(0, 2, 0);
+
+            // 6. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // 7. 控制器 (OrbitControls)
+            const OrbitControls = THREE.OrbitControls || window.OrbitControls;
+            if (OrbitControls) {
+                controls = new OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = false; 
+                controls.dampingFactor = 0.05;
+            }
+
+            // 8. 图表
+            initChart();
+
+            // 9. UI事件
+            initUI();
+
+            window.addEventListener('resize', () => {
+                camera.aspect = container.clientWidth / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            });
+
+            animate();
+        }
+
+        function createObjects() {
+            // --- 槽 ---
+            const geoTrough = new THREE.CylinderGeometry(R, R, 4, 64, 1, true, Math.PI, Math.PI);
+            const matTrough = new THREE.MeshStandardMaterial({ 
+                color: 0x7f8c8d, 
+                side: THREE.DoubleSide, 
+                roughness: 0.5 
+            });
+            const troughMesh = new THREE.Mesh(geoTrough, matTrough);
+            troughMesh.rotation.z = Math.PI / 2; 
+            troughMesh.rotation.y = Math.PI / 2; 
+            troughMesh.castShadow = true;
+            troughMesh.receiveShadow = true;
+            
+            troughGroup = new THREE.Group();
+            troughGroup.add(troughMesh);
+            troughGroup.position.set(0, R, 0); 
+            scene.add(troughGroup);
+
+            // --- 小球 ---
+            const geoBall = new THREE.SphereGeometry(r, 32, 32);
+            const matBall = new THREE.MeshStandardMaterial({ color: 0xe74c3c });
+            ballMesh = new THREE.Mesh(geoBall, matBall);
+            ballMesh.castShadow = true;
+            scene.add(ballMesh);
+
+            updatePhysicsDisplay();
+        }
+
+        // --- 物理核心 ---
+        function updatePhysicsDisplay() {
+            const effectiveR = R - r; 
+
+            // 相对水平位移
+            const relX = effectiveR * Math.sin(theta);
+            
+            // 动量守恒计算槽位移 X_A
+            const X_A = - (m * relX) / (M + m);
+            
+            // 更新槽位置
+            troughGroup.position.x = X_A; 
+            
+            // 更新球位置
+            const X_B = X_A + relX;
+            const Y_B = R - effectiveR * Math.cos(theta);
+
+            ballMesh.position.set(X_B, Y_B, 0);
+            ballMesh.rotation.z = -theta * (R/r); 
+
+            return X_A;
+        }
+
+        function stepPhysics() {
+            const dt = 0.016 * speedMultiplier;
+            const effectiveR = R - r;
+            
+            // 无阻尼动力学
+            const alpha = - (g / effectiveR) * Math.sin(theta);
+            
+            omega += alpha * dt;
+            theta += omega * dt;
+            time += dt;
+        }
+
+        // --- 图表 ---
+        function initChart() {
+            const ctx = document.getElementById('myChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(maxPoints).fill(''),
+                    datasets: [{
+                        label: '槽位移',
+                        data: Array(maxPoints).fill(null),
+                        borderColor: '#2980b9',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: {
+                        x: { display: false },
+                        y: { suggestedMin: -2, suggestedMax: 2 }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        let frame = 0;
+        function updateChartData(val) {
+            if (frame++ % 3 !== 0) return; 
+            const d = chart.data.datasets[0].data;
+            d.shift();
+            d.push(val);
+            chart.update();
+        }
+
+        // --- UI逻辑 ---
+        function initUI() {
+            const btnStart = document.getElementById('btn-start');
+            const btnPause = document.getElementById('btn-pause');
+            const btnReset = document.getElementById('btn-reset');
+            
+            const sliderSpeed = document.getElementById('speed-slider');
+            const valSpeed = document.getElementById('speed-val');
+            
+            const sliderTheta = document.getElementById('slider-theta');
+            const valTheta = document.getElementById('val-theta');
+
+            const sliderM = document.getElementById('slider-M');
+            const valM = document.getElementById('val-M');
+            const sliderm = document.getElementById('slider-m');
+            const valm = document.getElementById('val-m');
+
+            const toggle = (run) => {
+                isRunning = run;
+                btnStart.style.display = run ? 'none' : 'block';
+                btnPause.style.display = run ? 'block' : 'none';
+                
+                // 运行时禁用初始角度滑块，防止物理冲突
+                sliderTheta.disabled = run;
+                sliderTheta.parentElement.style.opacity = run ? 0.5 : 1;
+            };
+
+            btnStart.onclick = () => toggle(true);
+            btnPause.onclick = () => toggle(false);
+            
+            btnReset.onclick = () => {
+                toggle(false);
+                // 重置为滑动条设定的初始角度，而不是硬编码的值
+                theta = initialTheta; 
+                omega = 0;
+                chart.data.datasets[0].data.fill(null);
+                chart.update();
+                updatePhysicsDisplay();
+                renderer.render(scene, camera);
+            };
+
+            sliderSpeed.oninput = (e) => {
+                speedMultiplier = e.target.value / 50;
+                valSpeed.innerText = speedMultiplier.toFixed(1) + "x";
+            };
+
+            // 初始高度/角度滑块逻辑
+            sliderTheta.oninput = (e) => {
+                initialDeg = parseFloat(e.target.value);
+                valTheta.innerText = initialDeg + "°";
+                
+                // 转换为弧度 (注意符号，左侧为负)
+                initialTheta = -initialDeg * (Math.PI / 180);
+                
+                // 如果当前没有在运行，实时更新画面
+                if (!isRunning) {
+                    theta = initialTheta;
+                    omega = 0; // 调整位置时速度归零
+                    updatePhysicsDisplay();
+                    renderer.render(scene, camera);
+                }
+            };
+
+            sliderM.oninput = (e) => {
+                M = parseFloat(e.target.value);
+                valM.innerText = M.toFixed(1);
+                if(!isRunning) updatePhysicsDisplay();
+                renderer.render(scene, camera);
+            };
+
+            sliderm.oninput = (e) => {
+                m = parseFloat(e.target.value);
+                valm.innerText = m.toFixed(1);
+                if(!isRunning) updatePhysicsDisplay();
+                renderer.render(scene, camera);
+            };
+
+            // 图表拖拽
+            const dragEl = document.getElementById('chart-wrapper');
+            let isDown = false, offX, offY;
+            dragEl.onmousedown = (e) => {
+                isDown = true;
+                offX = e.clientX - dragEl.offsetLeft;
+                offY = e.clientY - dragEl.offsetTop;
+            };
+            document.onmouseup = () => isDown = false;
+            document.onmousemove = (e) => {
+                if (!isDown) return;
+                e.preventDefault();
+                dragEl.style.left = (e.clientX - offX) + 'px';
+                dragEl.style.top = (e.clientY - offY) + 'px';
+            };
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update(); 
+            if (isRunning) {
+                stepPhysics();
+                const x = updatePhysicsDisplay();
+                updateChartData(x);
+            }
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>

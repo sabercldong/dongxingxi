@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>电流微观表达式推导演示 (白色背景版)</title>
+    <style>
+        /* 全局样式：改为浅色主题 */
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background-color: #ffffff; 
+            color: #333; /* 文字深灰 */
+        }
+        
+        /* 主布局容器 */
+        #container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧 3D 画布 */
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            background: #ffffff; /* 画布背景白 */
+        }
+
+        /* 右侧功能区 */
+        #sidebar {
+            width: 350px;
+            background: #f8f9fa; /* 侧边栏极浅灰，区分画布 */
+            border-left: 1px solid #dee2e6; /* 边框变浅 */
+            display: flex;
+            flex-direction: column;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.05); /* 阴影变淡 */
+            z-index: 10;
+        }
+
+        /* 功能区内容，支持滚动 */
+        #controls-content {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
+        /* 底部按钮区 */
+        #button-group {
+            padding: 20px;
+            background: #ffffff;
+            border-top: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        h2, h3 { color: #0056b3; margin-top: 0; } /* 标题改为深蓝 */
+        
+        /* 控件样式 */
+        .control-item { 
+            margin-bottom: 20px; 
+            background: #ffffff; 
+            padding: 15px; 
+            border-radius: 8px; 
+            border: 1px solid #e9ecef; /* 增加边框 */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.02);
+        }
+        label { display: block; margin-bottom: 8px; font-weight: bold; color: #495057; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        /* 按钮样式 */
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            transition: 0.2s;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        #btn-start { background-color: #28a745; }
+        #btn-pause { background-color: #ffc107; color: #333; }
+        #btn-reset { background-color: #dc3545; }
+        button:hover { opacity: 0.85; transform: translateY(-1px); }
+
+        /* 推导公式样式 */
+        .formula-box {
+            background: #e7f5ff; /* 浅蓝背景 */
+            padding: 10px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            margin-top: 10px;
+            border-left: 4px solid #0056b3;
+            font-weight: bold;
+            color: #004085;
+        }
+        /* 重点变量高亮色改为深红/深橙，保证在白底看清 */
+        .var-name { color: #d63384; font-weight: bold; } 
+    </style>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    </head>
+<body>
+
+<div id="container">
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <div id="controls-content">
+            <h2>电流微观表达式</h2>
+            <p style="font-size: 0.9em; color: #666;">拖动滑块，观察微观粒子运动与公式的关系。</p>
+            
+            <hr style="border: 0; border-top: 1px solid #eee;">
+
+            <div class="control-item">
+                <label>电子定向移动速率 (v)</label>
+                <input type="range" id="speedRange" min="0.1" max="2.0" step="0.1" value="0.5">
+                <div class="formula-box">v = <span id="val-v">0.5</span></div>
+            </div>
+
+            <div class="control-item">
+                <label>单位体积电荷数 (n)</label>
+                <input type="range" id="densityRange" min="10" max="200" step="10" value="50">
+                <div class="formula-box">n = <span id="val-n">50</span></div>
+            </div>
+
+            <div class="control-item">
+                <label>导线横截面积 (S)</label>
+                <input type="range" id="radiusRange" min="1" max="3" step="0.1" value="1.5">
+                <div class="formula-box">S ∝ r² = <span id="val-s">2.25</span></div>
+            </div>
+
+            <h3>推导过程演示</h3>
+            <div style="font-size: 0.95em; line-height: 1.8; color: #444;">
+                <p>1. 设截面 <span class="var-name">S</span>，电子速度 <span class="var-name">v</span>。</p>
+                <p>2. 在时间 <span class="var-name">t</span> 内，通过截面的电子柱体长度：</p>
+                <div class="formula-box">L = v · t</div>
+                
+                <p>3. 该柱体的体积：</p>
+                <div class="formula-box">V = S · L = S · v · t</div>
+                
+                <p>4. 包含的总自由电荷数：</p>
+                <div class="formula-box">N = n · V = n · S · v · t</div>
+                
+                <p>5. 总电荷量 (q为单个电荷量)：</p>
+                <div class="formula-box">Q = N · q = n · S · v · t · q</div>
+                
+                <p>6. 根据电流定义 I = Q/t：</p>
+                <div class="formula-box" style="border-color: #28a745; background-color: #d4edda; color: #155724;">
+                    <strong style="font-size:1.2em">I = n · q · S · v</strong>
+                </div>
+            </div>
+        </div>
+
+        <div id="button-group">
+            <button id="btn-start">▶ 开始</button>
+            <button id="btn-pause">⏸ 暂停</button>
+            <button id="btn-reset">↺ 还原</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 1. 初始化场景变量
+    let scene, camera, renderer, controls;
+    let electrons = [];
+    let wireMesh, sectionMesh;
+    let animationId;
+    let isPaused = false;
+    
+    // 物理参数
+    let params = {
+        speed: 0.5,
+        density: 50,
+        radius: 1.5,
+        wireLength: 20
+    };
+
+    const container = document.getElementById('canvas-container');
+    const speedInput = document.getElementById('speedRange');
+    const densityInput = document.getElementById('densityRange');
+    const radiusInput = document.getElementById('radiusRange');
+
+    function init() {
+        scene = new THREE.Scene();
+        // ★★★ 修改背景色为纯白 ★★★
+        scene.background = new THREE.Color(0xffffff); 
+        
+        // 增加雾化效果，让远处的背景融合得更自然（可选）
+        scene.fog = new THREE.Fog(0xffffff, 20, 50);
+
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(10, 5, 15);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true; // 开启阴影让立体感更强
+        container.appendChild(renderer.domElement);
+
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.autoRotate = false; // 初始不自动旋转
+
+        // ★★★ 灯光调整 ★★★
+        // 环境光改强一点，防止阴影太黑
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        // 平行光产生阴影和高光
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
+
+        createWire();
+        createSection(); 
+        updateElectrons();
+
+        window.addEventListener('resize', onWindowResize, false);
+        animate();
+    }
+
+    function createWire() {
+        if (wireMesh) scene.remove(wireMesh);
+        
+        const geometry = new THREE.CylinderGeometry(params.radius, params.radius, params.wireLength, 32);
+        geometry.rotateZ(Math.PI / 2); 
+        
+        // ★★★ 导线材质修改 ★★★
+        // 在白色背景下，灰色透明需要深一点的灰，或者带一点蓝色的玻璃感
+        const material = new THREE.MeshPhongMaterial({
+            color: 0xaaccff, // 极浅的蓝灰色
+            transparent: true,
+            opacity: 0.3,    // 透明度
+            shininess: 100,
+            side: THREE.DoubleSide,
+            depthWrite: false // 优化透明渲染
+        });
+        
+        wireMesh = new THREE.Mesh(geometry, material);
+        
+        // 添加边框线条，让圆柱体轮廓更清晰
+        const edges = new THREE.EdgesGeometry(geometry);
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0xcccccc }); // 浅灰线条
+        const wireframe = new THREE.LineSegments(edges, lineMaterial);
+        wireMesh.add(wireframe);
+
+        scene.add(wireMesh);
+    }
+
+    function createSection() {
+        if (sectionMesh) scene.remove(sectionMesh);
+
+        const geometry = new THREE.CylinderGeometry(params.radius, params.radius, 0.1, 32);
+        geometry.rotateZ(Math.PI / 2);
+        
+        // ★★★ 截面颜色修改 ★★★
+        // 之前的黄色在白底看不清，改为橙红色
+        const material = new THREE.MeshBasicMaterial({
+            color: 0xff6600, // 橙色
+            transparent: true,
+            opacity: 0.5,
+            side: THREE.DoubleSide
+        });
+        
+        sectionMesh = new THREE.Mesh(geometry, material);
+        sectionMesh.position.x = 0;
+        scene.add(sectionMesh);
+    }
+
+    function updateElectrons() {
+        electrons.forEach(e => scene.remove(e));
+        electrons = [];
+
+        const electronGeometry = new THREE.SphereGeometry(0.15, 16, 16);
+        // ★★★ 电子颜色修改 ★★★
+        // 纯蓝在白底很清晰
+        const electronMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x007bff, 
+            shininess: 50 
+        });
+
+        const count = params.density;
+        
+        for (let i = 0; i < count; i++) {
+            const mesh = new THREE.Mesh(electronGeometry, electronMaterial);
+            const x = (Math.random() - 0.5) * params.wireLength;
+            const angle = Math.random() * Math.PI * 2;
+            const r = Math.sqrt(Math.random()) * (params.radius - 0.2);
+            
+            const y = r * Math.cos(angle);
+            const z = r * Math.sin(angle);
+
+            mesh.position.set(x, y, z);
+            scene.add(mesh);
+            electrons.push(mesh);
+        }
+    }
+
+    function animate() {
+        animationId = requestAnimationFrame(animate);
+        controls.update();
+
+        if (!isPaused) {
+            electrons.forEach(e => {
+                e.position.x += params.speed * 0.1; 
+                if (e.position.x > params.wireLength / 2) {
+                    e.position.x = -params.wireLength / 2;
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = Math.sqrt(Math.random()) * (params.radius - 0.2);
+                    e.position.y = r * Math.cos(angle);
+                    e.position.z = r * Math.sin(angle);
+                }
+            });
+        }
+        renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+        camera.aspect = (window.innerWidth - 350) / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(document.getElementById('canvas-container').clientWidth, window.innerHeight);
+    }
+
+    speedInput.addEventListener('input', (e) => {
+        params.speed = parseFloat(e.target.value);
+        document.getElementById('val-v').innerText = params.speed.toFixed(1);
+    });
+
+    densityInput.addEventListener('input', (e) => {
+        params.density = parseInt(e.target.value);
+        document.getElementById('val-n').innerText = params.density;
+        updateElectrons();
+    });
+
+    radiusInput.addEventListener('input', (e) => {
+        params.radius = parseFloat(e.target.value);
+        document.getElementById('val-s').innerText = (params.radius * params.radius).toFixed(2);
+        createWire();
+        createSection();
+        updateElectrons();
+    });
+
+    document.getElementById('btn-start').addEventListener('click', () => { isPaused = false; });
+    document.getElementById('btn-pause').addEventListener('click', () => { isPaused = true; });
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        speedInput.value = 0.5;
+        densityInput.value = 50;
+        radiusInput.value = 1.5;
+        speedInput.dispatchEvent(new Event('input'));
+        densityInput.dispatchEvent(new Event('input'));
+        radiusInput.dispatchEvent(new Event('input'));
+        isPaused = true;
+    });
+
+    init();
+
+</script>
+</body>
+</html>

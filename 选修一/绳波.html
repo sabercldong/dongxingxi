@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>波的传播模拟 v4.0</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --panel-bg: #161b22;
+            --control-bg: #21262d;
+            --text-color: #c9d1d9;
+            --accent-color: #58a6ff;
+            --border-color: #30363d;
+            --success-color: #238636;
+            --danger-color: #da3633;
+            --warning-color: #d29922;
+        }
+
+        body {
+            font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            height: 100vh;
+            box-sizing: border-box;
+            overflow: hidden;
+        }
+
+        .main-layout {
+            display: flex;
+            height: 100%;
+            gap: 20px;
+        }
+
+        /* 左侧显示区 */
+        .left-panel {
+            flex: 3;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+        }
+
+        h1 {
+            margin: 0 0 10px 0;
+            font-weight: 400;
+            font-size: 1.6rem;
+            color: var(--accent-color);
+        }
+
+        .canvas-container {
+            flex-grow: 1;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        canvas {
+            background: #000;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* 简单的状态悬浮窗 */
+        .info-overlay {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            font-size: 0.9rem;
+            color: #aaa;
+            background: rgba(0,0,0,0.6);
+            padding: 10px 15px;
+            border-radius: 4px;
+            pointer-events: none;
+            border-left: 3px solid var(--accent-color);
+        }
+
+        /* 右侧控制区 */
+        .right-panel {
+            flex: 1;
+            background: var(--panel-bg);
+            padding: 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            min-width: 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+        }
+
+        .section-label {
+            color: #8b949e;
+            font-size: 0.85rem;
+            font-weight: bold;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+        }
+
+        .control-group {
+            background: var(--control-bg);
+            padding: 15px;
+            border-radius: 6px;
+        }
+
+        label {
+            display: block;
+            font-size: 0.9rem;
+            margin-bottom: 10px;
+            color: #e6edf3;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin: 5px 0;
+            cursor: pointer;
+            accent-color: var(--accent-color);
+        }
+
+        select, button {
+            width: 100%;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: #2e353e;
+            color: white;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 8px;
+        }
+        
+        button:hover { background: #3c444d; }
+        
+        /* 按钮颜色区分 */
+        button.primary { background: var(--success-color); border: none; }
+        button.primary:hover { background: #2ea043; }
+        
+        button.pause { background: #e3b341; color: #000; font-weight: bold; border: none; }
+        button.pause:hover { background: #d29922; }
+        
+        button.reset { background: var(--danger-color); border: none; margin-top: auto; }
+        button.reset:hover { background: #a71d2a; }
+
+        .value-display {
+            color: var(--accent-color);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div class="main-layout">
+    <div class="left-panel">
+        <h1>波的传播模拟 <span style="font-size:0.8em; color:#666;">(理论波动方程)</span></h1>
+        
+        <div class="canvas-container">
+            <canvas id="waveCanvas" width="1200" height="600"></canvas>
+            
+            <div class="info-overlay">
+                <div id="statusText">系统状态: 运行中</div>
+                <div id="dampingText">阻尼: 0% (无损耗)</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="right-panel">
+        
+        <div>
+            <div class="section-label">环境与介质</div>
+            
+            <div class="control-group">
+                <label>右端边界条件</label>
+                <select id="boundaryType">
+                    <option value="open" selected>自由传播 (无限长)</option>
+                    <option value="fixed">固定端 (发生反射)</option>
+                    <option value="free">自由端 (发生反射)</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label>介质阻尼 (能量损耗) <span id="dampingVal" class="value-display">0%</span></label>
+                <input type="range" id="dampingSlider" min="0" max="100" step="1" value="0">
+                <div style="font-size:0.8rem; color:#888; display:flex; justify-content:space-between;">
+                    <span>无损耗</span>
+                    <span>高阻尼</span>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>波速 <span class="value-display">100%</span></label>
+                <input type="range" id="speedSlider" min="0.1" max="1.0" step="0.001" value="1.0">
+            </div>
+        </div>
+
+        <div>
+            <div class="section-label">波源控制</div>
+            <div class="control-group">
+                <label>发射脉冲</label>
+                <button id="btnPulse" class="primary">发射高斯脉冲</button>
+                <button id="btnSquare">发射方波</button>
+            </div>
+            
+            <div class="control-group">
+                <label>连续震动</label>
+                <div style="display:flex; gap:10px; align-items:center; margin-bottom:10px;">
+                   <span style="font-size:0.9rem;">频率:</span>
+                   <input type="range" id="frequency" min="1" max="10" step="0.1" value="3.0">
+                </div>
+                <button id="btnSine">开启/关闭 正弦波</button>
+            </div>
+        </div>
+
+        <button id="btnPause" class="pause">暂停</button>
+        <button id="btnReset" class="reset">重置系统</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('waveCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- 核心变量 ---
+const N = 400; // 绳子分段数
+let values = new Float32Array(N);     
+let prevValues = new Float32Array(N); 
+
+// --- 状态控制 ---
+let isPaused = false;
+let dampingFactor = 1.0; // 1.0 = 无阻尼
+let waveSpeedSq = 1.0;   // 内部计算用的波速参数
+let time = 0;
+
+// 波源状态
+let isPulse = false;
+let isSine = false;
+let pulseType = 'gaussian'; 
+let frequency = 3.0;
+
+// --- DOM 元素 ---
+const dampingSlider = document.getElementById('dampingSlider');
+const dampingVal = document.getElementById('dampingVal');
+const dampingText = document.getElementById('dampingText');
+const speedSlider = document.getElementById('speedSlider');
+const boundarySelect = document.getElementById('boundaryType');
+const statusText = document.getElementById('statusText');
+const btnPause = document.getElementById('btnPause');
+const btnSine = document.getElementById('btnSine');
+
+function init() {
+    for(let i=0; i<N; i++) {
+        values[i] = 0;
+        prevValues[i] = 0;
+    }
+    time = 0;
+    isPulse = false;
+    isSine = false;
+    isPaused = false;
+    updateStatusDisplay();
+}
+
+function updatePhysics() {
+    if (isPaused) return;
+
+    let newValues = new Float32Array(N);
+    let sourceValue = 0;
+    
+    // 1. 处理波源 (Source)
+    if (isPulse) {
+        let t_shifted = time - 20; 
+        if (pulseType === 'gaussian') {
+            // 高斯脉冲
+            let width = 6.0;
+            sourceValue = 100 * Math.exp(-Math.pow(t_shifted, 2) / (2 * width * width));
+            if (time > 70) { isPulse = false; sourceValue = 0; }
+        } else if (pulseType === 'square') {
+            // 方波
+            sourceValue = (time > 10 && time < 40) ? 80 : 0;
+            if (time > 50) { isPulse = false; sourceValue = 0; }
+        }
+    } else if (isSine) {
+        sourceValue = 80 * Math.sin(2 * Math.PI * frequency * 0.02 * time);
+    }
+
+    newValues[0] = sourceValue;
+
+    // 2. 波动方程计算 (Wave Equation)
+    for (let i = 1; i < N - 1; i++) {
+        let laplacian = values[i+1] - 2*values[i] + values[i-1];
+        
+        // 核心公式：新位置 = (惯性项 + 弹性力项) * 阻尼系数
+        let unDampedValue = 2*values[i] - prevValues[i] + waveSpeedSq * laplacian;
+        newValues[i] = unDampedValue * dampingFactor; 
+    }
+
+    // 3. 边界条件 (Boundary Conditions)
+    let last = N - 1;
+    let mode = boundarySelect.value;
+
+    if (mode === 'fixed') {
+        newValues[last] = 0;
+    } else if (mode === 'free') {
+        let laplacianLast = (values[last-1] - 2*values[last] + values[last-1]);
+        newValues[last] = (2*values[last] - prevValues[last] + waveSpeedSq * laplacianLast) * dampingFactor;
+    } else if (mode === 'open') {
+        // 自由传播端 (吸波边界)
+        // 简单的无反射近似，当波速=100%时完美
+        let c = Math.sqrt(waveSpeedSq);
+        // 使用 Mur 一阶吸收边界公式
+        newValues[last] = values[last-1] + (c-1)/(c+1) * (newValues[last-1] - values[last]);
+    }
+
+    prevValues = values;
+    values = newValues;
+    time++;
+}
+
+function drawBackground() {
+    ctx.fillStyle = '#0d1117';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    let h = canvas.height;
+    let mid = h / 2;
+
+    // 绘制网格
+    ctx.strokeStyle = '#21262d';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for(let i=0; i<canvas.width; i+=40) { ctx.moveTo(i, 0); ctx.lineTo(i, h); }
+    for(let i=0; i<h; i+=40) { ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); }
+    ctx.stroke();
+
+    // 绘制中心轴
+    ctx.strokeStyle = '#30363d';
+    ctx.beginPath();
+    ctx.moveTo(0, mid);
+    ctx.lineTo(canvas.width, mid);
+    ctx.stroke();
+}
+
+function draw() {
+    drawBackground();
+
+    let h = canvas.height;
+    let mid = h / 2;
+    let step = canvas.width / (N - 1);
+
+    // 绘制波形
+    ctx.strokeStyle = '#58a6ff';
+    ctx.lineWidth = 3;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    
+    for (let i = 0; i < N; i++) {
+        let x = i * step;
+        let y = mid - values[i];
+        if (i===0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    requestAnimationFrame(draw);
+}
+
+function updateStatusDisplay() {
+    statusText.innerText = isPaused ? "系统状态: ⏸ 已暂停" : "系统状态: ▶ 运行中";
+    btnPause.innerText = isPaused ? "▶ 继续" : "⏸ 暂停";
+    btnPause.style.background = isPaused ? "#238636" : "#e3b341"; // 绿色为继续，黄色为暂停
+    btnPause.style.color = isPaused ? "#fff" : "#000";
+}
+
+// --- 事件监听 ---
+
+// 阻尼调节
+dampingSlider.oninput = function() {
+    let val = parseFloat(this.value);
+    dampingVal.innerText = val + "%";
+    
+    // 将 0-100 的滑块值映射为 1.0 - 0.9 的阻尼系数
+    // 0% -> 1.0 (无损耗)
+    // 100% -> ~0.9 (强阻尼)
+    dampingFactor = 1.0 - (val / 1000); 
+
+    if (val === 0) dampingText.innerText = "阻尼: 0% (理论无损耗)";
+    else dampingText.innerText = "阻尼: " + val + "%";
+};
+
+// 波速调节
+speedSlider.oninput = function() {
+    waveSpeedSq = parseFloat(this.value);
+};
+
+// 暂停按钮
+btnPause.onclick = function() {
+    isPaused = !isPaused;
+    updateStatusDisplay();
+};
+
+// 波源按钮
+document.getElementById('btnPulse').onclick = () => { 
+    isPulse = true; 
+    pulseType = 'gaussian'; 
+    isSine = false; 
+    time = 0; 
+    if(isPaused) btnPause.click(); // 如果暂停中，自动开始
+};
+
+document.getElementById('btnSquare').onclick = () => { 
+    isPulse = true; 
+    pulseType = 'square'; 
+    isSine = false; 
+    time = 0; 
+    if(isPaused) btnPause.click();
+};
+
+document.getElementById('btnSine').onclick = function() { 
+    isSine = !isSine; 
+    isPulse = false;
+    this.innerText = isSine ? "关闭 正弦波" : "开启 正弦波";
+    if(isSine && isPaused) btnPause.click();
+};
+
+document.getElementById('btnReset').onclick = () => {
+    init();
+    btnSine.innerText = "开启 正弦波";
+};
+
+document.getElementById('frequency').oninput = function() { 
+    frequency = parseFloat(this.value); 
+};
+
+// 启动
+init();
+setInterval(updatePhysics, 16);
+draw();
+
+</script>
+</body>
+</html>

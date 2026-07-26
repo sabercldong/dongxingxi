@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>宇宙速度演示 (修正版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #000; }
+        canvas { display: block; }
+        
+        /* 右侧控制面板 - 增加滚轮支持 */
+        #ui-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 300px;
+            height: 100vh;
+            background: rgba(20, 24, 35, 0.9);
+            color: #e0e0e0;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto; /* 允许滚动 */
+            border-left: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+        }
+
+        h2 { margin: 0 0 10px 0; color: #4facfe; font-size: 1.4em; border-bottom: 2px solid #4facfe; padding-bottom: 10px; }
+        h3 { margin: 0 0 10px 0; color: #ddd; font-size: 1.1em; }
+        
+        .control-group { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+        
+        label { display: block; margin-bottom: 8px; font-size: 0.9em; color: #aaa; }
+        
+        /* 按钮样式 */
+        button {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 8px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+            font-size: 0.95em;
+        }
+        .btn-primary { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: #000; }
+        .btn-primary:hover { opacity: 0.9; transform: scale(1.02); }
+        
+        .btn-warning { background: #ff9a9e; color: #4a0000; }
+        .btn-success { background: #84fab0; color: #004d26; }
+        
+        .btn-preset { 
+            background: #333; 
+            color: #fff; 
+            border: 1px solid #555;
+            font-size: 0.85em; 
+            margin-top: 5px;
+        }
+        .btn-preset:hover { background: #555; border-color: #888; }
+
+        /* 滑块样式 */
+        input[type=range] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #4facfe; font-weight: bold; font-family: monospace; }
+
+        /* 左上角图表容器 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 400px;
+            height: 260px;
+            background: rgba(30, 30, 40, 0.95);
+            border: 1px solid #555;
+            border-radius: 8px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5);
+            z-index: 100;
+            padding: 10px;
+            cursor: move; 
+            color: white;
+            transition: opacity 0.3s;
+        }
+        
+        #chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 0.85em;
+            color: #aaa;
+            border-bottom: 1px solid #555;
+            padding-bottom: 5px;
+            user-select: none;
+        }
+        
+        #toggle-chart-btn { cursor: pointer; padding: 0 5px; }
+        #toggle-chart-btn:hover { color: white; }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>📊 速度(v) / 距离(d) 监控</span>
+            <span id="toggle-chart-btn" title="最小化">➖</span>
+        </div>
+        <div style="position: relative; height: 200px; width: 100%">
+            <canvas id="velocityChart"></canvas>
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h2>🚀 宇宙速度模拟</h2>
+        
+        <div class="control-group">
+            <h3>运行控制</h3>
+            <button id="btn-start" class="btn-primary">▶ 开始运行</button>
+            <button id="btn-pause" class="btn-warning">⏸ 暂停</button>
+            <button id="btn-reset" class="btn-success">↺ 还原 / 重置</button>
+        </div>
+
+        <div class="control-group">
+            <h3>发射参数设定</h3>
+            <label>初速度 v₀ (km/s) <span id="vel-val" class="value-display">0.0</span></label>
+            <input type="range" id="speed-slider" min="0" max="15" step="0.1" value="0">
+            
+            <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 10px;">
+                <button class="btn-preset" onclick="setPreset(7.9)">设定为 7.9 km/s (第一宇宙速度)</button>
+                <button class="btn-preset" onclick="setPreset(11.2)">设定为 11.2 km/s (第二宇宙速度)</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>视图设置</h3>
+            <label style="cursor: pointer;">
+                <input type="checkbox" id="show-chart-check" checked> 显示图表
+            </label>
+             <label style="cursor: pointer;">
+                <input type="checkbox" id="follow-cam"> 镜头跟随卫星
+            </label>
+        </div>
+
+        <div style="font-size: 0.8em; color: #888; border-top: 1px solid #444; padding-top: 10px;">
+            <p><strong>物理说明：</strong></p>
+            <ul style="padding-left: 20px; margin: 5px 0;">
+                <li><strong>7.9 km/s:</strong> 贴地环绕飞行</li>
+                <li><strong>11.2 km/s:</strong> 脱离地球引力</li>
+                <li>地球半径设定: R=10单位</li>
+                <li>引力参数已根据 R=10, v=7.9 修正</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // --- 全局变量与常量 ---
+        // 为了让 v=7.9 成为环绕速度，我们需要反推引力常数 GM
+        // 公式: v = sqrt(GM / R)  =>  GM = v^2 * R
+        const EARTH_RADIUS = 10;
+        const V1 = 7.9; // 用户指定的第一宇宙速度
+        const GM = V1 * V1 * EARTH_RADIUS; // 计算出虚拟世界的引力常数: 7.9^2 * 10 ≈ 624.1
+
+        let state = {
+            running: false,
+            paused: false,
+            pos: new THREE.Vector3(EARTH_RADIUS + 0.1, 0, 0), // 初始位置 (略高于地面防止摩擦)
+            vel: new THREE.Vector3(0, 0, 0),
+            trailIndex: 0,
+            time: 0
+        };
+
+        // --- 1. Three.js 场景初始化 ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x020205); // 深邃太空黑
+        scene.fog = new THREE.FogExp2(0x020205, 0.002);
+
+        const camera = new THREE.PerspectiveCamera(45, (window.innerWidth - 300) / window.innerHeight, 0.1, 2000);
+        camera.position.set(0, 40, 60);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth - 300, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        // --- 2. 控制器 ---
+        const OrbitControls = THREE.OrbitControls || window.OrbitControls;
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // --- 3. 物体创建 ---
+        
+        // 灯光
+        const ambientLight = new THREE.AmbientLight(0x333333);
+        scene.add(ambientLight);
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        sunLight.position.set(50, 20, 30);
+        scene.add(sunLight);
+
+        // 地球
+        const earthGeo = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
+        const earthMat = new THREE.MeshPhongMaterial({
+            color: 0x1E90FF,
+            emissive: 0x000022,
+            specular: 0x111111,
+            shininess: 10,
+            wireframe: false,
+            transparent: true,
+            opacity: 0.9
+        });
+        const earth = new THREE.Mesh(earthGeo, earthMat);
+        scene.add(earth);
+
+        // 经纬网格 (装饰用)
+        const gridHelper = new THREE.WireframeGeometry(earthGeo);
+        const gridMat = new THREE.LineBasicMaterial({ color: 0x4444ff, transparent: true, opacity: 0.15 });
+        const grid = new THREE.LineSegments(gridHelper, gridMat);
+        earth.add(grid);
+
+        // 卫星
+        const satGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+        const satMat = new THREE.MeshPhongMaterial({ color: 0xff3333, emissive: 0x440000 });
+        const satellite = new THREE.Mesh(satGeo, satMat);
+        scene.add(satellite);
+
+        // 轨迹线 (使用 BufferGeometry 提高性能)
+        const MAX_POINTS = 2000;
+        const trailPositions = new Float32Array(MAX_POINTS * 3);
+        const trailGeo = new THREE.BufferGeometry();
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+        const trailMat = new THREE.LineBasicMaterial({ color: 0xffff00, linewidth: 2 });
+        const trailLine = new THREE.Line(trailGeo, trailMat);
+        trailLine.frustumCulled = false;
+        scene.add(trailLine);
+
+        // --- 4. Chart.js 图表逻辑 ---
+        let chartInstance;
+        const ctx = document.getElementById('velocityChart').getContext('2d');
+        
+        function initChart() {
+            if (chartInstance) chartInstance.destroy();
+            
+            // 渐变色填充
+            const gradient = ctx.createLinearGradient(0, 0, 0, 200);
+            gradient.addColorStop(0, 'rgba(75, 192, 192, 0.5)');
+            gradient.addColorStop(1, 'rgba(75, 192, 192, 0)');
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '速度 (km/s)',
+                        data: [],
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: gradient,
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.4,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: {
+                        x: { display: false },
+                        y: { 
+                            beginAtZero: true, 
+                            grid: { color: 'rgba(255,255,255,0.1)' },
+                            ticks: { color: '#aaa' }
+                        }
+                    },
+                    plugins: {
+                        legend: { labels: { color: '#fff' } }
+                    }
+                }
+            });
+        }
+        initChart();
+
+        // --- 5. 交互与UI ---
+        const slider = document.getElementById('speed-slider');
+        const velDisplay = document.getElementById('vel-val');
+
+        slider.addEventListener('input', (e) => {
+            velDisplay.innerText = parseFloat(e.target.value).toFixed(1);
+            if (!state.running) {
+                // 如果还没开始跑，预设速度方向为Z轴负方向(切线)
+                state.vel.set(0, 0, -parseFloat(e.target.value));
+            }
+        });
+
+        window.setPreset = function(val) {
+            resetSim(); // 先重置
+            slider.value = val;
+            velDisplay.innerText = val.toFixed(1);
+            state.vel.set(0, 0, -val);
+            // 自动开始
+            startSim();
+        };
+
+        const btnStart = document.getElementById('btn-start');
+        const btnPause = document.getElementById('btn-pause');
+        const btnReset = document.getElementById('btn-reset');
+
+        btnStart.onclick = startSim;
+        btnPause.onclick = () => { if(state.running) state.paused = !state.paused; };
+        btnReset.onclick = resetSim;
+
+        function startSim() {
+            if (!state.running) {
+                state.running = true;
+                // 确保使用当前滑块的值
+                const v = parseFloat(slider.value);
+                if (state.vel.lengthSq() === 0 && v > 0) {
+                    state.vel.set(0, 0, -v);
+                }
+            }
+            state.paused = false;
+        }
+
+        function resetSim() {
+            state.running = false;
+            state.paused = false;
+            state.time = 0;
+            
+            // 重置位置
+            state.pos.set(EARTH_RADIUS + 0.1, 0, 0);
+            state.vel.set(0, 0, 0); // 速度归零
+            satellite.position.copy(state.pos);
+            satellite.rotation.set(0,0,0);
+            
+            // 重置滑块显示 (但不一定重置滑块值，方便用户调试)
+            // slider.value = 0; 
+            // velDisplay.innerText = "0.0";
+
+            // 重置轨迹
+            state.trailIndex = 0;
+            trailPositions.fill(0);
+            trailGeo.attributes.position.needsUpdate = true;
+            trailLine.geometry.setDrawRange(0, 0);
+
+            // 重置图表
+            chartInstance.data.labels = [];
+            chartInstance.data.datasets[0].data = [];
+            chartInstance.update();
+        }
+
+        // 拖动功能
+        const chartWrapper = document.getElementById('chart-wrapper');
+        const toggleBtn = document.getElementById('toggle-chart-btn');
+        const chartContent = chartWrapper.querySelector('div:nth-child(2)');
+        let isDragging = false, startX, startY, initialLeft, initialTop;
+
+        // 最小化/还原
+        toggleBtn.onclick = () => {
+            if (chartContent.style.display === 'none') {
+                chartContent.style.display = 'block';
+                chartWrapper.style.height = '260px';
+                toggleBtn.innerText = '➖';
+            } else {
+                chartContent.style.display = 'none';
+                chartWrapper.style.height = '40px';
+                toggleBtn.innerText = '⬜';
+            }
+        };
+
+        // 拖拽
+        chartWrapper.onmousedown = (e) => {
+            if(e.target === toggleBtn) return; 
+            isDragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            initialLeft = chartWrapper.offsetLeft;
+            initialTop = chartWrapper.offsetTop;
+            e.preventDefault(); // 防止选中文字
+        };
+        
+        document.onmouseup = () => isDragging = false;
+        document.onmousemove = (e) => {
+            if (isDragging) {
+                chartWrapper.style.left = (initialLeft + e.clientX - startX) + 'px';
+                chartWrapper.style.top = (initialTop + e.clientY - startY) + 'px';
+            }
+        };
+
+        // 隐藏/显示Checkbox
+        document.getElementById('show-chart-check').addEventListener('change', (e) => {
+            chartWrapper.style.display = e.target.checked ? 'block' : 'none';
+        });
+
+        // --- 6. 物理循环 ---
+        const clock = new THREE.Clock();
+        const dt = 0.03; // 时间步长
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (state.running && !state.paused) {
+                const rVec = state.pos.clone();
+                const r = rVec.length();
+
+                // 简单的碰撞检测
+                if (r < EARTH_RADIUS) {
+                    state.running = false;
+                    alert("⚠️ 卫星坠毁！速度不足以抵抗引力。");
+                } else {
+                    // 万有引力: a = -GM/r^3 * rVec
+                    const aMag = GM / (r * r * r);
+                    const acc = rVec.clone().multiplyScalar(-aMag);
+
+                    // 速度更新 (半隐式欧拉，比标准欧拉稍微稳定一点)
+                    state.vel.add(acc.clone().multiplyScalar(dt));
+                    state.pos.add(state.vel.clone().multiplyScalar(dt));
+
+                    // 更新物体
+                    satellite.position.copy(state.pos);
+                    satellite.lookAt(new THREE.Vector3(0,0,0));
+
+                    // 镜头跟随 (可选)
+                    if(document.getElementById('follow-cam').checked) {
+                        controls.target.copy(satellite.position);
+                    }
+
+                    // 轨迹绘制
+                    if (state.trailIndex < MAX_POINTS) {
+                        const idx = state.trailIndex * 3;
+                        trailPositions[idx] = state.pos.x;
+                        trailPositions[idx+1] = state.pos.y;
+                        trailPositions[idx+2] = state.pos.z;
+                        state.trailIndex++;
+                        trailLine.geometry.setDrawRange(0, state.trailIndex);
+                        trailGeo.attributes.position.needsUpdate = true;
+                    }
+
+                    // 图表更新 (频率限制，每10帧画一次)
+                    state.time++;
+                    if (state.time % 10 === 0 && document.getElementById('show-chart-check').checked) {
+                        const v = state.vel.length();
+                        if (chartInstance.data.labels.length > 40) {
+                            chartInstance.data.labels.shift();
+                            chartInstance.data.datasets[0].data.shift();
+                        }
+                        chartInstance.data.labels.push('');
+                        chartInstance.data.datasets[0].data.push(v);
+                        chartInstance.update('none');
+                    }
+                }
+            }
+
+            // 地球自转装饰
+            earth.rotation.y += 0.0005;
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // 窗口自适应
+        window.addEventListener('resize', () => {
+            camera.aspect = (window.innerWidth - 300) / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth - 300, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>

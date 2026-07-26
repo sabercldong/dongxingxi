@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>法拉第圆盘 (辐条+灯泡增强版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #ffffff; font-family: 'Segoe UI', sans-serif; color: #333; }
+        
+        #error-box {
+            display: none; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(200, 0, 0, 0.95); color: white; padding: 20px;
+            border: 1px solid white; border-radius: 8px; z-index: 9999; max-width: 80%;
+            box-shadow: 0 0 30px rgba(255,0,0,0.6);
+        }
+
+        #container { width: 100vw; height: 100vh; display: block; }
+
+        #ui-panel {
+            position: absolute; top: 0; right: 0;
+            width: 280px; height: 100%;
+            background: rgba(245, 245, 250, 0.95);
+            color: #333; padding: 20px;
+            box-sizing: border-box;
+            border-left: 1px solid #ccc;
+            display: flex; flex-direction: column;
+            gap: 15px; overflow-y: auto;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.05);
+        }
+
+        h2 { margin: 0 0 10px 0; font-size: 18px; color: #0056b3; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+        .control-group { margin-bottom: 10px; }
+        label { display: block; margin-bottom: 5px; font-size: 14px; color: #555; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .val-display { float: right; color: #0056b3; font-weight: bold; }
+
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s; color:white;}
+        #btn-start { background-color: #28a745; }
+        #btn-pause { background-color: #ffc107; color: black; }
+        #btn-reset { background-color: #dc3545; }
+        button:hover { filter: brightness(1.1); box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        
+        #chart-container {
+            position: absolute; top: 20px; left: 20px;
+            width: 420px; height: 260px;
+            background: rgba(255, 255, 255, 0.9);
+            border: 1px solid #ccc;
+            border-radius: 8px; padding: 10px;
+            display: flex; flex-direction: column;
+            cursor: move;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        canvas { width: 100% !important; height: 100% !important; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+
+    <div id="error-box">
+        <h3>程序运行出错</h3>
+        <div id="error-msg" style="font-family: monospace; background: #330000; padding: 10px; margin-top:10px;"></div>
+    </div>
+
+    <div id="container"></div>
+
+    <div id="chart-container">
+        <div style="color:#666; font-size:12px; text-align:center; margin-bottom:5px; user-select:none;">:: 按住拖动 · 感应电动势 (V) ::</div>
+        <canvas id="voltageChart"></canvas>
+    </div>
+
+    <div id="ui-panel">
+        <h2>控制面板</h2>
+        <div class="control-group">
+            <label>转速 (ω) <span id="val-speed" class="val-display">5.0</span></label>
+            <input type="range" id="input-speed" min="-20" max="20" step="0.5" value="5">
+        </div>
+        <div class="control-group">
+            <label>磁场强度 (B) <span id="val-magnet" class="val-display">1.0</span></label>
+            <input type="range" id="input-magnet" min="0" max="5" step="0.1" value="1">
+        </div>
+        <div class="btn-group">
+            <button id="btn-start">开始</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">还原</button>
+        </div>
+        <div style="margin-top:20px; padding-top:15px; border-top:1px solid #ddd;">
+            <label style="cursor:pointer;"><input type="checkbox" id="check-chart" checked> 显示图表</label>
+        </div>
+        <div style="margin-top:auto; font-size:12px; color:#888;">
+            <p>更新说明：<br>1. 辐条加黑加厚，旋转清晰。<br>2. 灯泡增加真实光源效果。</p>
+        </div>
+    </div>
+
+    <script>
+        window.onerror = function(message, source, lineno) {
+            document.getElementById('error-box').style.display = 'block';
+            document.getElementById('error-msg').innerHTML = "错误: " + message + "<br>行号: " + lineno;
+        };
+    </script>
+
+    <script src="chart.min.js"></script>
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+
+    <script>
+        if (typeof THREE === 'undefined') throw new Error("three.min.js 加载失败");
+        let isChartLoaded = (typeof Chart !== 'undefined');
+
+        let scene, camera, renderer, controls;
+        let discMesh, loadMesh, bulbLight; // 新增 bulbLight
+        let isRunning = true;
+        let physicsSpeed = 5.0;
+        let magneticField = 1.0;
+        let time = 0;
+        let voltageChart;
+        
+        const chartDiv = document.getElementById('chart-container');
+        let isDragging = false, dragX = 0, dragY = 0;
+
+        initThree();
+        initModel();
+        if (isChartLoaded) initChart();
+        initEvents();
+        animate();
+
+        function initThree() {
+            const container = document.getElementById('container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(14, 9, 16); 
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            if (THREE.OrbitControls) controls = new THREE.OrbitControls(camera, renderer.domElement);
+            else if (window.OrbitControls) controls = new window.OrbitControls(camera, renderer.domElement);
+            if (controls) { controls.enableDamping = true; controls.dampingFactor = 0.05; }
+
+            // 环境光稍微调暗一点，为了凸显灯泡发光的效果
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.2); 
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            dirLight.position.set(5, 10, 5);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            const grid = new THREE.GridHelper(30, 30, 0xcccccc, 0xeeeeee);
+            grid.position.y = -4;
+            scene.add(grid);
+        }
+
+        function initModel() {
+            const copperMat = new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.8, roughness: 0.3 });
+            const plasticMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+            const magnetRed = new THREE.MeshStandardMaterial({ color: 0xcc0000, transparent: true, opacity: 0.9 });
+            const magnetBlue = new THREE.MeshStandardMaterial({ color: 0x0000cc, transparent: true, opacity: 0.4 });
+            // 【新】黑色材质用于辐条，对比度高
+            const blackMat = new THREE.MeshBasicMaterial({ color: 0x000000 }); 
+
+            // 1. 圆盘
+            discMesh = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 0.2, 64), copperMat);
+            discMesh.rotation.x = Math.PI / 2;
+            discMesh.castShadow = true;
+            scene.add(discMesh);
+
+            // 【关键修改】添加高对比度辐条
+            const numSpokes = 8;
+            // 辐条几何体：稍微加厚一点，确保不闪烁
+            const spokeGeo = new THREE.BoxGeometry(3.9, 0.15, 0.05); 
+            
+            for (let i = 0; i < numSpokes; i++) {
+                const spoke = new THREE.Mesh(spokeGeo, blackMat);
+                const angle = (i / numSpokes) * Math.PI * 2;
+                spoke.rotation.y = angle; 
+                // 【关键】Z轴位置设为 0.11，因为圆盘厚度一半是0.1，这样辐条就浮在表面了
+                spoke.position.z = 0.11; 
+                discMesh.add(spoke); 
+                
+                // 背面也加一下
+                const spokeBack = new THREE.Mesh(spokeGeo, blackMat);
+                spokeBack.rotation.y = angle;
+                spokeBack.position.z = -0.11;
+                discMesh.add(spokeBack);
+            }
+            
+            // 中心盖帽
+            const centerCap = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.25, 32), plasticMat);
+            centerCap.rotation.x = Math.PI/2;
+            scene.add(centerCap);
+
+            // 3. 磁铁 (宽间距)
+            const magGeo = new THREE.BoxGeometry(5, 5, 1);
+            const mBack = new THREE.Mesh(magGeo, magnetRed);
+            mBack.position.set(0, 0, -3.0);
+            scene.add(mBack);
+            const mFront = new THREE.Mesh(magGeo, magnetBlue);
+            mFront.position.set(0, 0, 3.0);
+            scene.add(mFront);
+
+            // 4. 支架
+            const base = new THREE.Mesh(new THREE.BoxGeometry(4, 1, 10), plasticMat);
+            base.position.set(0, -4.5, 0);
+            scene.add(base);
+            const pillarGeo = new THREE.BoxGeometry(1, 4.5, 1);
+            const p1 = new THREE.Mesh(pillarGeo, plasticMat); p1.position.set(0, -2.25, -4.5); scene.add(p1);
+            const p2 = new THREE.Mesh(pillarGeo, plasticMat); p2.position.set(0, -2.25, 4.5); scene.add(p2);
+
+            // 5. 电路与灯泡
+            const brush = new THREE.Mesh(new THREE.BoxGeometry(1, 0.5, 1), plasticMat);
+            brush.position.set(0, 4.2, 0);
+            scene.add(brush);
+
+            const wirePoints = [
+                new THREE.Vector3(0, 0, 0.2),
+                new THREE.Vector3(0, 0, 3.5),
+                new THREE.Vector3(4.0, 0, 3.5),
+                new THREE.Vector3(4.0, 4.5, 3.5),
+                new THREE.Vector3(0, 4.5, 0)
+            ];
+            const wireGeo = new THREE.BufferGeometry().setFromPoints(wirePoints);
+            const wire = new THREE.Line(wireGeo, new THREE.LineBasicMaterial({ color: 0xcccc00, linewidth: 2 }));
+            scene.add(wire);
+
+            // 【关键修改】灯泡材质与真实光源
+            const bulbGeo = new THREE.SphereGeometry(0.6, 32, 32);
+            const bulbMat = new THREE.MeshStandardMaterial({ 
+                color: 0x333333, // 默认颜色是深灰（灭灯状态）
+                emissive: 0x000000,
+                emissiveIntensity: 0.0,
+                roughness: 0.2
+            });
+            loadMesh = new THREE.Mesh(bulbGeo, bulbMat);
+            loadMesh.position.set(4.0, 2.5, 3.5);
+            scene.add(loadMesh);
+
+            // 添加一个真实的点光源在灯泡里面
+            bulbLight = new THREE.PointLight(0xffaa00, 0, 15); // 颜色橙黄，初始强度0，距离15
+            loadMesh.add(bulbLight); // 绑定在灯泡模型上
+        }
+
+        function initChart() {
+            if (!isChartLoaded) return;
+            const ctx = document.getElementById('voltageChart').getContext('2d');
+            voltageChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(40).fill(''),
+                    datasets: [{
+                        label: 'E',
+                        borderColor: '#007bff',
+                        borderWidth: 2,
+                        backgroundColor: 'rgba(0, 123, 255, 0.1)',
+                        fill: true,
+                        data: Array(40).fill(0),
+                        pointRadius: 0,
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    scales: {
+                        y: { suggestedMin: -5, suggestedMax: 5, grid: { color: '#ddd' }, ticks: { color: '#666' } },
+                        x: { display: false }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function initEvents() {
+            document.getElementById('input-speed').oninput = (e) => { 
+                physicsSpeed = parseFloat(e.target.value); 
+                document.getElementById('val-speed').innerText = physicsSpeed.toFixed(1);
+            };
+            document.getElementById('input-magnet').oninput = (e) => {
+                magneticField = parseFloat(e.target.value);
+                document.getElementById('val-magnet').innerText = magneticField.toFixed(1);
+            };
+            document.getElementById('btn-pause').onclick = () => isRunning = false;
+            document.getElementById('btn-start').onclick = () => isRunning = true;
+            document.getElementById('btn-reset').onclick = () => { 
+                isRunning = false; physicsSpeed=5; magneticField=1;
+                document.getElementById('input-speed').value=5;
+                document.getElementById('val-speed').innerText="5.0";
+                document.getElementById('input-magnet').value=1;
+                document.getElementById('val-magnet').innerText="1.0";
+                discMesh.rotation.y = 0;
+            };
+            document.getElementById('check-chart').onchange = (e) => {
+                chartDiv.classList.toggle('hidden', !e.target.checked);
+            };
+
+            chartDiv.onmousedown = (e) => { isDragging=true; dragX=e.clientX-chartDiv.offsetLeft; dragY=e.clientY-chartDiv.offsetTop; };
+            window.onmousemove = (e) => { 
+                if(isDragging) {
+                    chartDiv.style.left=(e.clientX-dragX)+'px';
+                    chartDiv.style.top=(e.clientY-dragY)+'px';
+                }
+            };
+            window.onmouseup = () => isDragging=false;
+            
+            window.onresize = () => {
+                camera.aspect = window.innerWidth/window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            };
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+
+            let voltage = 0;
+            if (isRunning) {
+                const speed = physicsSpeed * 0.05;
+                if(discMesh) discMesh.rotation.y += speed;
+
+                voltage = physicsSpeed * magneticField;
+                if(Math.abs(voltage) > 0.1) voltage += (Math.random()-0.5)*0.2;
+            }
+
+            // 【关键修复】灯泡亮度与颜色变化
+            if (loadMesh && bulbLight) {
+                // 计算亮度系数 (0 ~ 1)
+                // 除以 8 意味着大概电压到 8V 时达到最大亮度
+                let brightness = Math.min(Math.abs(voltage) / 8.0, 1.0);
+                
+                // 1. 设置自发光颜色 (从黑到亮黄)
+                const glowColor = new THREE.Color();
+                glowColor.setHSL(0.12, 1.0, 0.5); // 橙黄色
+                loadMesh.material.emissive = glowColor;
+                loadMesh.material.emissiveIntensity = brightness * 2.0; // 增强自发光强度
+
+                // 2. 设置本体颜色 (灭灯时深灰，亮灯时浅黄)
+                loadMesh.material.color.setHSL(0.12, 1.0, 0.1 + brightness * 0.8);
+
+                // 3. 设置真实光源强度 (照亮周围)
+                bulbLight.intensity = brightness * 4.0;
+            }
+
+            time++;
+            if (time % 3 === 0 && isChartLoaded && voltageChart && document.getElementById('check-chart').checked) {
+                const data = voltageChart.data.datasets[0].data;
+                data.push(voltage);
+                data.shift();
+                voltageChart.update();
+            }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

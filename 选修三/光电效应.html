@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>光电效应演示 (Photoelectric Effect)</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: #1e1e1e;
+            --text-main: #e0e0e0;
+            --text-sub: #a0a0a0;
+            --accent: #4fc3f7;
+            --danger: #ef5350;
+            --success: #66bb6a;
+            --border: #333;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* 左侧演示区 */
+        #demo-area {
+            flex: 1;
+            position: relative;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair;
+        }
+
+        /* 顶部覆盖数据显示 */
+        .hud-display {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            display: flex;
+            gap: 20px;
+        }
+
+        .hud-box {
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px 15px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+
+        .hud-value {
+            font-size: 1.4rem;
+            font-weight: bold;
+            font-family: monospace;
+        }
+
+        .hud-label {
+            font-size: 0.8rem;
+            color: var(--text-sub);
+        }
+
+        /* 右侧控制区 */
+        #sidebar {
+            width: 380px;
+            min-width: 350px;
+            background-color: var(--panel-bg);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            padding: 20px;
+            box-shadow: -4px 0 10px rgba(0,0,0,0.3);
+        }
+
+        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 2px solid var(--border); padding-bottom: 10px; }
+        
+        .control-group {
+            background: rgba(255,255,255,0.03);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid var(--border);
+        }
+
+        .control-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-weight: bold;
+            font-size: 0.9rem;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            margin: 5px 0;
+        }
+
+        .value-display {
+            color: var(--accent);
+            font-family: monospace;
+        }
+
+        select {
+            width: 100%;
+            padding: 8px;
+            background: #2c2c2c;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 4px;
+            margin-top: 5px;
+        }
+
+        /* 原理计算区 */
+        .calc-panel {
+            font-family: monospace;
+            font-size: 0.9rem;
+            color: var(--text-sub);
+        }
+
+        .calc-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+            text-align: center;
+            width: 100%;
+            margin-top: 10px;
+        }
+        .status-emit { background: rgba(76, 175, 80, 0.2); color: #81c784; border: 1px solid #4caf50; }
+        .status-stop { background: rgba(244, 67, 54, 0.2); color: #e57373; border: 1px solid #ef5350; }
+
+        /* 颜色预览条 */
+        #wavelength-bar {
+            height: 6px;
+            width: 100%;
+            border-radius: 3px;
+            margin-top: 8px;
+            background: linear-gradient(to right, #500050, #0000ff, #00ff00, #ffff00, #ff0000);
+        }
+
+        /* 详情折叠与数学公式 */
+        details {
+            margin-top: 10px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 6px;
+            padding: 10px;
+        }
+        summary { cursor: pointer; color: var(--accent); font-weight: bold; outline: none; }
+        .explanation { margin-top: 10px; font-size: 0.85rem; line-height: 1.5; color: var(--text-sub); }
+        
+        /* 简单的数学公式样式 */
+        .math-block {
+            background: rgba(255,255,255,0.05);
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            margin: 8px 0;
+            font-size: 1.1em;
+            color: #fff;
+        }
+        .math-inline {
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            padding: 0 2px;
+            color: #ddd;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="demo-area">
+        <canvas id="simCanvas"></canvas>
+        
+        <div class="hud-display">
+            <div class="hud-box">
+                <div class="hud-label">光电流 (Current)</div>
+                <div class="hud-value" id="ammeter-display" style="color: #4fc3f7;">0.00</div>
+                <div class="hud-label">μA</div>
+            </div>
+            <div class="hud-box">
+                <div class="hud-label">电子最大动能 (Kmax)</div>
+                <div class="hud-value" id="ke-display" style="color: #ffb74d;">0.00</div>
+                <div class="hud-label">eV</div>
+            </div>
+        </div>
+    </div>
+
+    <aside id="sidebar">
+        
+        <div class="control-group">
+            <div class="control-header">
+                <span>🔦 光源设置 (Light)</span>
+            </div>
+            
+            <label>波长 (Wavelength): <span id="lambda-val" class="value-display">400</span> nm</label>
+            <input type="range" id="slider-lambda" min="200" max="800" step="5" value="400">
+            <div id="wavelength-bar"></div>
+            
+            <label style="margin-top:15px; display:block;">光强 (Intensity): <span id="intensity-val" class="value-display">50</span>%</label>
+            <input type="range" id="slider-intensity" min="0" max="100" step="1" value="50">
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span>💿 阴极材料 (Target Metal)</span>
+            </div>
+            <label>选择金属 / 逸出功 (Φ)</label>
+            <select id="metal-select">
+                <option value="2.14">铯 (Cs) - 2.14 eV</option>
+                <option value="2.30" selected>钠 (Na) - 2.30 eV</option>
+                <option value="2.87">钙 (Ca) - 2.87 eV</option>
+                <option value="4.28">锌 (Zn) - 4.28 eV</option>
+                <option value="4.50">铜 (Cu) - 4.50 eV</option>
+                <option value="5.10">金 (Au) - 5.10 eV</option>
+                <option value="custom">自定义...</option>
+            </select>
+            
+            <div id="custom-work-container" style="margin-top:10px; display:none;">
+                <label>自定义 Φ: <span id="work-val" class="value-display">2.00</span> eV</label>
+                <input type="range" id="slider-work" min="1.0" max="6.0" step="0.05" value="2.30">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">
+                <span>⚡ 电路电压 (Voltage)</span>
+                <span id="voltage-val" class="value-display">0.00 V</span>
+            </div>
+            <input type="range" id="slider-voltage" min="-5.00" max="5.00" step="0.1" value="0.00">
+            <div style="font-size:0.75rem; color:#666; display:flex; justify-content:space-between;">
+                <span>反向截止 (-V)</span>
+                <span>加速 (+V)</span>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="control-header">📊 能量分析</div>
+            <div class="calc-panel">
+                <div class="calc-row">
+                    <span>光子能量 (hν):</span>
+                    <span id="calc-e-photon" style="color:var(--accent)">3.10 eV</span>
+                </div>
+                <div class="calc-row">
+                    <span>逸出功 (Φ):</span>
+                    <span id="calc-work-func">2.30 eV</span>
+                </div>
+                <div class="calc-row" style="border-top: 1px solid #444; margin-top:5px; padding-top:5px;">
+                    <span>余下能量:</span>
+                    <span id="calc-diff">0.80 eV</span>
+                </div>
+            </div>
+            <div id="emission-status" class="status-badge status-emit">发生光电效应</div>
+        </div>
+
+        <details>
+            <summary>📖 物理原理说明</summary>
+            <div class="explanation">
+                <p><strong>1. 爱因斯坦光电方程：</strong><br>
+                <div class="math-block">
+                    K<sub>max</sub> = hν - Φ
+                </div>
+                即：电子最大动能 = 光子能量 - 逸出功。</p>
+                
+                <p><strong>2. 截止电压 (Stopping Potential)：</strong><br>
+                如果施加反向电压 <span class="math-inline">V<sub>stop</sub></span>，使得：
+                <div class="math-block">
+                    e · V<sub>stop</sub> = K<sub>max</sub>
+                </div>
+                此时电流将降为零。</p>
+
+                <p><strong>3. 实验现象：</strong><br>
+                * <strong>红限频率：</strong>若光子能量 <span class="math-inline">hν < Φ</span>，无论光多强，都没有电子逸出。<br>
+                * <strong>光强：</strong>只影响逸出电子的数量（电流大小），不影响电子的速度（能量）。</p>
+            </div>
+        </details>
+
+    </aside>
+
+<script>
+    // 常量定义
+    const HC_CONST = 1239.8; // hc in eV·nm
+
+    // DOM 元素
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // UI Controls
+    const sLambda = document.getElementById('slider-lambda');
+    const sIntensity = document.getElementById('slider-intensity');
+    const sVoltage = document.getElementById('slider-voltage');
+    const sMetal = document.getElementById('metal-select');
+    const sWork = document.getElementById('slider-work');
+    const divCustomWork = document.getElementById('custom-work-container');
+
+    // UI Displays
+    const dispLambda = document.getElementById('lambda-val');
+    const dispInt = document.getElementById('intensity-val');
+    const dispVolt = document.getElementById('voltage-val');
+    const dispWork = document.getElementById('work-val');
+    
+    // Calc Displays
+    const calcEPh = document.getElementById('calc-e-photon');
+    const calcPhi = document.getElementById('calc-work-func');
+    const calcDiff = document.getElementById('calc-diff');
+    const statusBadge = document.getElementById('emission-status');
+    const ammeterDisp = document.getElementById('ammeter-display');
+    const keDisp = document.getElementById('ke-display');
+
+    // 状态变量
+    let state = {
+        lambda: 400, // nm
+        intensity: 50, // %
+        voltage: 0.0, // V
+        workFunction: 2.30, // eV
+        isEmitting: true,
+        photonEnergy: 0,
+        kMax: 0
+    };
+
+    let electrons = [];
+    let currentReading = 0; // 模拟电流读数（平滑处理）
+    let electronCounter = 0; // 用于计算瞬时电流
+
+    // 调整 Canvas 大小
+    let width, height;
+    function resize() {
+        width = canvas.parentElement.clientWidth;
+        height = canvas.parentElement.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // --- 物理计算核心 ---
+    function updatePhysics() {
+        // 1. 获取输入
+        state.lambda = parseInt(sLambda.value);
+        state.intensity = parseInt(sIntensity.value);
+        state.voltage = parseFloat(sVoltage.value);
+
+        // 处理金属选择
+        if (sMetal.value === 'custom') {
+            divCustomWork.style.display = 'block';
+            state.workFunction = parseFloat(sWork.value);
+        } else {
+            divCustomWork.style.display = 'none';
+            state.workFunction = parseFloat(sMetal.value);
+        }
+
+        // 2. 能量计算
+        state.photonEnergy = HC_CONST / state.lambda; // eV
+        let energyDiff = state.photonEnergy - state.workFunction;
+        state.kMax = Math.max(0, energyDiff);
+        
+        // 3. 判断是否发射
+        state.isEmitting = energyDiff > 0;
+
+        // 4. 更新 UI 文本
+        dispLambda.textContent = state.lambda;
+        dispInt.textContent = state.intensity;
+        dispVolt.textContent = (state.voltage > 0 ? "+" : "") + state.voltage.toFixed(2) + " V";
+        dispWork.textContent = state.workFunction.toFixed(2);
+
+        calcEPh.textContent = state.photonEnergy.toFixed(2) + " eV";
+        calcPhi.textContent = state.workFunction.toFixed(2) + " eV";
+        calcDiff.textContent = energyDiff.toFixed(2) + " eV";
+
+        if (state.isEmitting) {
+            statusBadge.className = "status-badge status-emit";
+            statusBadge.textContent = "光电效应发生中";
+            keDisp.textContent = state.kMax.toFixed(2);
+        } else {
+            statusBadge.className = "status-badge status-stop";
+            statusBadge.textContent = "光子能量不足";
+            keDisp.textContent = "0.00";
+        }
+    }
+
+    // --- 动画循环 ---
+    
+    class Electron {
+        constructor(x, y, kMax_eV) {
+            this.x = x;
+            this.y = y;
+            this.vx = 0;
+            this.vy = 0;
+            this.active = true;
+            
+            // 初始动能 (模拟一点随机性，并非所有电子都具有最大动能)
+            // K_initial = 0.8 ~ 1.0 * Kmax
+            const initialKe = kMax_eV * (0.8 + Math.random() * 0.2);
+            
+            // 速度 v 正比于 sqrt(K)
+            // 这是一个视觉模拟速度因子，不是真实物理速度
+            const speedFactor = 4; 
+            const speed = speedFactor * Math.sqrt(initialKe);
+            
+            // 初始方向：主要是向右，带一点随机散射角度
+            const angle = (Math.random() - 0.5) * 1.5; // -45 to 45 degrees
+            this.vx = speed * Math.cos(angle);
+            this.vy = speed * Math.sin(angle);
+        }
+
+        update() {
+            if (!this.active) return;
+
+            // 电场力影响
+            // F = qE, E = U/d
+            // a = F/m -> a 正比于 Voltage
+            // 正电压加速(vx增加)，负电压减速
+            const voltageFactor = 0.2; // 调整加速度灵敏度
+            this.vx += state.voltage * voltageFactor;
+
+            // 位移
+            this.x += this.vx;
+            this.y += this.vy;
+
+            // 边界检测
+            
+            // 1. 到达右极板 (阳极)
+            if (this.x > width * 0.8) {
+                this.active = false;
+                electronCounter++; // 贡献电流
+            }
+
+            // 2. 被反向电压推回左极板 (阴极)
+            if (this.x < width * 0.2) {
+                this.active = false;
+            }
+
+            // 3. 碰到上下壁
+            if (this.y < height * 0.2 || this.y > height * 0.8) {
+                this.active = false;
+            }
+        }
+
+        draw() {
+            if (!this.active) return;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = "#4fc3f7"; // 电子蓝
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = "#4fc3f7";
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.closePath();
+        }
+    }
+
+    // 辅助：波长转颜色
+    function wav2rgba(w, alpha) {
+        let r, g, b;
+        if (w >= 380 && w < 440) { r = -(w - 440) / (440 - 380); g = 0; b = 1; }
+        else if (w >= 440 && w < 490) { r = 0; g = (w - 440) / (490 - 440); b = 1; }
+        else if (w >= 490 && w < 510) { r = 0; g = 1; b = -(w - 510) / (510 - 490); }
+        else if (w >= 510 && w < 580) { r = (w - 510) / (580 - 510); g = 1; b = 0; }
+        else if (w >= 580 && w < 645) { r = 1; g = -(w - 645) / (645 - 580); b = 0; }
+        else if (w >= 645 && w < 781) { r = 1; g = 0; b = 0; }
+        else { r = 0.5; g = 0.5; b = 0.5; } // UV/IR
+        
+        // UV 特殊处理为紫色带白
+        if(w < 380) { r=0.4; g=0; b=0.6; }
+        // IR 特殊处理为暗红
+        if(w > 780) { r=0.5; g=0; b=0; }
+
+        return `rgba(${r*255},${g*255},${b*255},${alpha})`;
+    }
+
+    function animate() {
+        ctx.clearRect(0, 0, width, height);
+
+        // 1. 绘制实验装置背景
+        const plateY = height * 0.25;
+        const plateH = height * 0.5;
+        const cathodeX = width * 0.2;
+        const anodeX = width * 0.8;
+
+        // 绘制真空管 (玻璃罩轮廓)
+        ctx.strokeStyle = "rgba(255,255,255,0.1)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(width/2, height/2, width*0.35, height*0.3, 0, 0, Math.PI*2);
+        ctx.stroke();
+
+        // 绘制阴极 (左侧金属板)
+        ctx.fillStyle = "#aaa";
+        ctx.fillRect(cathodeX - 10, plateY, 20, plateH);
+        ctx.fillStyle = "#fff";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("阴极 (-)", cathodeX - 25, plateY - 10);
+
+        // 绘制阳极 (右侧收集板)
+        ctx.fillStyle = "#aaa";
+        ctx.fillRect(anodeX - 10, plateY, 20, plateH);
+        ctx.fillText("阳极 (+)", anodeX - 10, plateY - 10);
+
+        // 绘制电路连接线
+        ctx.strokeStyle = "#555";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        // 阴极向下
+        ctx.moveTo(cathodeX, plateY + plateH);
+        ctx.lineTo(cathodeX, height - 30);
+        // 阳极向下
+        ctx.moveTo(anodeX, plateY + plateH);
+        ctx.lineTo(anodeX, height - 30);
+        // 底部连接
+        ctx.lineTo(width/2 + 40, height - 30); // 电池右
+        ctx.moveTo(width/2 - 40, height - 30); // 电池左
+        ctx.lineTo(cathodeX, height - 30);
+        ctx.stroke();
+
+        // 绘制电池符号 (根据电压正负翻转)
+        const batX = width / 2;
+        const batY = height - 30;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = state.voltage >= 0 ? "#4caf50" : "#ef5350"; // 绿色正向，红色反向
+        
+        // 长线
+        ctx.beginPath();
+        ctx.moveTo(batX - 10, batY - 10);
+        ctx.lineTo(batX - 10, batY + 10);
+        ctx.stroke();
+        // 短线
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(batX + 10, batY - 5);
+        ctx.lineTo(batX + 10, batY + 5);
+        ctx.stroke();
+        
+        // 绘制电压表数值在电路中
+        ctx.fillStyle = state.voltage >= 0 ? "#4caf50" : "#ef5350";
+        ctx.textAlign = "center";
+        ctx.font = "bold 14px monospace";
+        ctx.fillText(state.voltage >= 0 ? "正向电压" : "反向电压", batX, batY + 25);
+
+
+        // 2. 绘制光束
+        // 光源位置 (左上)
+        const lampX = cathodeX - 50;
+        const lampY = plateY - 50;
+        
+        // 绘制光源本体
+        const lightColor = wav2rgba(state.lambda, 1);
+        const beamColor = wav2rgba(state.lambda, 0.3 * (state.intensity/100));
+        
+        ctx.fillStyle = lightColor;
+        ctx.beginPath();
+        ctx.arc(lampX, lampY, 15, 0, Math.PI*2);
+        ctx.fill();
+
+        // 绘制光锥
+        if (state.intensity > 0) {
+            ctx.fillStyle = beamColor;
+            ctx.beginPath();
+            ctx.moveTo(lampX, lampY);
+            ctx.lineTo(cathodeX + 5, plateY); // 照到板子上部
+            ctx.lineTo(cathodeX + 5, plateY + plateH); // 照到板子下部
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // 3. 产生电子
+        // 发射概率正比于光强
+        // 发射条件：hν > W
+        if (state.isEmitting && state.intensity > 0) {
+            // 每帧发射数量 = intensity * factor
+            const emissionChance = state.intensity / 100; 
+            // 如果 intensity 100, 每一帧大概率发射
+            // 为了视觉效果，我们限制一下最大数量
+            if (Math.random() < emissionChance) {
+                // 随机在板子高度上生成
+                const eY = plateY + Math.random() * plateH;
+                electrons.push(new Electron(cathodeX + 2, eY, state.kMax));
+            }
+        }
+
+        // 4. 更新和绘制电子
+        for (let i = electrons.length - 1; i >= 0; i--) {
+            let e = electrons[i];
+            e.update();
+            e.draw();
+            if (!e.active) {
+                electrons.splice(i, 1);
+            }
+        }
+
+        // 5. 更新电流读数
+        // 简单的低通滤波模拟平滑读数
+        // 如果被截止电压挡住了，current 应该趋近于 0
+        
+        // 实际到达阳极的数量在 electronCounter 中
+        // 我们每一帧读取它，然后重置
+        // 模拟值 = count * factor
+        let instantCurrent = electronCounter * 2.0; 
+        currentReading = currentReading * 0.95 + instantCurrent * 0.05;
+        
+        // 显示逻辑
+        ammeterDisp.textContent = currentReading.toFixed(2);
+        
+        // 重置计数器
+        electronCounter = 0;
+
+        requestAnimationFrame(animate);
+    }
+
+    // 事件监听
+    [sLambda, sIntensity, sVoltage, sMetal, sWork].forEach(el => {
+        el.addEventListener('input', updatePhysics);
+    });
+
+    // 启动
+    updatePhysics();
+    animate();
+
+</script>
+</body>
+</html>

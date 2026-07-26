@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>开普勒第二定律 - 可隐藏图表版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; color: white; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 图表容器 */
+        #chart-wrapper {
+            position: absolute; left: 20px; bottom: 20px; 
+            width: 550px; height: 320px; 
+            background: rgba(0, 0, 0, 0.9); border: 1px solid #555; border-radius: 8px; 
+            display: flex; flex-direction: column; z-index: 100;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.8);
+            transition: opacity 0.3s; /* 添加淡入淡出效果 */
+        }
+
+        #chart-header {
+            padding: 10px; background: #222; border-bottom: 1px solid #444; border-radius: 8px 8px 0 0;
+            cursor: move; display: flex; justify-content: space-between; align-items: center;
+            font-size: 13px; color: #ccc;
+        }
+        #chart-header:hover { background: #333; color: #fff; }
+
+        #chart-body { flex: 1; position: relative; width: 100%; overflow: hidden; padding: 5px; box-sizing: border-box; }
+
+        /* 右侧面板 */
+        #ui-panel {
+            position: absolute; top: 0; right: 0; width: 320px; height: 100%;
+            background: rgba(25, 30, 35, 0.95); border-left: 1px solid #444;
+            padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 15px;
+            overflow-y: auto; z-index: 50;
+        }
+
+        h2 { margin: 0 0 10px 0; font-size: 18px; color: #ffcc00; border-bottom: 1px solid #555; padding-bottom: 8px; }
+        label { font-size: 12px; color: #bbb; display: block; margin-bottom: 4px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        button {
+            width: 100%; padding: 10px; background: #333; color: white; border: 1px solid #555;
+            cursor: pointer; border-radius: 4px; font-weight: bold; transition: 0.2s;
+        }
+        button:hover { background: #505050; }
+        button.primary { background: #0052cc; border-color: #0052cc; }
+        /* 新增：切换按钮的样式 */
+        button.secondary { background: #444; border-color: #666; }
+
+        .status-box {
+            background: #111; padding: 10px; border-radius: 4px; border: 1px solid #333;
+            font-family: monospace; font-size: 12px; color: #0f0; line-height: 1.5;
+        }
+        
+        .legend { display: flex; gap: 10px; font-size: 12px; background: #222; padding: 8px; border-radius: 4px; }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .box { width: 12px; height: 12px; display: inline-block; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>📊 速度波动 vs 面积恒定 (双轴图)</span>
+            <span id="chart-time-display" style="color:#ffcc00">T=0.0s</span>
+        </div>
+        <div id="chart-body">
+            <canvas id="velocityChart"></canvas>
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h2>开普勒第二定律</h2>
+        
+        <div class="status-box">
+            状态: <span id="sim-status">暂停</span><br>
+            实时速度: <span id="velocity-val">0.00</span> km/s<br>
+            上个扇形面积: <span id="area-val" style="color:#fff000">0.00</span>
+        </div>
+
+        <div>
+            <button id="btn-toggle" class="primary">开始运行</button>
+            <div style="display: flex; gap: 5px; margin-top: 5px;">
+                <button id="btn-reset" style="flex: 1;">重置演示</button>
+                <button id="btn-chart-toggle" class="secondary" style="flex: 1;">隐藏图表</button>
+            </div>
+        </div>
+
+        <hr style="border:0; border-top:1px solid #444; margin:15px 0;">
+
+        <div>
+            <label>色块时间间隔 (T)</label>
+            <input type="range" id="interval-slider" min="1.0" max="4.0" step="0.5" value="2.0">
+            <div style="text-align:right; font-size:11px; color:#ffcc00;" id="interval-display">每 2.0 秒结算一次面积</div>
+        </div>
+
+        <div class="legend" style="flex-wrap: wrap;">
+            <div class="legend-item"><span class="box" style="background:#00ffff"></span> 区间A</div>
+            <div class="legend-item"><span class="box" style="background:#ff00ff"></span> 区间B</div>
+            <div class="legend-item" style="width:100%; border-top:1px solid #444; padding-top:5px; margin-top:5px;">
+                <span class="box" style="background:#ffd700"></span> <strong>金色柱子</strong> = 扫过的面积 (恒定)
+            </div>
+        </div>
+
+        <br>
+        <div>
+            <label>离心率</label>
+            <input type="range" id="eccentricity-slider" min="0" max="0.75" step="0.01" value="0.65">
+        </div>
+        <div>
+            <label>模拟速度</label>
+            <input type="range" id="speed-slider" min="0.1" max="2.0" step="0.1" value="1.0">
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        // --- 拖拽逻辑 ---
+        (function setupDraggable() {
+            const wrapper = document.getElementById('chart-wrapper');
+            const header = document.getElementById('chart-header');
+            let isDragging = false, startX, startY, initialLeft, initialTop;
+            header.addEventListener('mousedown', (e) => {
+                isDragging = true; startX = e.clientX; startY = e.clientY;
+                initialLeft = wrapper.offsetLeft; initialTop = wrapper.offsetTop;
+                header.style.cursor = 'grabbing';
+            });
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+                wrapper.style.left = `${initialLeft + (e.clientX - startX)}px`;
+                wrapper.style.top = `${initialTop + (e.clientY - startY)}px`;
+            });
+            window.addEventListener('mouseup', () => { isDragging = false; header.style.cursor = 'move'; });
+        })();
+
+        // --- 核心变量 ---
+        let scene, camera, renderer, controls;
+        let sun, planet, orbitLine, sectorGroup;
+        const GM = 5000; 
+        
+        let state = {
+            a: 18, e: 0.65, period: 0, timeElapsed: 0, paused: true, simSpeed: 1.0,
+            sliceInterval: 2.0, currentSliceTimer: 0, currentSlicePoints: [], sliceIndex: 0,
+            lastAnomaly: 0, activeMesh: null
+        };
+
+        let velocityChart;
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 60, 0); 
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.logarithmicDepthBuffer = true; 
+            container.appendChild(renderer.domElement);
+
+            if (THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+            }
+
+            scene.add(new THREE.AmbientLight(0x444444));
+            scene.add(new THREE.PointLight(0xffffff, 1.5, 100));
+            
+            const grid = new THREE.GridHelper(100, 20, 0x222222, 0x111111);
+            grid.position.y = -0.1;
+            scene.add(grid);
+
+            sun = new THREE.Mesh(new THREE.SphereGeometry(2, 32, 32), new THREE.MeshBasicMaterial({ color: 0xffaa00 }));
+            scene.add(sun);
+
+            planet = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), new THREE.MeshPhongMaterial({ color: 0xffffff }));
+            scene.add(planet);
+
+            orbitLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x444444 }));
+            scene.add(orbitLine);
+
+            sectorGroup = new THREE.Group();
+            scene.add(sectorGroup);
+
+            initChart();
+            setupUI();
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+            resetSimulation();
+            animate();
+        }
+
+        function updatePhysics() {
+            if (state.paused) return;
+
+            const dt = 0.02 * state.simSpeed;
+            state.timeElapsed += dt;
+
+            // Kepler
+            const n = (2 * Math.PI) / state.period;
+            let M = (n * state.timeElapsed) % (2 * Math.PI);
+            let E = M, delta = 1, i = 0;
+            while (Math.abs(delta) > 1e-6 && i < 15) {
+                delta = (E - state.e * Math.sin(E) - M) / (1 - state.e * Math.cos(E));
+                E -= delta;
+                i++;
+            }
+
+            const r = state.a * (1 - state.e * Math.cos(E));
+            const sqrtTerm = Math.sqrt((1 + state.e) / (1 - state.e));
+            let v = 2 * Math.atan(sqrtTerm * Math.tan(E / 2));
+            if (v < 0) v += 2 * Math.PI;
+
+            const x = r * Math.cos(v);
+            const z = r * Math.sin(v);
+            const currentPos = new THREE.Vector3(x, 0, z);
+            planet.position.copy(currentPos);
+
+            const velSq = GM * (2/r - 1/state.a);
+            const velocity = Math.sqrt(velSq);
+
+            if (v < state.lastAnomaly) resetSectorsForNewLap();
+            state.lastAnomaly = v;
+
+            updateSectorsAndChart(dt, currentPos, velocity);
+
+            document.getElementById('velocity-val').innerText = velocity.toFixed(2);
+            document.getElementById('chart-time-display').innerText = `T=${state.timeElapsed.toFixed(1)}s`;
+        }
+
+        function calculateSectorArea(points) {
+            let area = 0;
+            const allPoints = [{x:0, z:0}, ...points, {x:0, z:0}];
+            for (let i = 0; i < allPoints.length - 1; i++) {
+                area += (allPoints[i].x * allPoints[i+1].z) - (allPoints[i+1].x * allPoints[i].z);
+            }
+            return Math.abs(area * 0.5);
+        }
+
+        function updateSectorsAndChart(dt, pos, velocity) {
+            state.currentSliceTimer += dt;
+            state.currentSlicePoints.push(pos.clone());
+
+            if (!state.activeMesh) {
+                const color = (state.sliceIndex % 2 === 0) ? 0x00ffff : 0xff00ff;
+                state.activeMesh = createSectorMesh(color);
+                sectorGroup.add(state.activeMesh);
+            }
+            updateMeshGeo(state.activeMesh, state.currentSlicePoints);
+
+            updateChartLine(state.timeElapsed, velocity, state.sliceIndex);
+
+            if (state.currentSliceTimer >= state.sliceInterval) {
+                const area = calculateSectorArea(state.currentSlicePoints);
+                updateChartBar(state.timeElapsed, area);
+                document.getElementById('area-val').innerText = area.toFixed(2);
+
+                const lastPoint = state.currentSlicePoints[state.currentSlicePoints.length - 1];
+                state.currentSlicePoints = [lastPoint];
+                state.currentSliceTimer = 0;
+                state.sliceIndex++;
+                state.activeMesh = null;
+            }
+        }
+
+        function createSectorMesh(colorHex) {
+            const geom = new THREE.BufferGeometry();
+            const mat = new THREE.MeshBasicMaterial({ 
+                color: colorHex, side: THREE.DoubleSide, transparent: true, opacity: 0.5, depthWrite: false 
+            });
+            const mesh = new THREE.Mesh(geom, mat);
+            mesh.position.y = 0.005 * (state.sliceIndex % 10) + 0.01;
+            return mesh;
+        }
+
+        function updateMeshGeo(mesh, points) {
+            if (points.length < 2) return;
+            const vertices = [0,0,0];
+            points.forEach(p => vertices.push(p.x, p.y, p.z));
+            const indices = [];
+            for (let i = 1; i < points.length; i++) indices.push(0, i, i + 1);
+            mesh.geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            mesh.geometry.setIndex(indices);
+            mesh.geometry.attributes.position.needsUpdate = true;
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('velocityChart').getContext('2d');
+            velocityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        {
+                            label: '速度曲线', yAxisID: 'y_velocity', data: [],
+                            borderColor: '#ffffff', borderWidth: 1, pointRadius: 0, tension: 0.1, order: 1
+                        },
+                        {
+                            type: 'bar', label: '扫过面积 (恒定)', yAxisID: 'y_area', data: [],
+                            backgroundColor: '#ffd700', barThickness: 8, order: 2
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false, animation: false,
+                    interaction: { mode: 'index', intersect: false },
+                    scales: {
+                        x: { display: true, ticks: { display: false }, grid: { display: false } },
+                        y_velocity: {
+                            type: 'linear', display: true, position: 'left',
+                            title: { display: true, text: '速度 (km/s)', color: '#fff' },
+                            grid: { color: '#333' }, ticks: { color: '#ddd' }
+                        },
+                        y_area: {
+                            type: 'linear', display: true, position: 'right',
+                            title: { display: true, text: '扫过面积', color: '#ffd700' },
+                            grid: { display: false }, ticks: { color: '#ffd700' },
+                            min: 0, suggestedMax: 60 
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function updateChartLine(time, speed) {
+            if (!velocityChart) return;
+            const labels = velocityChart.data.labels;
+            const dsVel = velocityChart.data.datasets[0].data;
+            const dsArea = velocityChart.data.datasets[1].data;
+
+            labels.push(time);
+            dsVel.push(speed);
+            dsArea.push(null);
+
+            if (labels.length > 150) { labels.shift(); dsVel.shift(); dsArea.shift(); }
+            velocityChart.update('none');
+        }
+
+        function updateChartBar(time, area) {
+            if (!velocityChart) return;
+            const dsArea = velocityChart.data.datasets[1].data;
+            dsArea[dsArea.length - 1] = area;
+            velocityChart.update();
+        }
+
+        function resetSectorsForNewLap() {
+            while(sectorGroup.children.length > 0) sectorGroup.remove(sectorGroup.children[0]);
+            state.sliceIndex = 0; state.currentSliceTimer = 0;
+            state.currentSlicePoints = [planet.position.clone()]; state.activeMesh = null;
+        }
+
+        function resetSimulation() {
+            state.period = 2 * Math.PI * Math.sqrt(Math.pow(state.a, 3) / GM);
+            state.timeElapsed = 0; state.lastAnomaly = 0;
+            resetSectorsForNewLap();
+            
+            const pts = [];
+            for(let i=0; i<=360; i++) {
+                const E = (i/360)*2*Math.PI;
+                const x = state.a * (Math.cos(E) - state.e);
+                const z = state.a * Math.sqrt(1 - state.e*state.e) * Math.sin(E);
+                pts.push(new THREE.Vector3(x, 0, z));
+            }
+            orbitLine.geometry.setFromPoints(pts);
+
+            if (velocityChart) {
+                velocityChart.data.labels = [];
+                velocityChart.data.datasets[0].data = [];
+                velocityChart.data.datasets[1].data = [];
+                velocityChart.update();
+            }
+            document.getElementById('sim-status').innerText = "已重置";
+            document.getElementById('area-val').innerText = "0.00";
+        }
+
+        function setupUI() {
+            document.getElementById('btn-toggle').addEventListener('click', function() {
+                state.paused = !state.paused;
+                this.textContent = state.paused ? "继续运行" : "暂停";
+                document.getElementById('sim-status').innerText = state.paused ? "暂停" : "运行中";
+            });
+            document.getElementById('btn-reset').addEventListener('click', () => {
+                state.paused = true; resetSimulation(); document.getElementById('btn-toggle').textContent = "开始运行";
+            });
+            
+            // --- 核心修改：图表显示/隐藏逻辑 ---
+            const chartWrapper = document.getElementById('chart-wrapper');
+            const toggleBtn = document.getElementById('btn-chart-toggle');
+            
+            toggleBtn.addEventListener('click', () => {
+                if (chartWrapper.style.display === 'none') {
+                    chartWrapper.style.display = 'flex';
+                    toggleBtn.textContent = "隐藏图表";
+                } else {
+                    chartWrapper.style.display = 'none';
+                    toggleBtn.textContent = "显示图表";
+                }
+            });
+
+            document.getElementById('interval-slider').addEventListener('input', (e) => {
+                state.sliceInterval = parseFloat(e.target.value);
+                document.getElementById('interval-display').innerText = `每 ${state.sliceInterval.toFixed(1)} 秒结算一次`;
+                resetSectorsForNewLap();
+            });
+            document.getElementById('speed-slider').addEventListener('input', e => state.simSpeed = parseFloat(e.target.value));
+            document.getElementById('eccentricity-slider').addEventListener('input', e => {
+                state.e = parseFloat(e.target.value); resetSimulation();
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePhysics();
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

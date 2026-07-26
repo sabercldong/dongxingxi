@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>极简核聚变原理 (2球版)</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #111;
+            color: white;
+            font-family: 'Microsoft YaHei', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        #stage {
+            position: relative;
+            width: 800px;
+            height: 300px;
+            background: #222;
+            border-radius: 20px;
+            border: 2px solid #444;
+            overflow: hidden;
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.8);
+        }
+
+        /* 两个原子 */
+        .atom {
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-weight: bold;
+            font-size: 20px;
+            box-shadow: 0 0 20px rgba(255,255,255,0.2);
+            transition: transform 0.1s;
+        }
+
+        #atom-left {
+            width: 80px; height: 80px;
+            background: radial-gradient(circle at 30% 30%, #3498db, #1a5276); /* 蓝：氘 */
+            left: 100px; 
+            border: 2px solid #85c1e9;
+        }
+
+        #atom-right {
+            width: 80px; height: 80px;
+            background: radial-gradient(circle at 30% 30%, #2ecc71, #196f3d); /* 绿：氚 */
+            left: 700px;
+            border: 2px solid #82e0aa;
+        }
+
+        /* 聚变产物 */
+        #product-he {
+            display: none; /* 初始隐藏 */
+            width: 100px; height: 100px;
+            background: radial-gradient(circle at 30% 30%, #e74c3c, #922b21); /* 红：氦 */
+            position: absolute; left: 400px; top: 50%;
+            transform: translate(-50%, -50%);
+            border-radius: 50%;
+            box-shadow: 0 0 50px #e74c3c;
+            justify-content: center; align-items: center; font-weight: bold; font-size: 24px;
+            z-index: 10;
+        }
+
+        #product-neutron {
+            display: none;
+            width: 20px; height: 20px;
+            background: #fff;
+            position: absolute; left: 400px; top: 50%;
+            border-radius: 50%;
+            box-shadow: 0 0 20px #fff;
+            z-index: 5;
+        }
+
+        /* 排斥力场可视化 */
+        .force-field {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 150px; height: 150px;
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        .force-label {
+            position: absolute; top: -30px; left: 50%; transform: translateX(-50%);
+            color: #aaa; font-size: 12px; white-space: nowrap;
+        }
+
+        /* 控制区 */
+        #controls {
+            margin-top: 30px;
+            text-align: center;
+        }
+
+        button {
+            padding: 15px 30px;
+            margin: 0 10px;
+            font-size: 18px;
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            transition: 0.2s;
+            color: white;
+            font-weight: bold;
+        }
+
+        #btn-low { background: #555; }
+        #btn-low:hover { background: #777; }
+
+        #btn-high { background: #e67e22; }
+        #btn-high:hover { background: #d35400; }
+
+        #status-text {
+            margin-top: 20px;
+            font-size: 20px;
+            height: 30px;
+            color: #f1c40f;
+        }
+
+        /* 动画 */
+        @keyframes shake {
+            0% { transform: translate(1px, 1px) rotate(0deg); }
+            10% { transform: translate(-1px, -2px) rotate(-1deg); }
+            20% { transform: translate(-3px, 0px) rotate(1deg); }
+            30% { transform: translate(3px, 2px) rotate(0deg); }
+            40% { transform: translate(1px, -1px) rotate(1deg); }
+            50% { transform: translate(-1px, 2px) rotate(-1deg); }
+            60% { transform: translate(-3px, 1px) rotate(0deg); }
+            70% { transform: translate(3px, 1px) rotate(-1deg); }
+            80% { transform: translate(-1px, -1px) rotate(1deg); }
+            90% { transform: translate(1px, 2px) rotate(0deg); }
+            100% { transform: translate(1px, -2px) rotate(-1deg); }
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="stage">
+        <div class="force-field"><span class="force-label">排斥力场 (库仑势垒)</span></div>
+
+        <div id="atom-left" class="atom">氘(D)</div>
+        
+        <div id="atom-right" class="atom">氚(T)</div>
+
+        <div id="product-he">氦(He)</div>
+        <div id="product-neutron"></div>
+    </div>
+
+    <div id="status-text">请选择一种撞击模式</div>
+
+    <div id="controls">
+        <button id="btn-low" onclick="runSim('LOW')">🐢 低速撞击 (模拟失败)</button>
+        <button id="btn-high" onclick="runSim('HIGH')">🐇 高速撞击 (聚变点火)</button>
+    </div>
+
+    <script>
+        const leftAtom = document.getElementById('atom-left');
+        const rightAtom = document.getElementById('atom-right');
+        const productHe = document.getElementById('product-he');
+        const productN = document.getElementById('product-neutron');
+        const statusText = document.getElementById('status-text');
+        const stage = document.getElementById('stage');
+
+        let animationId = null;
+        let pos = 0; // 0 = start, 1 = center
+        let mode = ''; 
+        let speed = 0;
+
+        function reset() {
+            cancelAnimationFrame(animationId);
+            
+            // 恢复初始位置
+            leftAtom.style.left = '100px';
+            rightAtom.style.left = '700px';
+            
+            // 显示原子，隐藏产物
+            leftAtom.style.display = 'flex';
+            rightAtom.style.display = 'flex';
+            leftAtom.style.opacity = '1';
+            rightAtom.style.opacity = '1';
+            
+            productHe.style.display = 'none';
+            productN.style.display = 'none';
+            
+            // 清除特效
+            stage.style.animation = 'none';
+            stage.style.background = '#222';
+            
+            pos = 0;
+        }
+
+        function runSim(selectedMode) {
+            reset();
+            mode = selectedMode;
+            
+            if (mode === 'LOW') {
+                statusText.innerText = "状态：速度太慢，正在被排斥力减速...";
+                statusText.style.color = "#aaa";
+                speed = 4; // 慢速
+            } else {
+                statusText.innerText = "状态：速度极快！准备突破排斥力...";
+                statusText.style.color = "#e67e22";
+                speed = 15; // 高速
+            }
+
+            animate();
+        }
+
+        // 左原子从 100 走到 400(中心)
+        // 右原子从 700 走到 400(中心)
+        let leftX = 100;
+        let rightX = 700;
+
+        function animate() {
+            // 计算当前距离中心的距离 (300是移动总距离)
+            let distToCenter = 400 - leftX - 40; // 减去半径
+
+            if (mode === 'LOW') {
+                // --- 低速模式逻辑 ---
+                
+                // 1. 靠近中心
+                if (leftX < 280) { // 还没进排斥圈
+                    leftX += speed;
+                    rightX -= speed;
+                } 
+                // 2. 进入排斥圈，减速
+                else if (leftX < 340) {
+                    leftX += 1; // 变得极慢
+                    rightX -= 1;
+                    statusText.innerText = "排斥中：就像两个磁铁的北极相撞...";
+                } 
+                // 3. 彻底停住并反弹
+                else {
+                    statusText.innerText = "❌ 失败：动能不足，被弹开了";
+                    statusText.style.color = "#e74c3c";
+                    bounceBack();
+                    return; // 结束这个动画循环，进入反弹函数
+                }
+            } 
+            else {
+                // --- 高速模式逻辑 ---
+                
+                // 匀速猛冲
+                leftX += speed;
+                rightX -= speed;
+
+                // 撞上了！(中心是400，半径40，所以360左右接触)
+                if (leftX >= 360) {
+                    fusionExplosion();
+                    return;
+                }
+            }
+
+            // 更新画面
+            leftAtom.style.left = leftX + 'px';
+            rightAtom.style.left = rightX + 'px';
+
+            animationId = requestAnimationFrame(animate);
+        }
+
+        function bounceBack() {
+            // 简单的反弹动画
+            let bounceLoop = setInterval(() => {
+                leftX -= 5;
+                rightX += 5;
+                leftAtom.style.left = leftX + 'px';
+                rightAtom.style.left = rightX + 'px';
+                
+                if (leftX <= 100) {
+                    clearInterval(bounceLoop);
+                    // 恢复原位
+                }
+            }, 16);
+        }
+
+        function fusionExplosion() {
+            // 1. 隐藏两个旧原子
+            leftAtom.style.display = 'none';
+            rightAtom.style.display = 'none';
+
+            // 2. 显示新产物
+            productHe.style.display = 'flex';
+            productN.style.display = 'block';
+            
+            // 3. 屏幕震动 & 闪白
+            stage.style.animation = 'shake 0.5s';
+            stage.style.background = '#444'; // 瞬间变亮
+            setTimeout(() => { stage.style.background = '#222'; }, 200);
+
+            statusText.innerText = "✅ 聚变成功！质量亏损转化为巨大能量！";
+            statusText.style.color = "#2ecc71";
+
+            // 4. 中子飞出动画
+            let neutronX = 400;
+            let neutronY = 150; // 中心Y
+            let flyLoop = setInterval(() => {
+                neutronX += 20; // 向右飞
+                neutronY -= 5;  // 稍微向上
+                productN.style.left = neutronX + 'px';
+                productN.style.top = neutronY + 'px';
+                
+                if (neutronX > 900) clearInterval(flyLoop);
+            }, 16);
+        }
+
+    </script>
+</body>
+</html>

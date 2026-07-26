@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>带电粒子在电场中的运动仿真</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; display: flex; height: 100vh; background-color: #1a1a1a; color: #eee; }
+        
+        /* 左侧 3D 画布 */
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        /* 右侧功能区 */
+        #sidebar {
+            width: 320px;
+            background-color: #2c2c2c;
+            padding: 20px;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto; /* 允许滚动 */
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; border-bottom: 1px solid #555; padding-bottom: 10px; font-size: 1.2rem;}
+        
+        .control-group { background: #383838; padding: 10px; border-radius: 5px; }
+        .control-group label { display: block; font-size: 0.9rem; margin-bottom: 5px; color: #aaa; }
+        .control-group span { float: right; color: #4db8ff; }
+        
+        input[type="range"] { width: 100%; cursor: pointer; }
+        
+        .btn-group { display: flex; gap: 10px; margin-bottom: 10px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px; 
+            cursor: pointer; font-weight: bold; transition: background 0.2s;
+        }
+        #btn-start { background-color: #28a745; color: white; }
+        #btn-pause { background-color: #ffc107; color: black; }
+        #btn-reset { background-color: #dc3545; color: white; }
+        button:hover { opacity: 0.9; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+
+        .result-box { background: #222; padding: 10px; border: 1px solid #444; border-radius: 4px; margin-top: auto;}
+        .result-value { font-size: 1.2rem; color: #00ff88; font-weight: bold; text-align: center; display: block; margin-top: 5px;}
+        
+        /* 简单的图例说明 */
+        .legend { font-size: 0.8rem; color: #888; margin-top: 5px;}
+    </style>
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>控制面板</h2>
+
+        <div class="btn-group">
+            <button id="btn-start">开始</button>
+            <button id="btn-pause" disabled>暂停</button>
+            <button id="btn-reset">还原</button>
+        </div>
+
+        <div class="control-group">
+            <label>加速电场电压 (U1) <span id="val-u1">1000 V</span></label>
+            <input type="range" id="input-u1" min="100" max="5000" step="100" value="1000">
+        </div>
+
+        <div class="control-group">
+            <label>偏转电场电压 (U2) <span id="val-u2">500 V</span></label>
+            <input type="range" id="input-u2" min="0" max="2000" step="50" value="500">
+        </div>
+
+        <div class="control-group">
+            <label>偏转电场长度 (L2) <span id="val-l2">10 cm</span></label>
+            <input type="range" id="input-l2" min="5" max="20" step="1" value="10">
+        </div>
+        
+        <div class="control-group">
+            <label>偏转电场板间距 (d) <span id="val-d">10 cm</span></label>
+            <input type="range" id="input-d" min="5" max="20" step="1" value="10">
+        </div>
+
+        <div class="control-group">
+            <label>荧光屏距离 (L3) <span id="val-l3">15 cm</span></label>
+            <input type="range" id="input-l3" min="5" max="30" step="1" value="15">
+        </div>
+
+        <div class="legend">
+            <p>🔴 粒子 (带正电)</p>
+            <p>🟡 加速电场区域</p>
+            <p>🔵 偏转电场区域</p>
+        </div>
+
+        <div class="result-box">
+            <label>理论偏转位移 (Y):</label>
+            <span class="result-value" id="calc-result">0.00 cm</span>
+            <div style="font-size: 0.8rem; color:#aaa; margin-top:5px; text-align:center;">(相对于中心轴线)</div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        
+        // 如果使用本地文件，请注释掉上面两行，解开下面这部分并调整路径（取决于你的JS文件是否支持模块化，如果不支持，需用普通script标签引入）
+        // 但通常 OrbitControls.js 依赖于 three 全局变量，现代用法建议使用 ES6 Modules (如上所示的 importmap)
+
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let particle, trailLine;
+        let field1Mesh, field2Mesh, screenMesh;
+        let field1Arrows = [], field2Arrows = [];
+        
+        // 物理参数 (使用无量纲或比例单位进行仿真，显示时转换为物理单位)
+        // 为了显示效果，我们将 1个世界单位 = 1cm
+        const PARAMS = {
+            u1: 1000,   // 加速电压
+            u2: 500,    // 偏转电压
+            l1: 10,     // 加速电场长度 (固定)
+            l2: 10,     // 偏转电场长度
+            d: 10,      // 板间距
+            l3: 15,     // 离开偏转电场后到屏幕的距离
+            q: 1,       // 电荷量 (简化)
+            m: 1,       // 质量 (简化)
+        };
+
+        // 运动状态
+        let gameState = 'stop'; // stop, play, pause
+        let time = 0;
+        let particleData = {
+            pos: new THREE.Vector3(0, 0, 0),
+            vel: new THREE.Vector3(0, 0, 0),
+            acc: new THREE.Vector3(0, 0, 0)
+        };
+        const trailPoints = [];
+        const MAX_TRAIL_POINTS = 500;
+        
+        // DOM 元素
+        const elU1 = document.getElementById('input-u1');
+        const elU2 = document.getElementById('input-u2');
+        const elL2 = document.getElementById('input-l2');
+        const elD = document.getElementById('input-d');
+        const elL3 = document.getElementById('input-l3');
+        const btnStart = document.getElementById('btn-start');
+        const btnPause = document.getElementById('btn-pause');
+        const btnReset = document.getElementById('btn-reset');
+        const txtResult = document.getElementById('calc-result');
+
+        // ================= 初始化 =================
+        init();
+        animate();
+        updateCalculation(); // 初始计算
+
+        function init() {
+            // 1. 场景设置
+            const container = document.getElementById('canvas-container');
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111111);
+
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(20, 20, 50);
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            // 4. 控制器 (鼠标控制)
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            // 5. 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            scene.add(dirLight);
+
+            // 6. 辅助网格和坐标轴
+            const gridHelper = new THREE.GridHelper(100, 100, 0x444444, 0x222222);
+            scene.add(gridHelper);
+            const axesHelper = new THREE.AxesHelper(5);
+            scene.add(axesHelper);
+
+            // ================= 创建物体 =================
+
+            // 粒子
+            const particleGeo = new THREE.SphereGeometry(0.5, 32, 32);
+            const particleMat = new THREE.MeshPhongMaterial({ color: 0xff0000, emissive: 0x550000 });
+            particle = new THREE.Mesh(particleGeo, particleMat);
+            scene.add(particle);
+
+            // 轨迹线
+            const trailGeo = new THREE.BufferGeometry();
+            const trailMat = new THREE.LineBasicMaterial({ color: 0xffff00 });
+            trailLine = new THREE.Line(trailGeo, trailMat);
+            trailLine.frustumCulled = false; // 防止轨迹消失
+            scene.add(trailLine);
+
+            // 屏幕
+            const screenGeo = new THREE.BoxGeometry(1, 20, 20); // 厚度，高，宽
+            const screenMat = new THREE.MeshPhongMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.8 });
+            screenMesh = new THREE.Mesh(screenGeo, screenMat);
+            scene.add(screenMesh);
+            
+            // 重新构建环境几何体 (电场区域)
+            rebuildEnvironment();
+
+            // ================= 事件监听 =================
+            window.addEventListener('resize', onWindowResize);
+            
+            elU1.addEventListener('input', (e) => { 
+                PARAMS.u1 = parseFloat(e.target.value); 
+                document.getElementById('val-u1').innerText = PARAMS.u1 + " V"; 
+                resetSimulation(); 
+            });
+            elU2.addEventListener('input', (e) => { 
+                PARAMS.u2 = parseFloat(e.target.value); 
+                document.getElementById('val-u2').innerText = PARAMS.u2 + " V"; 
+                resetSimulation(); 
+            });
+            elL2.addEventListener('input', (e) => { 
+                PARAMS.l2 = parseFloat(e.target.value); 
+                document.getElementById('val-l2').innerText = PARAMS.l2 + " cm"; 
+                rebuildEnvironment(); 
+                resetSimulation(); 
+            });
+            elD.addEventListener('input', (e) => { 
+                PARAMS.d = parseFloat(e.target.value); 
+                document.getElementById('val-d').innerText = PARAMS.d + " cm"; 
+                rebuildEnvironment(); 
+                resetSimulation(); 
+            });
+            elL3.addEventListener('input', (e) => { 
+                PARAMS.l3 = parseFloat(e.target.value); 
+                document.getElementById('val-l3').innerText = PARAMS.l3 + " cm"; 
+                rebuildEnvironment(); 
+                resetSimulation(); 
+            });
+
+            btnStart.addEventListener('click', () => {
+                if (gameState === 'stop' || gameState === 'pause') {
+                    gameState = 'play';
+                    btnStart.disabled = true;
+                    btnPause.disabled = false;
+                }
+            });
+
+            btnPause.addEventListener('click', () => {
+                if (gameState === 'play') {
+                    gameState = 'pause';
+                    btnStart.disabled = false;
+                    btnPause.disabled = true;
+                    btnStart.innerText = "继续";
+                }
+            });
+
+            btnReset.addEventListener('click', resetSimulation);
+            
+            // 初始重置
+            resetSimulation();
+        }
+
+        // 重建环境（当尺寸参数改变时）
+        function rebuildEnvironment() {
+            // 清理旧对象
+            if(field1Mesh) scene.remove(field1Mesh);
+            if(field2Mesh) scene.remove(field2Mesh);
+            field1Arrows.forEach(a => scene.remove(a));
+            field2Arrows.forEach(a => scene.remove(a));
+            field1Arrows = [];
+            field2Arrows = [];
+
+            const yOffset = 5; // 抬高一点，不与网格重叠
+
+            // --- 电场 1 (加速) ---
+            // 假设起点在 x= -PARAMS.l1
+            const f1Geo = new THREE.BoxGeometry(PARAMS.l1, 10, 10);
+            const f1Mat = new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: true, transparent: true, opacity: 0.1 });
+            field1Mesh = new THREE.Mesh(f1Geo, f1Mat);
+            field1Mesh.position.set(-PARAMS.l1 / 2, yOffset, 0);
+            scene.add(field1Mesh);
+
+            // 画加速电场线 (水平向右)
+            for(let i=0; i<5; i++) {
+                const dir = new THREE.Vector3(1, 0, 0);
+                const origin = new THREE.Vector3(-PARAMS.l1 + 1, yOffset + (i-2)*1.5, 0);
+                const length = PARAMS.l1 - 2;
+                const arrowHelper = new THREE.ArrowHelper(dir, origin, length, 0xffff00, 1, 0.5);
+                scene.add(arrowHelper);
+                field1Arrows.push(arrowHelper);
+            }
+
+            // --- 电场 2 (偏转) ---
+            // 紧挨着电场1，起点 x=0
+            const f2Geo = new THREE.BoxGeometry(PARAMS.l2, PARAMS.d, 10);
+            const f2Mat = new THREE.MeshBasicMaterial({ color: 0x00aaff, wireframe: true, transparent: true, opacity: 0.1 });
+            field2Mesh = new THREE.Mesh(f2Geo, f2Mat);
+            field2Mesh.position.set(PARAMS.l2 / 2, yOffset, 0);
+            scene.add(field2Mesh);
+
+            // 画偏转电场线 (竖直向下，假设上极板带正电)
+            for(let i=0; i<Math.max(3, PARAMS.l2/2); i++) {
+                const dir = new THREE.Vector3(0, -1, 0);
+                // 分布在整个长度上
+                const xPos = (i / (Math.max(3, PARAMS.l2/2) - 1)) * (PARAMS.l2 - 2) + 1;
+                const origin = new THREE.Vector3(xPos, yOffset + PARAMS.d/2 - 0.5, 0);
+                const length = PARAMS.d - 1;
+                const arrowHelper = new THREE.ArrowHelper(dir, origin, length, 0x00aaff, 1, 0.5);
+                scene.add(arrowHelper);
+                field2Arrows.push(arrowHelper);
+            }
+
+            // --- 荧光屏 ---
+            // 位置 = 偏转场结束(PARAMS.l2) + L3
+            screenMesh.position.set(PARAMS.l2 + PARAMS.l3, yOffset, 0);
+
+            updateCalculation();
+        }
+
+        function resetSimulation() {
+            gameState = 'stop';
+            time = 0;
+            
+            // 粒子回到起点 (-PARAMS.l1, yOffset, 0)
+            particleData.pos.set(-PARAMS.l1, 5, 0);
+            particleData.vel.set(0, 0, 0);
+            particleData.acc.set(0, 0, 0);
+            particle.position.copy(particleData.pos);
+
+            // 清空轨迹
+            trailPoints.length = 0;
+            trailLine.geometry.setFromPoints(trailPoints);
+
+            // UI 状态
+            btnStart.disabled = false;
+            btnStart.innerText = "开始";
+            btnPause.disabled = true;
+
+            updateCalculation();
+        }
+
+        // 理论计算逻辑
+        function updateCalculation() {
+            // 1. 加速阶段
+            // qU1 = 1/2 m v1^2  => v1 = sqrt(2qU1/m)
+            // 注意：为了让仿真速度看起来自然，我们需要调节系数。
+            // 这里我们假设常数 k 使得数值在屏幕上合理。
+            // 物理公式: Y = (U2 * L2 / 2d * U1) * (L2/2 + L3)
+            // 偏转量 y = 1/2 a t^2 = 1/2 (qU2/md) (L2/v1)^2
+            //           = 1/2 (qU2/md) * (L2^2 / (2qU1/m))
+            //           = (U2 * L2^2) / (4 * U1 * d)  <-- 离开电场时的偏转位移
+            // 偏转角 tan_theta = vy / vx = (a * t) / v1 = (qU2/md * L2/v1) / v1
+            //                  = (qU2 * L2) / (m * d * v1^2)
+            //                  = (qU2 * L2) / (m * d * 2qU1/m)
+            //                  = (U2 * L2) / (2 * U1 * d)
+            // 总位移 Y = y_离开 + tan_theta * L3
+            //          = (U2 * L2^2)/(4 * U1 * d) + (U2 * L2 * L3) / (2 * U1 * d)
+            //          = (U2 * L2 / (2 * U1 * d)) * (L2/2 + L3)
+            
+            const { u1, u2, l1, l2, l3, d } = PARAMS;
+            
+            // 避免除以零
+            if (u1 === 0 || d === 0) {
+                txtResult.innerText = "Error";
+                return;
+            }
+
+            const Y = (u2 * l2 / (2 * u1 * d)) * (l2/2 + l3);
+            
+            // 如果撞到极板？
+            // 如果离开时的偏转位移 > d/2，则撞板
+            const y_exit = (u2 * l2 * l2) / (4 * u1 * d);
+            if (y_exit > d/2) {
+                txtResult.innerText = "撞击极板";
+                txtResult.style.color = "red";
+            } else {
+                txtResult.innerText = Y.toFixed(2) + " cm";
+                txtResult.style.color = "#00ff88";
+            }
+        }
+
+        // 物理循环
+        function updatePhysics(dt) {
+            // 为了视觉效果，将时间步长乘以一个系数
+            const simDt = dt * 10; 
+
+            // 判断粒子位置区域
+            const x = particleData.pos.x;
+            const yOffset = 5; // 中心高度
+
+            // 1. 加速电场区域: [-l1, 0]
+            if (x < 0) {
+                // F = qE = q * U1 / L1
+                // a = F/m = qU1 / (m * L1)
+                // 这里我们引入一个比例因子 SCALE 0.01 让速度不要太快炸飞
+                const SCALE = 0.05; 
+                const ax = (PARAMS.q * PARAMS.u1) / (PARAMS.m * PARAMS.l1) * SCALE;
+                particleData.acc.set(ax, 0, 0);
+            } 
+            // 2. 偏转电场区域: [0, l2]
+            else if (x >= 0 && x <= PARAMS.l2) {
+                // 水平不受力
+                // 竖直受力 F = qE = q * U2 / d
+                // ay = - qU2 / (m * d)  (向下)
+                const SCALE = 0.05;
+                const ay = - (PARAMS.q * PARAMS.u2) / (PARAMS.m * PARAMS.d) * SCALE;
+                particleData.acc.set(0, ay, 0);
+            } 
+            // 3. 漂移区域 (匀速直线): [l2, l2+l3]
+            else {
+                particleData.acc.set(0, 0, 0);
+            }
+
+            // 更新速度 v = v + a*dt
+            particleData.vel.addScaledVector(particleData.acc, simDt);
+            
+            // 更新位置 p = p + v*dt
+            particleData.pos.addScaledVector(particleData.vel, simDt);
+
+            // 碰撞检测：屏幕
+            if (particleData.pos.x >= PARAMS.l2 + PARAMS.l3) {
+                particleData.pos.x = PARAMS.l2 + PARAMS.l3; // 钳位在屏幕上
+                gameState = 'stop';
+                btnStart.disabled = false;
+                btnStart.innerText = "重来";
+                btnPause.disabled = true;
+            }
+
+            // 碰撞检测：极板 (在偏转区域内)
+            if (x >= 0 && x <= PARAMS.l2) {
+                if (Math.abs(particleData.pos.y - yOffset) >= PARAMS.d/2) {
+                    // 撞板停止
+                    gameState = 'stop';
+                    btnStart.disabled = false;
+                    btnStart.innerText = "重来";
+                }
+            }
+
+            // 更新 Mesh
+            particle.position.copy(particleData.pos);
+
+            // 更新轨迹
+            trailPoints.push(particleData.pos.clone());
+            if(trailPoints.length > MAX_TRAIL_POINTS) {
+                // 如果需要限制轨迹长度可以启用下面这行，但这里我们希望保留全程
+                // trailPoints.shift(); 
+            }
+            trailLine.geometry.setFromPoints(trailPoints);
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (gameState === 'play') {
+                updatePhysics(0.016); // 假设 60fps
+            }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

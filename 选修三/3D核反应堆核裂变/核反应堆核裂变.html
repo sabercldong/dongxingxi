@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>核电站堆芯物理仿真实验室</title>
+    <style>
+        /* --- 整体风格：现代实验室（白/灰/蓝） --- */
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f5f7fa; 
+            color: #333; 
+        }
+        
+        #canvas-container {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            /* 柔和的径向渐变背景 */
+            background: radial-gradient(circle at center, #ffffff 0%, #eef2f5 100%);
+        }
+
+        /* --- 右侧功能区 --- */
+        #ui-panel {
+            position: absolute;
+            right: 20px;
+            top: 20px;
+            bottom: 20px;
+            width: 300px;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            box-sizing: border-box;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        h2 { 
+            margin-top: 0; 
+            font-size: 20px; 
+            color: #2c3e50; 
+            border-bottom: 2px solid #3498db; 
+            padding-bottom: 15px; 
+            margin-bottom: 25px; 
+            letter-spacing: 1px;
+        }
+
+        .control-group { margin-bottom: 25px; }
+        
+        label { 
+            display: flex; 
+            justify-content: space-between;
+            margin-bottom: 10px; 
+            font-size: 14px; 
+            color: #555; 
+            font-weight: 600;
+        }
+        
+        button {
+            width: 100%; 
+            padding: 12px; 
+            margin-bottom: 10px; 
+            border: none; 
+            border-radius: 6px;
+            cursor: pointer; 
+            font-weight: 600; 
+            font-size: 13px; 
+            transition: all 0.2s;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        button:hover { transform: translateY(-1px); box-shadow: 0 6px 8px rgba(0,0,0,0.15); }
+        
+        .btn-start { background: linear-gradient(135deg, #10b981, #059669); }
+        .btn-pause { background: linear-gradient(135deg, #f59e0b, #d97706); }
+        .btn-reset { background: linear-gradient(135deg, #ef4444, #b91c1c); }
+        .btn-toggle { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+
+        /* 滑块美化 */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: #3498db;
+            cursor: pointer;
+            margin-top: -7px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            background: #e2e8f0;
+            border-radius: 2px;
+        }
+
+        /* 状态监控面板 */
+        .status-panel {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: auto; /* 底部对齐 */
+        }
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            margin-bottom: 8px;
+            color: #64748b;
+        }
+        .status-val { font-family: monospace; font-weight: bold; color: #334155; }
+
+        /* --- 左上角可拖动图表 --- */
+        #chart-wrapper {
+            position: absolute;
+            left: 20px;
+            top: 20px;
+            width: 320px;
+            height: 220px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            z-index: 20;
+            border: 1px solid #e2e8f0;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        #chart-header {
+            padding: 8px 12px;
+            background: #f1f5f9;
+            border-bottom: 1px solid #e2e8f0;
+            border-radius: 8px 8px 0 0;
+            font-size: 12px;
+            color: #64748b;
+            font-weight: bold;
+            cursor: move; /* 拖拽手势 */
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        #chart-body {
+            flex: 1;
+            padding: 10px;
+            position: relative;
+        }
+
+    </style>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>📊 堆芯功率监控 (MW)</span>
+            <span style="font-size:10px; color:#aaa;">按住此处拖动</span>
+        </div>
+        <div id="chart-body">
+            <canvas id="powerChart"></canvas>
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h2>堆芯控制室</h2>
+        
+        <div class="control-group">
+            <label>模拟操作</label>
+            <button class="btn-start" onclick="startSim()">启动反应堆</button>
+            <button class="btn-pause" onclick="pauseSim()">暂停 / 继续</button>
+            <button class="btn-reset" onclick="resetSim()">紧急停堆 (SCRAM)</button>
+        </div>
+
+        <div class="control-group">
+            <label>视图控制</label>
+            <button class="btn-toggle" onclick="toggleChart()">显示 / 隐藏 图表</button>
+        </div>
+
+        <div class="control-group">
+            <label>
+                <span>控制棒深度</span>
+                <span id="rod-val-display" style="color:#3498db">100%</span>
+            </label>
+            <input type="range" id="rodSlider" min="0" max="100" value="100" oninput="updateRodTarget(this.value)">
+            <p style="font-size: 12px; color: #94a3b8; margin-top: 5px;">
+                ⚠️ 警告: 低于 30% 可能引发超临界反应。
+            </p>
+        </div>
+
+        <div class="status-panel">
+            <div class="status-row">
+                <span>堆芯温度:</span>
+                <span id="temp-display" class="status-val">300 °C</span>
+            </div>
+            <div class="status-row">
+                <span>中子通量:</span>
+                <span id="flux-display" class="status-val">0 n/cm²s</span>
+            </div>
+            <div class="status-row">
+                <span>状态:</span>
+                <span id="status-display" style="font-weight:bold; color:green;">安全停堆</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ================= 全局变量定义 =================
+        let scene, camera, renderer, controls;
+        let isRunning = false;
+        let isPaused = false;
+        let animationId;
+
+        // 物理对象
+        let fuelRods = [];     // 燃料棒数组
+        let controlRods = [];  // 控制棒数组
+        let waterVolume;       // 慢化剂(水)
+        let neutrons = [];     // 中子粒子对象数组
+        
+        // 模拟参数
+        const MAX_NEUTRONS = 400; // 限制最大粒子数以保证流畅度
+        let simState = {
+            rodLevel: 100,       // 当前控制棒实际位置 (0-100)
+            targetRodLevel: 100, // 目标位置 (用于动画平滑)
+            temperature: 300,    // 核心温度
+            power: 0,            // 当前功率
+            reactionRate: 0      // 反应速率
+        };
+
+        // 图表对象
+        let powerChart;
+        let chartUpdateTimer = 0;
+
+        // ================= 初始化系统 =================
+        function init() {
+            initScene();
+            initObjects();
+            initChart();
+            setupDraggableChart();
+            
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        // 1. 场景搭建
+        function initScene() {
+            scene = new THREE.Scene();
+            // 纯白环境设置
+            scene.background = new THREE.Color(0xf5f7fa);
+            scene.fog = new THREE.Fog(0xf5f7fa, 40, 120); 
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 1, 500);
+            camera.position.set(30, 40, 50);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // 开启阴影
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 控制器
+            if (window.THREE && window.THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else if (window.OrbitControls) {
+                controls = new OrbitControls(camera, renderer.domElement);
+            }
+            if(controls) {
+                controls.enableDamping = true;
+                controls.target.set(0, 10, 0);
+            }
+
+            // 灯光
+            const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambient);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(20, 50, 20);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.width = 1024;
+            dirLight.shadow.mapSize.height = 1024;
+            scene.add(dirLight);
+
+            // 地面网格
+            const grid = new THREE.GridHelper(100, 20, 0xd1d5db, 0xe5e7eb);
+            scene.add(grid);
+        }
+
+        // 2. 核心物体建模
+        function initObjects() {
+            // A. 反应堆压力容器 (透明蓝)
+            const vesselGeo = new THREE.CylinderGeometry(14, 14, 45, 32, 1, true);
+            const vesselMat = new THREE.MeshPhysicalMaterial({
+                color: 0x60a5fa,
+                metalness: 0.1,
+                roughness: 0.1,
+                transmission: 0.5,
+                opacity: 0.3,
+                transparent: true,
+                side: THREE.DoubleSide
+            });
+            waterVolume = new THREE.Mesh(vesselGeo, vesselMat);
+            waterVolume.position.y = 12.5;
+            scene.add(waterVolume);
+
+            // B. 燃料棒 (Fuel Assemblies) - 3x3 矩阵
+            const rodGeo = new THREE.BoxGeometry(2.5, 35, 2.5);
+            // 燃料棒材质：默认深灰色，发光时变红
+            const fuelMat = new THREE.MeshStandardMaterial({
+                color: 0x475569, 
+                roughness: 0.4,
+                metalness: 0.6,
+                emissive: 0xff3300,
+                emissiveIntensity: 0
+            });
+
+            for(let x = -1; x <= 1; x++) {
+                for(let z = -1; z <= 1; z++) {
+                    const rod = new THREE.Mesh(rodGeo, fuelMat.clone());
+                    rod.position.set(x * 4, 15, z * 4);
+                    rod.castShadow = true;
+                    rod.receiveShadow = true;
+                    scene.add(rod);
+                    fuelRods.push(rod);
+                }
+            }
+
+            // C. 控制棒 (Control Rods) - 十字形插入燃料棒之间
+            // 我们在每两根燃料棒之间放置控制棒
+            const ctrlGeo = new THREE.CylinderGeometry(0.5, 0.5, 35, 16);
+            const ctrlMat = new THREE.MeshStandardMaterial({
+                color: 0x94a3b8, // 银灰色
+                metalness: 0.9,
+                roughness: 0.2
+            });
+
+            // 4根控制棒的位置
+            const positions = [
+                {x: -2, z: -2}, {x: 2, z: -2},
+                {x: -2, z: 2},  {x: 2, z: 2}
+            ];
+
+            positions.forEach(pos => {
+                const rod = new THREE.Mesh(ctrlGeo, ctrlMat);
+                // 初始状态：完全插入
+                // Y轴位置逻辑：完全插入时，底部深陷；完全拔出时，悬在上方
+                // 设: 0% (拔出) -> y = 35; 100% (插入) -> y = 15
+                rod.position.set(pos.x, 15, pos.z);
+                rod.castShadow = true;
+                scene.add(rod);
+                controlRods.push(rod);
+            });
+        }
+
+        // 3. 图表初始化 (Chart.js)
+        function initChart() {
+            const ctx = document.getElementById('powerChart').getContext('2d');
+            
+            // 初始空数据
+            const initLabels = Array(20).fill('');
+            const initData = Array(20).fill(0);
+
+            powerChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: initLabels,
+                    datasets: [{
+                        label: '热功率 (MW)',
+                        data: initData,
+                        borderColor: '#3b82f6',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        borderWidth: 2,
+                        pointRadius: 0, // 不显示点
+                        fill: true,
+                        tension: 0.4 // 平滑曲线
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false, // 关闭动画提高性能
+                    scales: {
+                        x: { display: false },
+                        y: { 
+                            beginAtZero: true,
+                            grid: { color: '#f1f5f9' },
+                            suggestedMax: 1000
+                        }
+                    },
+                    plugins: {
+                        legend: { display: false }
+                    }
+                }
+            });
+        }
+
+        // ================= 模拟逻辑核心 =================
+
+        // 中子粒子类
+        class Neutron {
+            constructor(pos) {
+                this.mesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.2, 8, 8),
+                    new THREE.MeshBasicMaterial({ color: 0x00ffff }) // 亮青色中子
+                );
+                this.mesh.position.copy(pos);
+                // 随机初速度
+                this.velocity = new THREE.Vector3(
+                    (Math.random()-0.5) * 1.5,
+                    (Math.random()-0.5) * 1.5,
+                    (Math.random()-0.5) * 1.5
+                );
+                this.life = 60 + Math.random() * 40; // 存活帧数
+                scene.add(this.mesh);
+            }
+        }
+
+        function spawnNeutron(position) {
+            if(neutrons.length < MAX_NEUTRONS) {
+                const n = new Neutron(position);
+                neutrons.push(n);
+            }
+        }
+
+        function updatePhysics() {
+            // 1. 控制棒动画平滑
+            if (Math.abs(simState.rodLevel - simState.targetRodLevel) > 0.1) {
+                simState.rodLevel += (simState.targetRodLevel - simState.rodLevel) * 0.05;
+            }
+            // 更新控制棒 3D 位置
+            // 0% -> y=38 (上), 100% -> y=15 (下)
+            const rodY = 38 - (simState.rodLevel / 100) * 23;
+            controlRods.forEach(rod => rod.position.y = rodY);
+
+            // 2. 计算反应堆物理状态
+            // 简单的反应性模型：插入越少，反应越剧烈
+            // 临界点设定在 30% 左右。低于 30% 插入量，反应开始指数增长。
+            const reactivity = (100 - simState.rodLevel) / 100; // 0.0 - 1.0
+            
+            // 调整反应率
+            let targetRate = 0;
+            if (reactivity > 0.3) {
+                // 超临界区域
+                targetRate = Math.pow((reactivity - 0.3) * 2, 2); 
+            } else {
+                // 亚临界区域，快速衰减
+                targetRate = 0; 
+            }
+
+            // 惯性模拟
+            simState.reactionRate += (targetRate - simState.reactionRate) * 0.02;
+            
+            // 计算温度和功率
+            simState.power = Math.floor(simState.reactionRate * 1200); // 最大 1200MW
+            if(simState.power > 0) {
+                simState.temperature += simState.reactionRate * 5;
+            }
+            // 自然冷却
+            simState.temperature -= (simState.temperature - 300) * 0.1;
+            if (simState.temperature < 300) simState.temperature = 300;
+
+            // 3. 中子生成与更新
+            // 如果反应率高，随机生成新中子
+            if (simState.reactionRate > 0.01) {
+                const spawnCount = Math.floor(simState.reactionRate * 5) + 1;
+                for(let i=0; i<spawnCount; i++) {
+                    // 从随机燃料棒位置发射
+                    const source = fuelRods[Math.floor(Math.random() * fuelRods.length)];
+                    const spawnPos = source.position.clone();
+                    spawnPos.y += (Math.random()-0.5) * 20; // 沿棒身随机高度
+                    spawnPos.x += (Math.random()-0.5) * 2;
+                    spawnPos.z += (Math.random()-0.5) * 2;
+                    spawnNeutron(spawnPos);
+                }
+            }
+
+            // 更新现有中子
+            // 控制棒底端高度 (用于判定遮挡)
+            const controlRodBottomY = rodY - 17.5; 
+
+            for (let i = neutrons.length - 1; i >= 0; i--) {
+                const n = neutrons[i];
+                n.mesh.position.add(n.velocity);
+                n.life--;
+
+                let killed = false;
+
+                // 边界检测
+                if (n.mesh.position.y > 40 || n.mesh.position.y < -5 || n.mesh.position.length() > 25) {
+                    killed = true;
+                }
+                
+                // 控制棒吸收判定 (简化版)
+                // 如果中子高度低于控制棒底端，且在控制棒水平范围内
+                if (!killed && n.mesh.position.y < controlRodBottomY + 35) {
+                    // 检查是否靠近任意控制棒中心轴
+                    controlRods.forEach(rod => {
+                        const dist = Math.sqrt(
+                            Math.pow(n.mesh.position.x - rod.position.x, 2) + 
+                            Math.pow(n.mesh.position.z - rod.position.z, 2)
+                        );
+                        // 如果撞到控制棒，大概率被吸收
+                        if(dist < 1.0) killed = true;
+                    });
+                }
+
+                if (killed || n.life <= 0) {
+                    scene.remove(n.mesh);
+                    neutrons.splice(i, 1);
+                }
+            }
+        }
+
+        function updateVisuals() {
+            // 燃料棒颜色：从深灰变红再变亮橙
+            const heatRatio = Math.min((simState.temperature - 300) / 1000, 1);
+            fuelRods.forEach(rod => {
+                rod.material.emissiveIntensity = heatRatio * 3;
+                // 色相从红(0)微调到橙
+                rod.material.emissive.setHSL(0.05 * heatRatio, 1.0, 0.5);
+            });
+
+            // 水体切连科夫辐射 (幽蓝光)
+            const glow = Math.min(simState.reactionRate, 0.8);
+            waterVolume.material.color.setHSL(0.6, 0.9, 0.5 + glow * 0.4);
+            waterVolume.material.opacity = 0.3 + glow * 0.2;
+
+            // UI 文字更新
+            document.getElementById('temp-display').innerText = Math.floor(simState.temperature) + " °C";
+            document.getElementById('flux-display').innerText = (neutrons.length * 1.5).toFixed(1) + "e12";
+            
+            const statusEl = document.getElementById('status-display');
+            if (!isRunning) {
+                statusEl.innerText = "已暂停/停机";
+                statusEl.style.color = "gray";
+            } else if (simState.power > 1100) {
+                statusEl.innerText = "危险超载!";
+                statusEl.style.color = "red";
+            } else if (simState.power > 100) {
+                statusEl.innerText = "临界运行中";
+                statusEl.style.color = "#3b82f6"; // blue
+            } else {
+                statusEl.innerText = "亚临界启动";
+                statusEl.style.color = "green";
+            }
+
+            // 图表更新 (每10帧更新一次，避免卡顿)
+            chartUpdateTimer++;
+            if (chartUpdateTimer > 10) {
+                chartUpdateTimer = 0;
+                const labels = powerChart.data.labels;
+                const data = powerChart.data.datasets[0].data;
+                
+                labels.shift();
+                labels.push('');
+                data.shift();
+                data.push(simState.power);
+                
+                powerChart.update();
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (isRunning && !isPaused) {
+                updatePhysics();
+            } else {
+                // 停机时也要平滑移动控制棒
+                if (Math.abs(simState.rodLevel - simState.targetRodLevel) > 0.1) {
+                    simState.rodLevel += (simState.targetRodLevel - simState.rodLevel) * 0.05;
+                    const rodY = 38 - (simState.rodLevel / 100) * 23;
+                    controlRods.forEach(rod => rod.position.y = rodY);
+                }
+            }
+
+            updateVisuals();
+            renderer.render(scene, camera);
+        }
+
+        // ================= UI 交互功能 =================
+        function startSim() {
+            isRunning = true;
+            isPaused = false;
+        }
+
+        function pauseSim() {
+            if(isRunning) isPaused = !isPaused;
+        }
+
+        function resetSim() {
+            isRunning = false;
+            isPaused = false;
+            simState.targetRodLevel = 100;
+            document.getElementById('rodSlider').value = 100;
+            updateRodTarget(100);
+            
+            // 清除数据
+            simState.temperature = 300;
+            simState.power = 0;
+            simState.reactionRate = 0;
+            
+            // 清空中子
+            neutrons.forEach(n => scene.remove(n.mesh));
+            neutrons = [];
+            
+            // 重置图表
+            powerChart.data.datasets[0].data.fill(0);
+            powerChart.update();
+        }
+
+        function updateRodTarget(val) {
+            simState.targetRodLevel = parseFloat(val);
+            document.getElementById('rod-val-display').innerText = val + "%";
+        }
+
+        function toggleChart() {
+            const el = document.getElementById('chart-wrapper');
+            el.style.display = (el.style.display === 'none') ? 'flex' : 'none';
+        }
+
+        // 图表拖拽逻辑
+        function setupDraggableChart() {
+            const elmnt = document.getElementById("chart-wrapper");
+            const header = document.getElementById("chart-header");
+            
+            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+            header.onmousedown = dragMouseDown;
+
+            function dragMouseDown(e) {
+                e = e || window.event;
+                e.preventDefault();
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                document.onmouseup = closeDragElement;
+                document.onmousemove = elementDrag;
+            }
+
+            function elementDrag(e) {
+                e = e || window.event;
+                e.preventDefault();
+                pos1 = pos3 - e.clientX;
+                pos2 = pos4 - e.clientY;
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+                elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+            }
+
+            function closeDragElement() {
+                document.onmouseup = null;
+                document.onmousemove = null;
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 启动程序
+        init();
+
+    </script>
+</body>
+</html>

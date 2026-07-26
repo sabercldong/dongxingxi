@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>滚轮线（摆线）精细演示</title>
+    <style>
+        * { box-sizing: border-box; }
+        body, html {
+            margin: 0; padding: 0;
+            width: 100%; height: 100%;
+            overflow: hidden;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #f8f9fa;
+        }
+
+        .main-container { display: flex; width: 100vw; height: 100vh; }
+
+        /* 左侧：动态绘图区 */
+        #canvas-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: #ffffff;
+            position: relative;
+        }
+
+        canvas {
+            background-color: #fff;
+        }
+
+        /* 右侧：控制与说明区 */
+        .info-panel {
+            width: 380px;
+            padding: 40px 30px;
+            background-color: #ffffff;
+            border-left: 2px solid #eee;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        h2 { color: #2c3e50; border-bottom: 4px solid #3498db; padding-bottom: 10px; margin: 0; }
+        
+        .control-group {
+            background: #f1f3f5;
+            padding: 20px;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        button {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+            transition: 0.2s;
+        }
+
+        .btn-start { background-color: #2ecc71; color: white; }
+        .btn-reset { background-color: #e74c3c; color: white; }
+
+        .stats-card {
+            background: #2c3e50;
+            color: #ffffff;
+            padding: 20px;
+            border-radius: 12px;
+            line-height: 1.6;
+        }
+
+        .highlight { color: #f1c40f; font-weight: bold; }
+
+        .explanation {
+            line-height: 1.8;
+            color: #495057;
+            font-size: 15px;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+
+        .color-tag {
+            display: inline-block;
+            width: 12px; height: 12px;
+            margin-right: 5px;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div id="canvas-container">
+        <canvas id="cycloidCanvas"></canvas>
+        <div style="margin-top: 25px; color: #7f8c8d; font-size: 15px; font-weight: 500;">
+            提示：观察圆心轨迹与圆周点的轨迹区别
+        </div>
+    </div>
+
+    <div class="info-panel">
+        <h2>摆线形成演示</h2>
+        
+        <div class="control-group">
+            <button class="btn-start" id="toggleBtn" onclick="toggleAnimation()">开始演示</button>
+            <button class="btn-reset" onclick="resetAnimation()">重置</button>
+        </div>
+
+        <div class="stats-card">
+            <div>滚动距离: <span id="distVal" class="highlight">0.00</span> px</div>
+            <div>旋转角度: <span id="angleVal" class="highlight">0</span> °</div>
+        </div>
+
+        <div class="explanation">
+            <strong>图形说明：</strong><br>
+            • <span class="color-tag" style="background:#3498db"></span> <b>蓝色：</b> 滚动的轮子<br>
+            • <span class="color-tag" style="background:#e74c3c"></span> <b>红色：</b> 轮子边缘点的轨迹 (摆线)<br>
+            • <span class="color-tag" style="background:#f1c40f"></span> <b>黄色：</b> 圆心的轨迹 (水平直线)<br>
+            <br>
+            <strong>观察重点：</strong><br>
+            当轮子匀速向前滚动时，圆心做匀速直线运动，而圆周上的点则划出了一道道拱形的曲线。
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('cycloidCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+
+    let animationId;
+    let isRunning = false;
+    
+    const r = 60; // 轮子半径
+    let t = 0;    // 旋转弧度
+    let path = []; 
+    let startOffset = 80; // 初始偏移量，确保轮子完整显示
+
+    function resize() {
+        canvas.width = container.clientWidth - 40;
+        canvas.height = 400;
+        draw();
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        const groundY = canvas.height - 80;
+        const centerX = startOffset + r * t;
+        const centerY = groundY - r;
+
+        // 1. 绘制地面 (单条直线)
+        ctx.beginPath();
+        ctx.moveTo(0, groundY);
+        ctx.lineTo(canvas.width, groundY);
+        ctx.strokeStyle = '#333';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 2. 绘制圆心轨迹 (黄色虚线)
+        ctx.beginPath();
+        ctx.moveTo(startOffset, centerY);
+        ctx.lineTo(centerX, centerY);
+        ctx.strokeStyle = '#f1c40f';
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 3. 计算轨迹点 (动点)
+        // 初始位置动点在最下方接触地面处
+        const px = startOffset + r * (t - Math.sin(t));
+        const py = groundY - r * (1 - Math.cos(t));
+        
+        if (isRunning || t === 0) {
+            path.push({x: px, y: py});
+        }
+
+        // 4. 绘制摆线轨迹 (红色)
+        ctx.beginPath();
+        ctx.strokeStyle = '#e74c3c';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < path.length; i++) {
+            if (i === 0) ctx.moveTo(path[i].x, path[i].y);
+            else ctx.lineTo(path[i].x, path[i].y);
+        }
+        ctx.stroke();
+
+        // 5. 绘制轮子 (蓝色)
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, r, 0, Math.PI * 2);
+        ctx.strokeStyle = '#3498db';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // 绘制半径线条（体现旋转）
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY);
+        ctx.lineTo(px, py);
+        ctx.strokeStyle = '#3498db';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // 绘制动点
+        ctx.beginPath();
+        ctx.arc(px, py, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#e74c3c';
+        ctx.fill();
+
+        // 更新数值
+        document.getElementById('distVal').innerText = (r * t).toFixed(2);
+        document.getElementById('angleVal').innerText = ((t * 180) / Math.PI).toFixed(0);
+
+        if (centerX + r > canvas.width) stopAnimation();
+    }
+
+    function animate() {
+        if (!isRunning) return;
+        t += 0.04;
+        draw();
+        animationId = requestAnimationFrame(animate);
+    }
+
+    function toggleAnimation() {
+        const btn = document.getElementById('toggleBtn');
+        if (isRunning) {
+            stopAnimation();
+        } else {
+            isRunning = true;
+            btn.innerText = "暂停";
+            animate();
+        }
+    }
+
+    function stopAnimation() {
+        isRunning = false;
+        document.getElementById('toggleBtn').innerText = "继续演示";
+        cancelAnimationFrame(animationId);
+    }
+
+    function resetAnimation() {
+        stopAnimation();
+        t = 0;
+        path = [];
+        document.getElementById('toggleBtn').innerText = "开始演示";
+        draw();
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+</script>
+
+</body>
+</html>

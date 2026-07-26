@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>拖把自锁演示 (修正版)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            background-color: #f4f7f6;
+            height: 100vh;
+            display: flex;
+        }
+
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            background: #ffffff;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #controls {
+            width: 340px;
+            background: #fff;
+            border-left: 1px solid #e0e0e0;
+            padding: 25px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+        }
+
+        h2 { margin: 0 0 20px 0; color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        
+        .control-group { margin-bottom: 25px; }
+        
+        label { display: flex; justify-content: space-between; font-weight: 600; color: #555; margin-bottom: 8px; }
+        
+        input[type="range"] { width: 100%; cursor: pointer; }
+
+        .value-text { color: #3498db; font-family: monospace; font-size: 1.1rem; }
+
+        .status-card {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-top: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+
+        .status-locked { background: #ffebee; color: #c62828; border: 2px solid #ef9a9a; }
+        .status-moving { background: #e8f5e9; color: #2e7d32; border: 2px solid #a5d6a7; }
+
+        .legend { margin-top: auto; font-size: 0.85rem; color: #666; }
+        .legend-row { display: flex; align-items: center; margin-top: 5px; }
+        .icon { width: 12px; height: 12px; margin-right: 8px; border-radius: 2px; }
+
+    </style>
+</head>
+<body>
+
+    <div id="canvas-wrapper">
+        <canvas id="mainCanvas"></canvas>
+    </div>
+
+    <div id="controls">
+        <h2>拖把自锁现象</h2>
+
+        <div class="control-group">
+            <label>
+                地面摩擦系数 (&mu;)
+                <span id="muVal" class="value-text">0.60</span>
+            </label>
+            <input type="range" id="muRange" min="0.2" max="1.0" step="0.05" value="0.6">
+        </div>
+
+        <div class="control-group">
+            <label>
+                杆子倾斜角度 (&theta;)
+                <span id="angleVal" class="value-text">15°</span>
+            </label>
+            <input type="range" id="angleRange" min="0" max="60" step="0.5" value="15">
+            <div style="font-size: 0.8rem; color: #999; margin-top: 5px;">
+                0° 代表完全垂直地面 (最难推)
+            </div>
+        </div>
+
+        <div id="statusIndicator" class="status-card status-locked">
+            🔒 锁死 (推不动)
+        </div>
+
+        <div style="margin-top: 20px; font-size: 0.9rem; line-height: 1.6; color: #555;">
+            <strong>修正说明：</strong><br>
+            现在模拟<strong>从左向右推</strong>。<br>
+            当推力方向(红色箭头)落在灰色摩擦锥内时，推力的水平分量不足以克服摩擦力，导致锁死。
+        </div>
+
+        <div class="legend">
+            <div class="legend-row"><div class="icon" style="background:#ddd; border:1px dashed #999"></div> 摩擦锥 (死区)</div>
+            <div class="legend-row"><div class="icon" style="background:#e74c3c"></div> 推力方向 (人)</div>
+            <div class="legend-row"><div class="icon" style="background:#2c3e50"></div> 摩擦力 (阻力)</div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+        const wrapper = document.getElementById('canvas-wrapper');
+
+        const muRange = document.getElementById('muRange');
+        const angleRange = document.getElementById('angleRange');
+        const muVal = document.getElementById('muVal');
+        const angleVal = document.getElementById('angleVal');
+        const statusInd = document.getElementById('statusIndicator');
+
+        let mu = 0.6;
+        let theta = 15; // 杆子与垂直线的夹角
+        let isLocked = true;
+        let mopX = 0; // 拖把位置
+        let speed = 0;
+
+        function resize() {
+            canvas.width = wrapper.clientWidth;
+            canvas.height = wrapper.clientHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function update() {
+            mu = parseFloat(muRange.value);
+            theta = parseFloat(angleRange.value);
+
+            muVal.innerText = mu.toFixed(2);
+            angleVal.innerText = theta.toFixed(1) + "°";
+
+            // 计算摩擦角 phi
+            const phiRad = Math.atan(mu);
+            const phiDeg = phiRad * 180 / Math.PI;
+
+            // 判定逻辑：杆子角度 theta 是否小于 摩擦角 phi
+            // theta 是杆子与垂直线的夹角。
+            // 夹角越小，分力向下越多，越容易锁死。
+            if (theta <= phiDeg) {
+                isLocked = true;
+                statusInd.innerText = "🔒 自锁 (推不动)";
+                statusInd.className = "status-card status-locked";
+                speed = 0; // 停止
+            } else {
+                isLocked = false;
+                statusInd.innerText = "💨 滑动 (推走了)";
+                statusInd.className = "status-card status-moving";
+                speed = 2; // 移动速度
+            }
+
+            // 更新位置
+            if (!isLocked) {
+                mopX += speed;
+                if (mopX > 300) mopX = -200; // 循环动画
+            } else {
+                // 锁死时，稍微抖动一下表示在用力
+                mopX = Math.sin(Date.now() / 50) * 1;
+            }
+
+            draw(theta * Math.PI / 180, phiRad);
+            requestAnimationFrame(update);
+        }
+
+        function draw(thetaRad, phiRad) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            const cx = canvas.width / 2;
+            const floorY = canvas.height / 2 + 120;
+
+            // 1. 绘制地面
+            ctx.beginPath();
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.moveTo(0, floorY);
+            ctx.lineTo(canvas.width, floorY);
+            ctx.stroke();
+
+            // 地面纹理
+            ctx.beginPath();
+            ctx.strokeStyle = '#bbb';
+            ctx.lineWidth = 1;
+            for(let i=0; i<canvas.width; i+=20) {
+                ctx.moveTo(i, floorY);
+                ctx.lineTo(i-10, floorY+10);
+            }
+            ctx.stroke();
+
+            // 移动坐标系到拖把头中心 (随动画移动)
+            const currentMopX = cx + mopX;
+            const mopY = floorY - 20; // 拖把头略高于地面中心线
+
+            ctx.save();
+            ctx.translate(currentMopX, floorY);
+
+            // --- 2. 绘制 "摩擦锥" (Friction Cone) ---
+            // 这是背景参考系，不随杆子转动，只随摩擦系数变化
+            // 垂直向上是 -PI/2
+            const coneHeight = 220;
+            
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            // 左边界 (-90 - phi)
+            ctx.arc(0, 0, coneHeight, -Math.PI/2 - phiRad, -Math.PI/2 + phiRad);
+            ctx.lineTo(0, 0);
+            
+            // 样式
+            ctx.fillStyle = 'rgba(189, 195, 199, 0.3)'; // 灰色死区
+            ctx.fill();
+            
+            // 绘制边界线
+            ctx.strokeStyle = '#7f8c8d';
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]); // 复原
+
+            // 标注摩擦角
+            ctx.beginPath();
+            ctx.strokeStyle = '#e74c3c';
+            ctx.arc(0, 0, 60, -Math.PI/2, -Math.PI/2 - phiRad, true);
+            ctx.stroke();
+            ctx.font = "12px Arial";
+            ctx.fillStyle = "#e74c3c";
+            ctx.fillText("φ", -20, -70);
+
+
+            // --- 3. 绘制推杆 (人从左边推) ---
+            // 杆子在上，从左上指向右下(原点)
+            // 角度 thetaRad 是与垂直线的夹角
+            // 左上的角度应该是: -PI/2 - thetaRad
+            
+            const stickLen = 200;
+            // 计算杆子手柄位置
+            const handleX = Math.cos(-Math.PI/2 - thetaRad) * stickLen;
+            const handleY = Math.sin(-Math.PI/2 - thetaRad) * stickLen;
+
+            // 画杆子
+            ctx.beginPath();
+            ctx.lineWidth = 8;
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = '#34495e';
+            ctx.moveTo(handleX, handleY);
+            ctx.lineTo(0, 0);
+            ctx.stroke();
+
+            // 画手柄/手
+            ctx.beginPath();
+            ctx.fillStyle = '#e67e22';
+            ctx.arc(handleX, handleY, 12, 0, Math.PI*2);
+            ctx.fill();
+
+            // --- 4. 绘制受力箭头 (推力 F) ---
+            // 力是沿着杆子向下的
+            const forceArrowLen = 120;
+            const forceEndX = Math.cos(Math.PI/2 - thetaRad) * forceArrowLen; // 向右
+            const forceEndY = Math.sin(Math.PI/2 - thetaRad) * forceArrowLen; // 向下 (注意canvas y向下为正，但这里我们要算的是向量)
+            
+            // 为了画在杆子中间，我们取个中点
+            const midX = handleX * 0.4;
+            const midY = handleY * 0.4;
+            
+            // 画红色推力箭头
+            drawArrow(ctx, handleX, handleY, 0, 0, '#e74c3c', 4, "F (推力)");
+
+
+            // --- 5. 绘制摩擦力 f ---
+            // 阻碍向右运动，所以向左
+            // 只有有推力水平分量时才画
+            if(thetaRad > 0.01) {
+                // 摩擦力大小示意 (如果锁死，它等于推力水平分量；如果滑动，它是固定最大值)
+                // 这里为了演示，画一个向左的箭头即可
+                const fLen = isLocked ? 60 : 40; 
+                drawArrow(ctx, 0, 0, -fLen, 0, '#2c3e50', 4, isLocked ? "f (静摩擦)" : "f (动摩擦)");
+                
+                // 支持力 N
+                drawArrow(ctx, 0, 0, 0, -80, '#27ae60', 4, "N");
+            }
+            
+            // --- 6. 绘制拖把头 ---
+            ctx.fillStyle = '#95a5a6';
+            ctx.fillRect(-40, -10, 80, 10); // 板子
+            // 毛
+            ctx.beginPath();
+            ctx.strokeStyle = '#7f8c8d';
+            ctx.lineWidth = 2;
+            for(let i=-35; i<35; i+=5) {
+                // 如果向右动，毛向左飘
+                let bend = isLocked ? 0 : -10;
+                ctx.moveTo(i, 0);
+                ctx.quadraticCurveTo(i+bend, 10, i+bend, 20);
+            }
+            ctx.stroke();
+
+            ctx.restore();
+            
+            // 辅助文字
+            ctx.fillStyle = '#555';
+            ctx.font = "14px Arial";
+            if(isLocked) {
+                ctx.fillText("推力在摩擦锥内 -> 锁死", cx - 70, floorY + 40);
+            } else {
+                ctx.fillText("推力在摩擦锥外 -> 滑动", cx - 70, floorY + 40);
+            }
+        }
+
+        // 通用画箭头函数
+        function drawArrow(ctx, x1, y1, x2, y2, color, width, label) {
+            const headLen = 12;
+            const angle = Math.atan2(y2-y1, x2-x1);
+            
+            ctx.beginPath();
+            ctx.lineWidth = width;
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            
+            // 线
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+            
+            // 头
+            ctx.beginPath();
+            ctx.moveTo(x2, y2);
+            ctx.lineTo(x2 - headLen * Math.cos(angle - Math.PI/6), y2 - headLen * Math.sin(angle - Math.PI/6));
+            ctx.lineTo(x2 - headLen * Math.cos(angle + Math.PI/6), y2 - headLen * Math.sin(angle + Math.PI/6));
+            ctx.fill();
+
+            // 标签
+            if(label) {
+                ctx.font = "bold 12px Arial";
+                ctx.fillText(label, x2 + 10, y2 + 5);
+            }
+        }
+
+        requestAnimationFrame(update);
+
+    </script>
+</body>
+</html>

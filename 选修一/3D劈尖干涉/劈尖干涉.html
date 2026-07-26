@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>平行光劈尖干涉 (可控光路版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #1a1a1a; font-family: 'Segoe UI', sans-serif; color: #fff; user-select: none; }
+        
+        #container { position: relative; width: 100vw; height: 100vh; display: flex; }
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; outline: none; background: radial-gradient(circle at center, #2a2a2a 0%, #111 100%); }
+        
+        /* 右侧控制区 */
+        #sidebar {
+            width: 320px;
+            background: rgba(35, 35, 35, 0.95);
+            padding: 20px;
+            box-shadow: -4px 0 15px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            border-left: 1px solid #444;
+            backdrop-filter: blur(10px);
+        }
+
+        h2 { margin-top: 0; font-size: 18px; border-bottom: 2px solid #00e5ff; padding-bottom: 10px; color: #fff; letter-spacing: 1px; }
+        
+        .control-group { margin-bottom: 10px; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 6px; }
+        
+        /* 特殊样式：开关行 */
+        .toggle-row { display: flex; justify-content: space-between; align-items: center; cursor: pointer; }
+        .toggle-row label { margin: 0; cursor: pointer; }
+        
+        label { display: block; font-size: 13px; margin-bottom: 8px; color: #ccc; }
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: #00e5ff; height: 4px; border-radius: 2px; }
+        input[type="checkbox"] { transform: scale(1.5); accent-color: #00e5ff; cursor: pointer; }
+
+        .value-display { float: right; color: #00e5ff; font-weight: bold; font-family: monospace; }
+        
+        button {
+            width: 100%; padding: 12px; border: none; border-radius: 4px;
+            cursor: pointer; font-weight: bold; background: #00e5ff; color: #000;
+            font-size: 14px; transition: 0.3s; margin-top: 10px; text-transform: uppercase;
+        }
+        button:hover { background: #fff; box-shadow: 0 0 10px #00e5ff; }
+
+        /* 图例说明 */
+        .legend { font-size: 12px; margin-top: 5px; padding: 10px; background: rgba(0,0,0,0.3); border-radius: 4px; border: 1px solid #333; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 6px; }
+        .color-box { width: 20px; height: 3px; margin-right: 10px; border-radius: 1px; }
+
+        /* 左上角图表 */
+        #chart-container {
+            position: absolute; top: 20px; left: 20px; width: 380px;
+            background: rgba(20, 20, 20, 0.9);
+            border: 1px solid #444; border-radius: 8px;
+            padding: 12px; cursor: move; z-index: 100;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.8);
+        }
+        #chart-header {
+            font-size: 13px; color: #888; margin-bottom: 8px; text-align: center;
+            border-bottom: 1px solid #333; padding-bottom: 5px; text-transform: uppercase; letter-spacing: 1px;
+        }
+    </style>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+    <script src="./chart.min.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>物理参数 (Physics)</h2>
+        
+        <div class="control-group toggle-row">
+            <label for="check-show-rays" style="color: #fff; font-weight: bold;">显示光路 (Show Rays)</label>
+            <input type="checkbox" id="check-show-rays" checked>
+        </div>
+
+        <div class="control-group">
+            <label>入射波长 (nm) <span id="val-lambda" class="value-display">600</span></label>
+            <input type="range" id="input-lambda" min="400" max="750" value="600" step="10">
+        </div>
+
+        <div class="control-group">
+            <label>劈尖角度 (α) <span id="val-angle" class="value-display">1.5</span></label>
+            <input type="range" id="input-angle" min="0.1" max="4.0" value="1.5" step="0.1">
+        </div>
+
+        <div class="control-group">
+            <label>光线密度 (Density) <span id="val-rays" class="value-display">10</span></label>
+            <input type="range" id="input-rays" min="2" max="25" value="10" step="1">
+        </div>
+
+        <div class="legend">
+            <div class="legend-item"><div class="color-box" style="background: #ffff00;"></div> 平行入射光 (Incident)</div>
+            <div class="legend-item"><div class="color-box" style="background: #00ffff;"></div> 表面1反射 (Upper Refl)</div>
+            <div class="legend-item"><div class="color-box" style="background: #ff00ff;"></div> 表面2反射 (Lower Refl)</div>
+            <div class="legend-item"><div class="color-box" style="background: #fff; border:1px dashed #555;"></div> 干涉条纹 (Interference)</div>
+        </div>
+
+        <button onclick="resetView()">重置视角</button>
+    </div>
+</div>
+
+<div id="chart-container">
+    <div id="chart-header">光强分布 (Intensity)</div>
+    <canvas id="interferenceChart"></canvas>
+</div>
+
+<script>
+    // ================= 系统变量 =================
+    let scene, camera, renderer, controls;
+    let glassTop, glassBottom, interferencePlane;
+    let rayGroup; 
+    let chartInstance;
+    
+    // 物理与几何配置
+    const CONFIG = {
+        wedgeLength: 10,  // 劈尖长度
+        glassThickness: 0.3,
+        pivotX: -5,       // 旋转轴心（左端）
+        lambda: 600,
+        angleVal: 1.5,    // 角度
+        rayCount: 10,
+        showRays: true    // 新增：光路显示状态
+    };
+
+    window.onload = function() {
+        initThree();
+        buildSceneObjects();
+        initChart();
+        initDrag();
+        updateSystem(); 
+        animate();
+    };
+
+    // ================= 1. Three.js 初始化 =================
+    function initThree() {
+        const container = document.getElementById('canvas-container');
+        scene = new THREE.Scene();
+        
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 2, 18); // 正面视角
+        camera.lookAt(0, 0, 0);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        }
+        if(controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+        }
+
+        // 光照
+        scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+        const dl = new THREE.DirectionalLight(0xffffff, 0.5);
+        dl.position.set(5, 10, 5);
+        scene.add(dl);
+
+        window.addEventListener('resize', onWindowResize, false);
+    }
+
+    // ================= 2. 场景物体构建 =================
+    function buildSceneObjects() {
+        // 玻璃材质
+        const glassMat = new THREE.MeshPhysicalMaterial({
+            color: 0xaaccff,
+            metalness: 0.1, roughness: 0.1,
+            transmission: 0.2, transparent: true, opacity: 0.15,
+            side: THREE.DoubleSide
+        });
+
+        const geo = new THREE.BoxGeometry(CONFIG.wedgeLength, CONFIG.glassThickness, 3);
+
+        // 下玻璃板 (水平固定)
+        glassBottom = new THREE.Mesh(geo, glassMat);
+        glassBottom.position.set(0, -CONFIG.glassThickness/2 - 0.02, 0);
+        scene.add(glassBottom);
+
+        // 上玻璃板 (将旋转)
+        glassTop = new THREE.Mesh(geo, glassMat);
+        scene.add(glassTop);
+
+        // 干涉条纹显示平面 (位于下玻璃上表面)
+        const planeGeo = new THREE.PlaneGeometry(CONFIG.wedgeLength, 3);
+        const shaderMat = new THREE.ShaderMaterial({
+            uniforms: {
+                uColor: { value: new THREE.Color(1, 1, 1) },
+                uFreq: { value: 10.0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }
+            `,
+            fragmentShader: `
+                uniform vec3 uColor;
+                uniform float uFreq;
+                varying vec2 vUv;
+                void main() {
+                    float intensity = pow(cos(vUv.x * uFreq), 2.0);
+                    gl_FragColor = vec4(uColor * intensity, 0.9);
+                }
+            `,
+            transparent: true, side: THREE.DoubleSide
+        });
+        interferencePlane = new THREE.Mesh(planeGeo, shaderMat);
+        interferencePlane.rotation.x = -Math.PI / 2;
+        interferencePlane.position.y = 0; // 紧贴空气层底部
+        scene.add(interferencePlane);
+
+        // 光线组
+        rayGroup = new THREE.Group();
+        scene.add(rayGroup);
+    }
+
+    // ================= 3. 核心物理逻辑与光路绘制 =================
+    function updateSystem() {
+        // --- A. 更新劈尖几何 ---
+        const rad = CONFIG.angleVal * (Math.PI / 180); 
+        const visualRad = rad * 1.5; // 视觉夸张
+
+        glassTop.rotation.set(0, 0, 0);
+        glassTop.position.set(0, 0, 0);
+        glassTop.rotation.z = visualRad;
+        
+        const halfL = CONFIG.wedgeLength / 2;
+        glassTop.position.x = CONFIG.pivotX + halfL * Math.cos(visualRad);
+        glassTop.position.y = halfL * Math.sin(visualRad) + CONFIG.glassThickness/2; 
+
+        // --- B. 绘制光线 (受开关控制) ---
+        drawParallelRays(visualRad);
+
+        // --- C. 更新干涉条纹 (Shader) ---
+        const freq = (CONFIG.angleVal * 5000) / CONFIG.lambda;
+        interferencePlane.material.uniforms.uFreq.value = freq;
+        
+        let col = new THREE.Color();
+        const l = CONFIG.lambda;
+        if(l < 450) col.setHSL(0.75, 1, 0.5);
+        else if(l < 500) col.setHSL(0.6, 1, 0.5); 
+        else if(l < 570) col.setHSL(0.3, 1, 0.5); 
+        else if(l < 600) col.setHSL(0.15, 1, 0.5); 
+        else col.setHSL(0.0, 1, 0.5); 
+        
+        interferencePlane.material.uniforms.uColor.value = col;
+
+        // --- D. 更新图表 ---
+        updateChart(freq, col);
+    }
+
+    function drawParallelRays(angleRad) {
+        // 1. 清除旧光线
+        while(rayGroup.children.length > 0) {
+            rayGroup.remove(rayGroup.children[0]);
+        }
+
+        // 2. 检查开关状态：如果为 false，直接返回，不绘制新光线
+        if (!CONFIG.showRays) {
+            return;
+        }
+
+        const count = CONFIG.rayCount;
+        const startX = CONFIG.pivotX + 1.0; 
+        const endX = CONFIG.pivotX + CONFIG.wedgeLength - 1.0;
+        const step = (endX - startX) / (count - 1);
+
+        const matIncident = new THREE.LineBasicMaterial({ color: 0xffff00 }); 
+        const matRefl1 = new THREE.LineBasicMaterial({ color: 0x00ffff });    
+        const matRefl2 = new THREE.LineBasicMaterial({ color: 0xff00ff });    
+        const matTrans = new THREE.LineDashedMaterial({ color: 0xff00ff, dashSize:0.2, gapSize:0.1, transparent:true, opacity:0.5 }); 
+
+        for(let i=0; i<count; i++) {
+            const x = startX + i * step;
+            const dist = x - CONFIG.pivotX;
+            const h = dist * Math.tan(angleRad);
+            
+            const pStart = new THREE.Vector3(x, 5, 0); 
+            const pHitTop = new THREE.Vector3(x, h, 0); 
+            const pHitBottom = new THREE.Vector3(x, 0, 0); 
+
+            // 路径1：入射 (Incident)
+            addLine(pStart, pHitTop, matIncident);
+
+            // 路径2：反射1 (Reflection from Top)
+            const reflectDir = new THREE.Vector3(0, 1, 0).applyAxisAngle(new THREE.Vector3(0,0,1), 2*angleRad);
+            const pEnd1 = pHitTop.clone().add(reflectDir.clone().multiplyScalar(4));
+            addLine(pHitTop, pEnd1, matRefl1);
+
+            // 路径3：折射/反射2 (Reflection from Bottom)
+            addLine(pHitTop, pHitBottom, matTrans, true);
+            const visualShift = 0.3; 
+            const pReturn = new THREE.Vector3(x + visualShift, h + visualShift*Math.tan(angleRad), 0);
+            addLine(pHitBottom, pReturn, matTrans, true); 
+            const pEnd2 = pReturn.clone().add(reflectDir.clone().multiplyScalar(4));
+            addLine(pReturn, pEnd2, matRefl2);
+        }
+    }
+
+    function addLine(v1, v2, mat, isDashed=false) {
+        const geometry = new THREE.BufferGeometry().setFromPoints([v1, v2]);
+        let line;
+        if(isDashed) {
+            line = new THREE.Line(geometry, mat);
+            line.computeLineDistances();
+        } else {
+            line = new THREE.Line(geometry, mat);
+        }
+        rayGroup.add(line);
+    }
+
+    // ================= 4. 图表更新逻辑 =================
+    function initChart() {
+        const ctx = document.getElementById('interferenceChart').getContext('2d');
+        chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array.from({length: 100}, (_, i) => i),
+                datasets: [{
+                    label: 'Intensity',
+                    data: [],
+                    borderColor: '#fff',
+                    backgroundColor: 'rgba(255,255,255,0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                animation: false,
+                scales: { x: {display:false}, y: {display:false, min:0, max:1.1} },
+                plugins: { legend: {display:false} }
+            }
+        });
+    }
+
+    function updateChart(freq, color) {
+        if(!chartInstance) return;
+        const data = [];
+        for(let i=0; i<100; i++) {
+            data.push(Math.pow(Math.cos(i/100 * freq * 3.14), 2));
+        }
+        chartInstance.data.datasets[0].data = data;
+        
+        const cStr = `rgb(${color.r*255}, ${color.g*255}, ${color.b*255})`;
+        chartInstance.data.datasets[0].borderColor = cStr;
+        chartInstance.data.datasets[0].backgroundColor = cStr.replace('rgb', 'rgba').replace(')', ', 0.2)');
+        chartInstance.update();
+    }
+
+    // ================= 5. 交互事件 =================
+    
+    // 新增：光路开关事件
+    document.getElementById('check-show-rays').addEventListener('change', (e) => {
+        CONFIG.showRays = e.target.checked;
+        updateSystem(); // 重新触发绘制逻辑
+    });
+
+    document.getElementById('input-lambda').addEventListener('input', (e) => {
+        CONFIG.lambda = parseFloat(e.target.value);
+        document.getElementById('val-lambda').innerText = CONFIG.lambda;
+        updateSystem();
+    });
+    document.getElementById('input-angle').addEventListener('input', (e) => {
+        CONFIG.angleVal = parseFloat(e.target.value);
+        document.getElementById('val-angle').innerText = CONFIG.angleVal;
+        updateSystem();
+    });
+    document.getElementById('input-rays').addEventListener('input', (e) => {
+        CONFIG.rayCount = parseInt(e.target.value);
+        document.getElementById('val-rays').innerText = CONFIG.rayCount;
+        updateSystem();
+    });
+
+    window.resetView = function() {
+        camera.position.set(0, 2, 18);
+        camera.lookAt(0,0,0);
+        controls.reset();
+        
+        // 还原参数
+        CONFIG.showRays = true;
+        document.getElementById('check-show-rays').checked = true;
+        updateSystem();
+    };
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+        const container = document.getElementById('canvas-container');
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    function initDrag() {
+        const elmnt = document.getElementById("chart-container");
+        let pos1=0, pos2=0, pos3=0, pos4=0;
+        document.getElementById("chart-header").onmousedown = dragMouseDown;
+        function dragMouseDown(e) {
+            e.preventDefault();
+            pos3 = e.clientX; pos4 = e.clientY;
+            document.onmouseup = closeDragElement;
+            document.onmousemove = elementDrag;
+        }
+        function elementDrag(e) {
+            e.preventDefault();
+            pos1 = pos3 - e.clientX; pos2 = pos4 - e.clientY;
+            pos3 = e.clientX; pos4 = e.clientY;
+            elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+            elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+        }
+        function closeDragElement() {
+            document.onmouseup = null; document.onmousemove = null;
+        }
+    }
+</script>
+</body>
+</html>

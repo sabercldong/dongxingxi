@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>原子核衰变：全屏晶格演示</title>
+    <style>
+        :root {
+            --bg-color: #050505;
+            --sidebar-bg: #141414;
+            --text-main: #ffffff;
+            --text-sub: #a0a0a0;
+            --accent-color: #00bcd4; /* 科技蓝 */
+            --success-color: #00e676; /* 绿色 */
+            --warning-color: #ffea00; /* 黄色 */
+            --danger-color: #ff3d00;  /* 红色 */
+        }
+
+        /* 1. 全局布局 */
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* 2. 左侧演示区：移除所有内边距 */
+        #stage {
+            flex: 1;
+            position: relative;
+            background: #000;
+            overflow: hidden;
+            display: flex;
+            align-items: center;     /* 垂直居中 */
+            justify-content: center; /* 水平居中 */
+        }
+
+        canvas { 
+            display: block; 
+            /* 确保 canvas 撑满容器 */
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 3. 右侧功能区 */
+        #sidebar {
+            width: 360px;
+            min-width: 360px;
+            height: 100%;
+            background-color: var(--sidebar-bg);
+            border-left: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            box-shadow: -5px 0 20px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        /* === 界面组件 === */
+        .header {
+            padding: 20px;
+            border-bottom: 1px solid #333;
+            background: rgba(255,255,255,0.02);
+        }
+        .header h2 { margin: 0; font-size: 1.2rem; display: flex; align-items: center; gap: 10px; }
+
+        .content {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .card-title {
+            font-size: 0.85rem;
+            color: var(--text-sub);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        .control-row { margin-bottom: 15px; }
+        .flex-between { display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.9rem; }
+        .val-text { color: var(--accent-color); font-weight: bold; }
+        
+        input[type=range] { width: 100%; accent-color: var(--accent-color); cursor: pointer; }
+
+        /* 按钮组 */
+        .btn-group { display: flex; gap: 10px; margin-top: 15px; }
+        button {
+            flex: 1; padding: 12px; border: none; border-radius: 4px;
+            font-weight: bold; cursor: pointer; transition: 0.2s; color: #000;
+        }
+        button:active { transform: scale(0.95); }
+        .btn-start { background: var(--success-color); }
+        .btn-start:hover { background: #69f0ae; }
+        .btn-pause { background: var(--warning-color); }
+        .btn-pause:hover { background: #ffff00; }
+        .btn-reset { background: var(--danger-color); color: white; }
+        .btn-reset:hover { background: #ff6e40; }
+
+        /* 统计与图表 */
+        .stats-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;
+        }
+        .stat-item {
+            background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; text-align: center;
+        }
+        .stat-num { font-size: 1.4rem; font-weight: bold; display: block; }
+        .stat-label { font-size: 0.75rem; color: #888; }
+
+        #chart-wrap {
+            width: 100%; height: 160px; background: #000; border: 1px solid #333; position: relative;
+        }
+
+        .explainer {
+            font-size: 0.9rem; line-height: 1.6; color: #ccc;
+            border-left: 3px solid var(--accent-color); padding-left: 12px;
+            background: rgba(0, 188, 212, 0.05); padding: 10px; border-radius: 0 4px 4px 0;
+        }
+
+        .overlay-info {
+            position: absolute; top: 15px; left: 15px; pointer-events: none;
+            font-family: 'Courier New', monospace; color: rgba(255,255,255,0.6); font-size: 0.8rem;
+        }
+    </style>
+</head>
+<body>
+
+    <main id="stage">
+        <canvas id="simCanvas"></canvas>
+        <div class="overlay-info">
+            <div>GRID: <span id="grid-dims">0x0</span></div>
+            <div>STATUS: <span id="status-text" style="color:var(--accent-color)">READY</span></div>
+        </div>
+    </main>
+
+    <aside id="sidebar">
+        <div class="header">
+            <h2>☢️ 衰变模拟器 <small style="font-size:0.8rem; color:#666"></small></h2>
+        </div>
+
+        <div class="content">
+            
+            <div class="card">
+                <div class="card-title">实验参数</div>
+                
+                <div class="control-row">
+                    <div class="flex-between">
+                        <span>半衰期 (Half-Life)</span>
+                        <span class="val-text" id="hl-val">2.0 秒</span>
+                    </div>
+                    <input type="range" id="hl-slider" min="0.5" max="5" step="0.5" value="2.0">
+                    <div id="hl-desc" style="font-size:0.75rem; color:#666; margin-top:4px;">
+                        每过 2.0 秒，剩余数量减半
+                    </div>
+                </div>
+
+                <div class="control-row">
+                    <div class="flex-between">
+                        <span>原子总量</span>
+                        <span class="val-text" id="count-val">2500</span>
+                    </div>
+                    <input type="range" id="count-slider" min="100" max="5000" step="100" value="2500">
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn-start" onclick="startSim()">开始</button>
+                    <button class="btn-pause" onclick="pauseSim()">暂停</button>
+                    <button class="btn-reset" onclick="resetSim()">重置</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">实时监测</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <span class="stat-num" id="stat-parent" style="color:var(--danger-color)">100%</span>
+                        <span class="stat-label">剩余比例</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-num" id="stat-time">0.0s</span>
+                        <span class="stat-label">经过时间</span>
+                    </div>
+                </div>
+                <div id="chart-wrap">
+                    <canvas id="chartCanvas"></canvas>
+                </div>
+            </div>
+
+            <div class="explainer" id="explainer-text">
+                <strong>准备就绪：</strong><br>
+                左侧画面已铺满原子核。点击[开始]观察指数衰变过程。
+            </div>
+
+        </div>
+    </aside>
+
+<script>
+    const simCanvas = document.getElementById('simCanvas');
+    const simCtx = simCanvas.getContext('2d');
+    const chartCanvas = document.getElementById('chartCanvas');
+    const chartCtx = chartCanvas.getContext('2d');
+    
+    let stageWidth, stageHeight;
+    let gridCols, gridRows;
+    
+    let atoms = []; 
+    let isRunning = false;
+    let isPaused = false;
+    let lastTime = 0;
+    let elapsed = 0;
+    
+    // 参数
+    let halfLife = 2.0;
+    let initialCount = 2500;
+    
+    let chartData = [];
+
+    function init() {
+        window.addEventListener('resize', resize);
+        
+        // 滑块绑定
+        document.getElementById('hl-slider').addEventListener('input', (e) => {
+            halfLife = parseFloat(e.target.value);
+            const valStr = halfLife.toFixed(1);
+            document.getElementById('hl-val').textContent = valStr + " 秒";
+            // 修复：文字跟随变动
+            document.getElementById('hl-desc').textContent = `每过 ${valStr} 秒，剩余数量减半`;
+            resetSim();
+        });
+
+        document.getElementById('count-slider').addEventListener('input', (e) => {
+            initialCount = parseInt(e.target.value);
+            document.getElementById('count-val').textContent = initialCount;
+            resetSim();
+        });
+
+        resize(); // 先触发一次resize
+        resetSim();
+        animate();
+    }
+
+    function resize() {
+        const stage = document.getElementById('stage');
+        // 获取容器的真实像素大小
+        stageWidth = stage.clientWidth;
+        stageHeight = stage.clientHeight;
+        
+        simCanvas.width = stageWidth;
+        simCanvas.height = stageHeight;
+        
+        const chartWrap = document.getElementById('chart-wrap');
+        chartCanvas.width = chartWrap.clientWidth;
+        chartCanvas.height = chartWrap.clientHeight;
+        
+        calcGrid();
+        if (!isRunning) drawAtoms();
+    }
+
+    function calcGrid() {
+        // 计算最佳网格行列，使其尽量充满屏幕且保持单元格接近正方形
+        const ratio = stageWidth / stageHeight;
+        const cols = Math.sqrt(initialCount * ratio);
+        gridCols = Math.ceil(cols);
+        gridRows = Math.ceil(initialCount / gridCols);
+        
+        document.getElementById('grid-dims').textContent = `${gridCols}x${gridRows}`;
+    }
+
+    // === 控制逻辑 ===
+    function startSim() {
+        if (isRunning) return;
+        isRunning = true;
+        isPaused = false;
+        lastTime = performance.now();
+        document.getElementById('status-text').textContent = "RUNNING";
+        document.getElementById('status-text').style.color = "#00e676";
+        updateExplainer("start");
+    }
+
+    function pauseSim() {
+        if (!isRunning) return;
+        isRunning = false;
+        isPaused = true;
+        document.getElementById('status-text').textContent = "PAUSED";
+        document.getElementById('status-text').style.color = "#ffea00";
+    }
+
+    function resetSim() {
+        isRunning = false;
+        isPaused = false;
+        elapsed = 0;
+        chartData = [];
+        document.getElementById('status-text').textContent = "READY";
+        document.getElementById('status-text').style.color = "var(--accent-color)";
+        updateExplainer("ready");
+        
+        calcGrid();
+        atoms = new Uint8Array(initialCount).fill(0);
+        updateStats();
+        drawAtoms();
+        drawChart();
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        if (!isRunning) return;
+
+        const now = performance.now();
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+        elapsed += dt;
+
+        const decayConstant = 0.693147 / halfLife;
+        const prob = 1 - Math.exp(-decayConstant * dt);
+        
+        let activeCount = 0;
+        for (let i = 0; i < initialCount; i++) {
+            if (atoms[i] === 0) {
+                if (Math.random() < prob) atoms[i] = 1; 
+                else activeCount++;
+            } else if (atoms[i] === 1) {
+                atoms[i] = 2;
+            }
+        }
+
+        if (chartData.length === 0 || elapsed - chartData[chartData.length-1].t > 0.1) {
+            chartData.push({ t: elapsed, n: activeCount });
+        }
+        
+        updateStats(activeCount);
+        drawAtoms();
+        drawChart();
+        checkMilestones(activeCount);
+    }
+
+    // === 渲染核心：修复铺满问题 ===
+    function drawAtoms() {
+        // 清屏
+        simCtx.fillStyle = "#000";
+        simCtx.fillRect(0, 0, stageWidth, stageHeight);
+
+        // 核心修改：移除 margin，使用整个 stageWidth/Height
+        const margin = 0; // 无边距
+        const availW = stageWidth;
+        const availH = stageHeight;
+        
+        const gapX = availW / gridCols;
+        const gapY = availH / gridRows;
+        
+        // 稍微增大粒子比例 (0.8)，让画面更满
+        const size = Math.min(gapX, gapY) * 0.8; 
+        const radius = Math.max(1, size / 2);
+
+        // 居中计算：即使没有margin，也要保证整个网格在画面正中
+        // (gridCols * gapX) 理论上等于 availW，所以 offsetX 接近 0
+        const offsetX = (availW - gridCols * gapX) / 2;
+        const offsetY = (availH - gridRows * gapY) / 2;
+
+        for (let i = 0; i < initialCount; i++) {
+            const col = i % gridCols;
+            const row = Math.floor(i / gridCols);
+            
+            // 坐标为格子中心
+            const x = offsetX + col * gapX + gapX/2;
+            const y = offsetY + row * gapY + gapY/2;
+            
+            simCtx.beginPath();
+            
+            if (atoms[i] === 0) {
+                simCtx.fillStyle = "#ff3d00"; // 橙红
+                // 只有活跃原子才开启阴影，提升性能
+                if (initialCount < 3000) {
+                    simCtx.shadowBlur = radius * 1.5;
+                    simCtx.shadowColor = "#ff3d00";
+                }
+            } else if (atoms[i] === 1) {
+                simCtx.fillStyle = "#ffffff"; // 闪光
+                simCtx.shadowBlur = radius * 3;
+                simCtx.shadowColor = "#ffffff";
+            } else {
+                simCtx.fillStyle = "#1a2529"; // 暗淡
+                simCtx.shadowBlur = 0;
+            }
+            
+            simCtx.arc(x, y, radius, 0, Math.PI * 2);
+            simCtx.fill();
+        }
+        simCtx.shadowBlur = 0;
+    }
+
+    function drawChart() {
+        const w = chartCanvas.width;
+        const h = chartCanvas.height;
+        chartCtx.clearRect(0, 0, w, h);
+        if (chartData.length < 2) return;
+
+        const maxTime = Math.max(halfLife * 2, elapsed);
+        
+        chartCtx.beginPath();
+        chartCtx.strokeStyle = "#00e676";
+        chartCtx.lineWidth = 2;
+        for (let i = 0; i < chartData.length; i++) {
+            const p = chartData[i];
+            const x = (p.t / maxTime) * w;
+            const y = h - (p.n / initialCount) * h;
+            if (i===0) chartCtx.moveTo(x, y); else chartCtx.lineTo(x, y);
+        }
+        chartCtx.stroke();
+        
+        // 辅助线
+        const hlX = (halfLife / maxTime) * w;
+        chartCtx.strokeStyle = "#ff3d00";
+        chartCtx.setLineDash([4, 4]);
+        chartCtx.beginPath(); chartCtx.moveTo(hlX, 0); chartCtx.lineTo(hlX, h); chartCtx.stroke();
+        chartCtx.setLineDash([]);
+    }
+
+    function updateStats(current = initialCount) {
+        const percent = ((current / initialCount) * 100).toFixed(1);
+        document.getElementById('stat-parent').textContent = percent + "%";
+        document.getElementById('stat-time').textContent = elapsed.toFixed(1) + "s";
+    }
+
+    function checkMilestones(current) {
+        const ratio = current / initialCount;
+        if (ratio < 0.52 && ratio > 0.48) updateExplainer("halflife");
+        else if (ratio < 0.1) updateExplainer("end");
+    }
+
+    function updateExplainer(state) {
+        const el = document.getElementById('explainer-text');
+        let html = "";
+        switch(state) {
+            case "ready": html = "<strong>准备就绪：</strong><br>画面已铺满。左侧每一个点代表一个原子核。"; break;
+            case "start": html = "<strong>正在衰变：</strong><br>原子核随机变成暗色。注意观察整体亮度的下降速度。"; break;
+            case "halflife": html = `<strong style="color:var(--success-color)">达到半衰期！</strong><br>时间经过 ${halfLife} 秒，屏幕大约暗了一半。`; break;
+            case "end": html = "<strong>实验结束：</strong><br>绝大多数原子已衰变。"; break;
+        }
+        el.innerHTML = html;
+    }
+
+    // 启动
+    init();
+</script>
+</body>
+</html>

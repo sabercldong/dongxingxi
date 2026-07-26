@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圆锥摆物理仿真 (带题干)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; user-select: none; }
+        
+        /* 布局容器 */
+        #container { display: flex; width: 100vw; height: 100vh; }
+        
+        /* 3D 视图区域 */
+        #canvas-container { flex-grow: 1; position: relative; background-color: #1a1a1a; overflow: hidden; }
+        
+        /* 右侧控制区 */
+        #sidebar {
+            width: 350px; /* 稍微加宽以容纳文字 */
+            background-color: #f8f9fa;
+            padding: 20px;
+            box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+            border-left: 1px solid #ddd;
+        }
+
+        /* 控件样式 */
+        h2 { margin-top: 0; color: #333; font-size: 1.2rem; border-bottom: 2px solid #007bff; padding-bottom: 10px; }
+        
+        /* 题目描述框 */
+        .problem-box {
+            background: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 5px solid #007bff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            font-size: 0.9rem;
+            color: #444;
+            line-height: 1.6;
+        }
+        .problem-box h3 { margin: 0 0 10px 0; font-size: 1rem; color: #000; }
+        .math-tex { font-style: italic; font-family: "Times New Roman", serif; font-weight: bold; }
+
+        .control-group { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        label { display: block; margin-bottom: 5px; font-weight: bold; font-size: 0.9rem; color: #555; }
+        input[type=range] { width: 100%; margin-bottom: 5px; }
+        .value-display { font-size: 0.85rem; color: #007bff; text-align: right; margin-bottom: 10px; }
+        
+        button {
+            width: 100%; padding: 10px; margin-top: 5px; border: none; border-radius: 5px;
+            cursor: pointer; font-weight: bold; transition: background 0.2s;
+        }
+        .btn-start { background-color: #28a745; color: white; }
+        .btn-pause { background-color: #ffc107; color: #333; }
+        .btn-reset { background-color: #dc3545; color: white; }
+        .btn-preset { background-color: #6c757d; color: white; margin-top: 5px; }
+        button:hover { opacity: 0.9; }
+
+        /* 图表悬浮窗 */
+        #chart-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 320px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+        #chart-header {
+            padding: 10px;
+            background: #007bff;
+            color: white;
+            border-radius: 8px 8px 0 0;
+            cursor: move;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.9rem;
+        }
+        #chart-body { padding: 10px; }
+        .close-btn { cursor: pointer; font-weight: bold; }
+        
+        /* 状态显示 */
+        #status-panel { margin-top: 10px; font-size: 0.9rem; line-height: 1.5; }
+        .highlight { color: #d63384; font-weight: bold; }
+    </style>
+    
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+    <script src="./chart.min.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container"></div>
+
+    <div id="chart-card">
+        <div id="chart-header">
+            <span>受力分析图表 (拖拽顶部移动)</span>
+            <span class="close-btn" onclick="toggleChart()">×</span>
+        </div>
+        <div id="chart-body">
+            <canvas id="physicsChart"></canvas>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <div class="problem-box">
+            <h3></h3>
+            <p>
+                如图，一个光滑的圆锥体固定在水平桌面上，其轴线沿竖直方向，母线与轴线之间的夹角 <span class="math-tex">θ=30°</span>。
+                一条长度为 <span class="math-tex">l</span> 的轻绳，一端的位置固定在圆锥体的顶点 <span class="math-tex">O</span> 处，
+                另一端拴着一个质量为 <span class="math-tex">m</span> 的小物体(可视作质点)。
+                物体以速率 <span class="math-tex">v</span> 绕圆锥体的轴线做水平匀速圆周运动。
+            </p>
+            <p><strong>求绳的拉力大小：</strong></p>
+            <p>(1) 当 <span class="math-tex">v = √(gl/4)</span> 时</p>
+            <p>(2) 当 <span class="math-tex">v = √(3gl/2)</span> 时</p>
+        </div>
+
+        <h2>仿真控制面板</h2>
+        
+        <div class="control-group">
+            <button class="btn-start" id="btn-play">▶ 开始演示</button>
+            <button class="btn-pause" id="btn-pause" style="display:none;">⏸ 暂停演示</button>
+            <button class="btn-reset" id="btn-reset">↺ 还原初始状态</button>
+        </div>
+
+        <div class="control-group">
+            <label>速度系数 K (v² = K·gl)</label>
+            <input type="range" id="slider-v" min="0" max="2.0" step="0.01" value="0.25">
+            <div class="value-display">当前 v² = <span id="val-v">0.25</span> gl</div>
+            
+            <label>绳长 l (m)</label>
+            <input type="range" id="slider-l" min="1" max="12" step="0.5" value="8">
+            <div class="value-display">l = <span id="val-l">8</span> m</div>
+
+            <label>质量 m (kg)</label>
+            <input type="range" id="slider-m" min="0.1" max="5" step="0.1" value="1">
+            <div class="value-display">m = <span id="val-m">1</span> kg</div>
+        </div>
+
+        <div class="control-group">
+            <label>快速跳转题目情境</label>
+            <button class="btn-preset" onclick="setPreset(0.25)">演示问题 (1): K = 0.25</button>
+            <button class="btn-preset" onclick="setPreset(1.5)">演示问题 (2): K = 1.50</button>
+        </div>
+
+        <div class="control-group">
+            <label>视图选项</label>
+            <button class="btn-preset" onclick="toggleChart()">显示/隐藏 图表</button>
+        </div>
+
+        <div class="control-group" id="status-panel">
+            <strong>实时物理量:</strong><br>
+            绳子拉力 T: <span id="data-t" class="highlight">0</span> N<br>
+            支持力 N: <span id="data-n" class="highlight">0</span> N<br>
+            绳子偏角: <span id="data-angle" class="highlight">30</span>°<br>
+            当前状态: <span id="data-state">贴紧圆锥面</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ================= 物理参数定义 =================
+    const G = 9.8;
+    const CONE_ANGLE = 30 * (Math.PI / 180); // 30度转换为弧度
+    // 临界系数计算: v0^2 = gl * sin(30) * tan(30) = 0.2886 gl
+    const CRITICAL_K = Math.sin(CONE_ANGLE) * Math.tan(CONE_ANGLE);
+    
+    // 圆锥体高度（用于坐标定位）
+    const CONE_HEIGHT = 15; 
+
+    let physicsParams = {
+        l: 8,           // 绳长 (默认8)
+        m: 1,           // 质量
+        k: 0.25,        // 速度系数
+        angle: CONE_ANGLE, 
+        isRunning: true,
+        time: 0
+    };
+
+    // ================= Three.js 初始化 =================
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color('#1a1a1a');
+
+    // 相机 (位置调高，视角俯视桌面)
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+    camera.position.set(20, 15, 20); // 相机位置
+    camera.lookAt(0, 5, 0); // 看向圆锥中部
+
+    // 渲染器
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // 控制器
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 5, 0); // 旋转中心设为圆锥中部
+
+    // 灯光
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 30, 10);
+    dirLight.castShadow = true;
+    // 优化阴影范围
+    dirLight.shadow.camera.left = -20;
+    dirLight.shadow.camera.right = 20;
+    dirLight.shadow.camera.top = 20;
+    dirLight.shadow.camera.bottom = -20;
+    scene.add(dirLight);
+
+    // ================= 场景物体构建 =================
+    
+    // 1. 辅助网格 (桌面/地面) - 现在位于 y=0
+    const gridHelper = new THREE.GridHelper(40, 40, 0x666666, 0x222222);
+    scene.add(gridHelper);
+
+    // 2. 圆锥体 (放在桌面上)
+    // 顶点位于 y = CONE_HEIGHT, 底面位于 y = 0
+    const coneRadius = CONE_HEIGHT * Math.tan(CONE_ANGLE); 
+    const coneGeo = new THREE.ConeGeometry(coneRadius, CONE_HEIGHT, 64, 1, true); // openEnded = true
+    const coneMat = new THREE.MeshPhongMaterial({ 
+        color: 0x00aaff, 
+        transparent: true, 
+        opacity: 0.3, 
+        side: THREE.DoubleSide,
+        shininess: 100
+    });
+    const cone = new THREE.Mesh(coneGeo, coneMat);
+    // Cylinder/Cone 默认中心在几何体中间。
+    // 我们需要把底面放在y=0。几何体高度15，中心在0,0,0 -> 底面在-7.5。
+    // 所以向上平移 7.5 (CONE_HEIGHT/2)
+    cone.position.y = CONE_HEIGHT / 2;
+    scene.add(cone);
+
+    // 圆锥边缘线
+    const edges = new THREE.EdgesGeometry(coneGeo);
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x00ffff, opacity: 0.3, transparent: true });
+    const coneLines = new THREE.LineSegments(edges, lineMat);
+    coneLines.position.y = CONE_HEIGHT / 2;
+    scene.add(coneLines);
+
+    // 3. 绳子
+    const stringMat = new THREE.LineBasicMaterial({ color: 0xffff00, linewidth: 2 });
+    const stringGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,CONE_HEIGHT,0), new THREE.Vector3(0,CONE_HEIGHT-5,0)]);
+    const stringMesh = new THREE.Line(stringGeo, stringMat);
+    scene.add(stringMesh);
+
+    // 4. 小球
+    const ballGeo = new THREE.SphereGeometry(0.4, 32, 32);
+    const ballMat = new THREE.MeshPhongMaterial({ color: 0xff3333 });
+    const ball = new THREE.Mesh(ballGeo, ballMat);
+    ball.castShadow = true;
+    scene.add(ball);
+
+    // 5. 顶点固定点 O (位于圆锥顶部)
+    const pivotGeo = new THREE.SphereGeometry(0.2, 16, 16);
+    const pivotMesh = new THREE.Mesh(pivotGeo, new THREE.MeshBasicMaterial({color: 0xffffff}));
+    pivotMesh.position.y = CONE_HEIGHT;
+    scene.add(pivotMesh);
+
+    // ================= 逻辑与物理计算 =================
+
+    function updatePhysics() {
+        const { l, m, k } = physicsParams;
+        
+        // 确保绳长不超过圆锥高度太多，否则会穿模到地下（视觉上限制）
+        // 这里主要做物理计算，不做强制限制，但用户界面最大12，高度15，安全。
+
+        // 临界状态判断
+        // 如果 k <= 临界值, θ = 30°
+        // 如果 k > 临界值, cosθ 由方程决定
+        
+        let currentAngle;
+        let T, N; 
+
+        if (k <= CRITICAL_K) {
+            // Case 1: 贴在圆锥面上
+            currentAngle = CONE_ANGLE;
+            
+            const sin30 = Math.sin(CONE_ANGLE);
+            const cos30 = Math.cos(CONE_ANGLE);
+            
+            // 向心力需求 F_need = m * v^2 / r = m * (k*g*l) / (l*sin30) = m*g*k/sin30
+            const F_need = m * G * k / sin30;
+            
+            // T cos30 + N sin30 = mg
+            // T sin30 - N cos30 = F_need
+            // 解得：
+            T = m * G * cos30 + F_need * sin30;
+            N = m * G * sin30 - F_need * cos30;
+            
+        } else {
+            // Case 2: 飞起
+            N = 0;
+            // 飞起时 cos(θ) = (-k + sqrt(k² + 4)) / 2
+            const cosTheta = (-k + Math.sqrt(k*k + 4)) / 2;
+            currentAngle = Math.acos(cosTheta);
+            
+            // 此时 T = mg / cosθ
+            T = m * G / cosTheta;
+        }
+
+        physicsParams.angle = currentAngle;
+
+        // 更新 UI 数据
+        document.getElementById('data-t').innerText = T.toFixed(2);
+        document.getElementById('data-n').innerText = N < 0.01 ? "0.00" : N.toFixed(2);
+        document.getElementById('data-angle').innerText = (currentAngle * 180 / Math.PI).toFixed(1);
+        document.getElementById('data-state').innerText = (k <= CRITICAL_K + 0.001) ? "贴紧圆锥面" : "飞离表面"; // 加一点容差
+        
+        // 更新图表
+        updateChart(T, N);
+
+        // 返回小球的坐标 (相对于顶点O)
+        // 顶点O在 (0, CONE_HEIGHT, 0)
+        // 小球在 (r, CONE_HEIGHT - h, 0)
+        const r = l * Math.sin(currentAngle);
+        const h_drop = l * Math.cos(currentAngle);
+        
+        return { 
+            radius: r, 
+            yPos: CONE_HEIGHT - h_drop 
+        };
+    }
+
+    // ================= 动画循环 =================
+    
+    function animate() {
+        requestAnimationFrame(animate);
+
+        controls.update();
+
+        if (physicsParams.isRunning) {
+            const { l, k } = physicsParams;
+            
+            const state = updatePhysics();
+            
+            // 计算角速度
+            const v = Math.sqrt(k * G * l);
+            const r = state.radius;
+            // 避免 r=0 除零错误 (实际上r最小为l*sin30)
+            const omega = (r > 0.01) ? v / r : 0;
+
+            // 更新时间
+            physicsParams.time += omega * 0.016;
+
+            // 计算小球的世界坐标
+            const x = r * Math.cos(physicsParams.time);
+            const z = r * Math.sin(physicsParams.time);
+            const y = state.yPos;
+
+            ball.position.set(x, y, z);
+
+            // 更新绳子几何体
+            // 起点始终是顶点 (0, CONE_HEIGHT, 0)
+            const points = [
+                new THREE.Vector3(0, CONE_HEIGHT, 0), 
+                new THREE.Vector3(x, y, z)
+            ];
+            stringMesh.geometry.setFromPoints(points);
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    // ================= Chart.js 图表 =================
+    
+    const ctx = document.getElementById('physicsChart').getContext('2d');
+    const myChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['绳子拉力 T', '支持力 N'],
+            datasets: [{
+                label: '力的大小 (N)',
+                data: [0, 0],
+                backgroundColor: ['#ffc107', '#17a2b8'],
+                borderColor: ['#ffc107', '#17a2b8'],
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { beginAtZero: true, suggestedMax: 20 }
+            },
+            animation: { duration: 0 },
+            plugins: { legend: { display: false } }
+        }
+    });
+
+    function updateChart(t, n) {
+        myChart.data.datasets[0].data = [t, n];
+        const maxVal = Math.max(t, n, 10);
+        myChart.options.scales.y.suggestedMax = maxVal * 1.2;
+        myChart.update();
+    }
+
+    // ================= UI 交互 =================
+
+    // 拖拽图表
+    const chartCard = document.getElementById('chart-card');
+    const chartHeader = document.getElementById('chart-header');
+    let isDragging = false;
+    let startX, startY, initialLeft, initialTop;
+
+    chartHeader.onmousedown = function(e) {
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        initialLeft = chartCard.offsetLeft;
+        initialTop = chartCard.offsetTop;
+        chartHeader.style.cursor = 'grabbing';
+    };
+
+    document.onmouseup = function() { 
+        isDragging = false; 
+        chartHeader.style.cursor = 'move';
+    };
+    
+    document.onmousemove = function(e) {
+        if (isDragging) {
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            chartCard.style.left = (initialLeft + dx) + 'px';
+            chartCard.style.top = (initialTop + dy) + 'px';
+        }
+    };
+
+    function toggleChart() {
+        const display = chartCard.style.display;
+        chartCard.style.display = (display === 'none') ? 'flex' : 'none';
+    }
+
+    // 参数控制
+    const sliderV = document.getElementById('slider-v');
+    const sliderL = document.getElementById('slider-l');
+    const sliderM = document.getElementById('slider-m');
+
+    function updateParams() {
+        physicsParams.k = parseFloat(sliderV.value);
+        physicsParams.l = parseFloat(sliderL.value);
+        physicsParams.m = parseFloat(sliderM.value);
+        
+        document.getElementById('val-v').innerText = physicsParams.k.toFixed(2);
+        document.getElementById('val-l').innerText = physicsParams.l;
+        document.getElementById('val-m').innerText = physicsParams.m;
+    }
+
+    sliderV.oninput = updateParams;
+    sliderL.oninput = updateParams;
+    sliderM.oninput = updateParams;
+
+    // 播放控制
+    const btnPlay = document.getElementById('btn-play');
+    const btnPause = document.getElementById('btn-pause');
+    
+    btnPlay.onclick = function() {
+        physicsParams.isRunning = true;
+        btnPlay.style.display = 'none';
+        btnPause.style.display = 'inline-block';
+    };
+    
+    btnPause.onclick = function() {
+        physicsParams.isRunning = false;
+        btnPause.style.display = 'none';
+        btnPlay.style.display = 'inline-block';
+    };
+
+    document.getElementById('btn-reset').onclick = function() {
+        setPreset(0.25);
+        physicsParams.time = 0;
+    };
+
+    window.setPreset = function(kVal) {
+        sliderV.value = kVal;
+        updateParams();
+        if (!physicsParams.isRunning) btnPlay.click();
+    };
+
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    // 启动
+    animate();
+
+</script>
+</body>
+</html>

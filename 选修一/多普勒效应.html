@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多普勒效应演示 (工业级稳定版)</title>
+    <style>
+        :root {
+            --primary-color: #4a90e2;
+            --panel-bg: #f8f9fa;
+            --text-color: #333;
+        }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background: #fff; height: 100vh; display: flex; overflow: hidden; color: var(--text-color); }
+        #canvas-container { flex: 1; position: relative; border-right: 1px solid #ddd; }
+        canvas { display: block; width: 100%; height: 100%; }
+        #controls { width: 320px; background: var(--panel-bg); padding: 15px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; box-shadow: -2px 0 10px rgba(0,0,0,0.05); }
+        h2 { margin: 0 0 5px 0; font-size: 1.2rem; color: #2c3e50; border-bottom: 2px solid var(--primary-color); padding-bottom: 5px; }
+        .control-group { background: #fff; padding: 10px; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .control-item { margin-bottom: 6px; }
+        label { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 2px; }
+        input[type="range"] { width: 100%; cursor: pointer; margin: 2px 0; }
+        .value-display { font-weight: bold; color: var(--primary-color); }
+        .buttons { display: flex; gap: 8px; }
+        button { flex: 1; padding: 8px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; color: white; }
+        #btn-start { background-color: var(--primary-color); }
+        #btn-reset { background-color: #e74c3c; }
+        h3 { margin: 0 0 5px 0; font-size: 0.95rem; color: #555; }
+        
+        /* 数据看板样式 */
+        .monitor { background: #333; color: #0f0; font-family: monospace; padding: 8px; border-radius: 4px; font-size: 0.9rem; margin-top: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div id="controls">
+        <h2>多普勒效应 (高稳定版)</h2>
+        
+        <div class="buttons">
+            <button id="btn-start">开始 / 暂停</button>
+            <button id="btn-reset">重置</button>
+        </div>
+
+        <div class="control-group" style="background:#e3f2fd;">
+            <div class="control-item">
+                <label>⏱️ 仿真倍速: <span class="value-display" id="val-sim-speed">1.0</span>x</label>
+                <input type="range" id="sim-speed" min="0.1" max="2.0" step="0.1" value="1.0">
+            </div>
+            <div style="font-size:0.8rem; color:#555;">(调慢可看清波面接触瞬间)</div>
+        </div>
+
+        <div class="control-group">
+            <div style="font-size:0.9rem;">实时监控:</div>
+            <div class="monitor">
+                时间: <span id="disp-time">0.00</span> s<br>
+                计数: <span id="disp-count" style="color:#ffcc00">0</span><br>
+                间隔: <span id="disp-interval" style="color:#00ffff; font-weight:bold;">--</span> s
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="control-item">
+                <label>波速 (c): <span class="value-display" id="val-wave-speed">4.0</span></label>
+                <input type="range" id="wave-speed" min="2.0" max="10.0" step="0.1" value="4.0">
+            </div>
+            <div class="control-item">
+                <label>周期 (T): <span class="value-display" id="val-period">0.5</span> s</label>
+                <input type="range" id="wave-period" min="0.2" max="2.0" step="0.05" value="0.5">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>🔴 波源 (Source)</h3>
+            <div class="control-item">
+                <label>初速度 v₀: <span class="value-display" id="val-s-v0">1.5</span></label>
+                <input type="range" id="s-v0" min="-5.0" max="5.0" step="0.1" value="1.5">
+            </div>
+            <div class="control-item">
+                <label>加速度 a: <span class="value-display" id="val-s-acc">0.0</span></label>
+                <input type="range" id="s-acc" min="-1.0" max="1.0" step="0.05" value="0.0">
+            </div>
+            <div class="control-item">
+                <label>位置 x: <span class="value-display" id="val-s-pos">-8.0</span></label>
+                <input type="range" id="s-pos" min="-15" max="15" step="1" value="-8">
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>🔵 观察者 (Observer)</h3>
+            <div class="control-item">
+                <label>初速度 v₀: <span class="value-display" id="val-o-v0">0.0</span></label>
+                <input type="range" id="o-v0" min="-5.0" max="5.0" step="0.1" value="0.0">
+            </div>
+            <div class="control-item">
+                <label>位置 x: <span class="value-display" id="val-o-pos">8.0</span></label>
+                <input type="range" id="o-pos" min="-15" max="15" step="1" value="8">
+            </div>
+        </div>
+    </div>
+
+<script>
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d');
+
+// --- 核心控制变量 ---
+let isRunning = false;
+let physicsTime = 0;       // 物理世界的绝对时间
+let accumulator = 0;       // 时间累积器（用于固定步长）
+let lastFrameTime = 0;     // 上一帧渲染时间
+const FIXED_STEP = 0.002;  // 物理步长锁定为 2ms，保证极致平滑
+let simSpeed = 1.0;        // 仿真倍速
+
+// --- 物理状态 ---
+const physics = {
+    waveSpeed: 4.0,
+    period: 0.5,
+    lastEmitTime: -0.5, // 保证一开始就发射
+    waves: [], // 存储波对象
+    source: { x: -8, v: 1.5, a: 0 },
+    observer: { x: 8, v: 0, a: 0 }
+};
+
+// --- 数据统计 ---
+let detectedCount = 0;
+let detectionTimes = [];
+let lastInterval = 0;
+let lastIntervalDisplay = "--"; // 用于UI防抖显示
+
+// --- 视图配置 ---
+const view = {
+    scale: 30, 
+    originX: 0, 
+    originY: 0, 
+    graphHeight: 0
+};
+
+// --- 初始化与绑定 ---
+function init() {
+    resize();
+    window.addEventListener('resize', resize);
+    bindControls();
+    reset();
+    requestAnimationFrame(gameLoop);
+}
+
+function resize() {
+    canvas.width = canvas.parentElement.clientWidth;
+    canvas.height = canvas.parentElement.clientHeight;
+    view.graphHeight = canvas.height * 0.4;
+    view.originX = canvas.width / 2;
+    view.originY = view.graphHeight + (canvas.height * 0.6 / 2);
+}
+
+function bindControls() {
+    const el = (id) => document.getElementById(id);
+    
+    el('btn-start').addEventListener('click', () => {
+        isRunning = !isRunning;
+        if(isRunning) lastFrameTime = performance.now();
+        el('btn-start').textContent = isRunning ? "暂停" : "开始";
+    });
+
+    el('btn-reset').addEventListener('click', reset);
+
+    el('sim-speed').addEventListener('input', (e) => {
+        simSpeed = parseFloat(e.target.value);
+        el('val-sim-speed').textContent = simSpeed.toFixed(1);
+    });
+
+    const bind = (id, target, key, disp) => {
+        el(id).addEventListener('input', (e) => {
+            const val = parseFloat(e.target.value);
+            el(disp).textContent = val;
+            if (target === 'root') physics[key] = val;
+            else physics[target][key] = val;
+            
+            if(!isRunning && physicsTime === 0) {
+                // 静态模式下更新初始位置
+                if(key === 'pos' || key === 'x') {
+                    physics.source.x = parseFloat(el('s-pos').value);
+                    physics.observer.x = parseFloat(el('o-pos').value);
+                }
+                draw();
+            }
+        });
+    };
+
+    bind('wave-speed', 'root', 'waveSpeed', 'val-wave-speed');
+    bind('wave-period', 'root', 'period', 'val-period');
+    bind('s-v0', 'source', 'v', 'val-s-v0');
+    bind('s-acc', 'source', 'a', 'val-s-acc');
+    bind('s-pos', 'source', 'x', 'val-s-pos');
+    bind('o-v0', 'observer', 'v', 'val-o-v0');
+    bind('o-pos', 'observer', 'x', 'val-o-pos');
+}
+
+function reset() {
+    isRunning = false;
+    physicsTime = 0;
+    accumulator = 0;
+    detectedCount = 0;
+    detectionTimes = [];
+    lastInterval = 0;
+    lastIntervalDisplay = "--";
+    
+    document.getElementById('btn-start').textContent = "开始";
+    updateUI();
+
+    physics.waves = [];
+    physics.lastEmitTime = -physics.period; 
+    
+    // 重置物理参数到输入框的值
+    const val = (id) => parseFloat(document.getElementById(id).value);
+    physics.source.x = val('s-pos');
+    physics.source.v = val('s-v0');
+    physics.source.a = val('s-acc');
+    
+    physics.observer.x = val('o-pos');
+    physics.observer.v = val('o-v0');
+    physics.observer.a = 0; 
+
+    draw();
+}
+
+// --- 游戏循环 (核心防抖逻辑) ---
+function gameLoop(timestamp) {
+    if (isRunning) {
+        let frameTime = (timestamp - lastFrameTime) / 1000;
+        if (frameTime > 0.1) frameTime = 0.1; // 防止切换标签页后飞逝
+        lastFrameTime = timestamp;
+
+        // 累积时间，按固定步长消耗
+        accumulator += frameTime * simSpeed;
+
+        while (accumulator >= FIXED_STEP) {
+            updatePhysics(FIXED_STEP);
+            accumulator -= FIXED_STEP;
+        }
+        
+        // 降低UI更新频率，避免视觉上的数值闪烁
+        updateUI();
+    }
+    draw();
+    requestAnimationFrame(gameLoop);
+}
+
+function updatePhysics(dt) {
+    physicsTime += dt;
+
+    // 1. 更新位置
+    const s = physics.source;
+    const o = physics.observer;
+    
+    s.v += s.a * dt;
+    s.x += s.v * dt;
+    
+    o.v += o.a * dt;
+    o.x += o.v * dt;
+
+    // 2. 发射波
+    if (physicsTime - physics.lastEmitTime >= physics.period) {
+        physics.waves.push({
+            emitTime: physicsTime,
+            emitX: s.x,
+            detected: false,
+            lastDiff: -999 // 初始化
+        });
+        physics.lastEmitTime = physicsTime;
+    }
+
+    // 3. 碰撞检测
+    const maxR = (canvas.width / view.scale) * 1.5;
+    
+    for (let w of physics.waves) {
+        if (w.detected) continue;
+
+        const r = physics.waveSpeed * (physicsTime - w.emitTime);
+        const dist = Math.abs(o.x - w.emitX);
+        const currentDiff = r - dist; // >0 表示接触
+
+        // 初始化上一帧状态
+        if (w.lastDiff === -999) {
+            w.lastDiff = currentDiff;
+            continue;
+        }
+
+        // 穿越检测：从负变正
+        if (w.lastDiff < 0 && currentDiff >= 0) {
+            w.detected = true;
+            detectedCount++;
+
+            // 线性插值计算精确碰撞时间
+            const fraction = Math.abs(w.lastDiff) / (currentDiff - w.lastDiff);
+            const exactTime = (physicsTime - dt) + (fraction * dt);
+            
+            detectionTimes.push(exactTime);
+
+            if (detectionTimes.length >= 2) {
+                lastInterval = exactTime - detectionTimes[detectionTimes.length - 2];
+            }
+        }
+        w.lastDiff = currentDiff;
+    }
+
+    // 清理
+    physics.waves = physics.waves.filter(w => {
+        const r = physics.waveSpeed * (physicsTime - w.emitTime);
+        return r < maxR;
+    });
+}
+
+function updateUI() {
+    document.getElementById('disp-time').textContent = physicsTime.toFixed(2);
+    document.getElementById('disp-count').textContent = detectedCount;
+    
+    // 防抖显示：只有当数字真的有意义时才显示
+    if (lastInterval > 0) {
+        // 四舍五入到3位小数，非常稳定
+        lastIntervalDisplay = lastInterval.toFixed(3);
+    }
+    document.getElementById('disp-interval').textContent = lastIntervalDisplay;
+}
+
+// --- 绘图 ---
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawStats();
+    drawGraph();
+    drawSimulation();
+}
+
+function drawStats() {
+    // 左上角大字显示
+    ctx.font = "bold 24px Arial";
+    ctx.fillStyle = "blue"; 
+    ctx.textAlign = "left";
+    ctx.fillText(`接收波数: ${detectedCount}`, 30, 40);
+    ctx.fillText(`接收间隔: ${lastIntervalDisplay} s`, 30, 70);
+}
+
+function drawGraph() {
+    const margin = 50;
+    const h = view.graphHeight - 20;
+    const w = canvas.width - margin * 2;
+    
+    // 边框
+    ctx.strokeStyle = '#ccc';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(margin, 80); 
+    ctx.lineTo(margin, h);
+    ctx.lineTo(margin + w, h);
+    ctx.stroke();
+
+    if (detectionTimes.length > 0) {
+        const maxTime = Math.max(10, physicsTime);
+        const maxCount = Math.max(5, detectedCount + 2);
+        const xScale = w / maxTime;
+        const yScale = (h - 80) / maxCount;
+
+        ctx.beginPath();
+        ctx.strokeStyle = '#e74c3c';
+        ctx.lineWidth = 2;
+
+        let cx = margin;
+        let cy = h;
+        ctx.moveTo(cx, cy);
+
+        for(let i=0; i<detectionTimes.length; i++) {
+            const t = detectionTimes[i];
+            const nx = margin + t * xScale;
+            const ny = h - (i + 1) * yScale;
+            ctx.lineTo(nx, cy);
+            ctx.lineTo(nx, ny);
+            cx = nx;
+            cy = ny;
+        }
+        ctx.lineTo(margin + physicsTime * xScale, cy);
+        ctx.stroke();
+    }
+}
+
+function drawSimulation() {
+    // 分割线
+    ctx.beginPath();
+    ctx.strokeStyle = '#999';
+    ctx.lineWidth = 2;
+    ctx.moveTo(0, view.graphHeight);
+    ctx.lineTo(canvas.width, view.graphHeight);
+    ctx.stroke();
+
+    // 标尺
+    ctx.strokeStyle = '#ddd';
+    ctx.lineWidth = 1;
+    ctx.font = "10px sans-serif";
+    ctx.fillStyle = "#888";
+    ctx.textAlign = "center";
+    
+    const start = Math.floor((-view.originX) / view.scale);
+    const end = Math.ceil((canvas.width - view.originX) / view.scale);
+    
+    for(let i=start; i<=end; i++) {
+        const x = view.originX + i * view.scale;
+        ctx.beginPath();
+        ctx.moveTo(x, view.originY);
+        ctx.lineTo(x, view.originY - 5);
+        ctx.stroke();
+        if(Math.abs(i) % 2 === 0) ctx.fillText(i, x, view.originY + 15);
+    }
+
+    // 波纹
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255, 0, 127, 0.7)';
+    for(let w of physics.waves) {
+        const r = physics.waveSpeed * (physicsTime - w.emitTime);
+        if(r > 0) {
+            ctx.beginPath();
+            ctx.arc(view.originX + w.emitX * view.scale, view.originY, r * view.scale, 0, Math.PI*2);
+            ctx.stroke();
+        }
+    }
+
+    // 实体
+    drawDot(physics.source.x, 'red', '波源');
+    drawDot(physics.observer.x, 'blue', '人');
+}
+
+function drawDot(physX, color, label) {
+    const x = view.originX + physX * view.scale;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, view.originY, 6, 0, Math.PI*2);
+    ctx.fill();
+    ctx.font = "bold 12px sans-serif";
+    ctx.fillText(label, x, view.originY - 12);
+}
+
+// 启动
+init();
+</script>
+</body>
+</html>

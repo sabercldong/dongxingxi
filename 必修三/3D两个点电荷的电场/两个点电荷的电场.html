@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 双点电荷电场仿真 (带方向)</title>
+    <style>
+        :root {
+            /* 界面配色调整为明亮风格适配 */
+            --bg-color: #f0f2f5; 
+            --panel-bg: #333333; /* 侧边栏保持深色以区分功能区 */
+            --text-color: #f0f0f0;
+            --accent-color: #4CAF50;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧 3D 画布区域 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background: #eef1f5; /* 亮色背景 */
+            overflow: hidden;
+        }
+
+        /* 右侧控制区 */
+        #sidebar {
+            width: 320px;
+            background-color: var(--panel-bg);
+            color: var(--text-color);
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.2);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        h2 { 
+            margin-top: 0; 
+            font-size: 1.2rem; 
+            border-bottom: 2px solid var(--accent-color); 
+            padding-bottom: 10px; 
+            color: #fff;
+        }
+        
+        .control-group {
+            background: rgba(255,255,255,0.1);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .control-group h3 {
+            margin: 0 0 10px 0;
+            font-size: 1rem;
+            color: #ccc;
+        }
+
+        label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            margin-bottom: 5px;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin-bottom: 10px;
+            cursor: pointer;
+        }
+
+        .info-box {
+            font-size: 0.85rem;
+            color: #aaa;
+            line-height: 1.4;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 4px;
+        }
+    </style>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>电场控制台</h2>
+
+        <div class="control-group">
+            <h3>左侧电荷 (Q1)</h3>
+            <label>电荷量: <span id="val-q1">10</span></label>
+            <input type="range" id="slider-q1" min="-20" max="20" value="10" step="1">
+            
+            <label>Z 轴位置 (前后):</label>
+            <input type="range" id="slider-z1" min="-15" max="15" value="0" step="0.5">
+        </div>
+
+        <div class="control-group">
+            <h3>右侧电荷 (Q2)</h3>
+            <label>电荷量: <span id="val-q2">-10</span></label>
+            <input type="range" id="slider-q2" min="-20" max="20" value="-10" step="1">
+            
+            <label>Z 轴位置 (前后):</label>
+            <input type="range" id="slider-z2" min="-15" max="15" value="0" step="0.5">
+        </div>
+
+        <div class="control-group">
+            <h3>显示设置</h3>
+            <label>线条密度</label>
+            <input type="range" id="slider-density" min="10" max="40" value="15" step="5">
+            <br>
+            <label>
+                <input type="checkbox" id="chk-arrows" checked onchange="updateVisualization()"> 显示方向箭头
+            </label>
+            <label>
+                <input type="checkbox" id="chk-rotate" checked> 自动旋转
+            </label>
+        </div>
+
+        <div class="info-box">
+            <strong>图例说明：</strong>
+            <ul>
+                <li style="color:#ff6666">红色：正电荷 / 出射场线</li>
+                <li style="color:#6666ff">蓝色：负电荷 / 入射场线</li>
+                <li>箭头：指示电场 E 的方向</li>
+            </ul>
+        </div>
+    </div>
+
+<script>
+    // --- 1. 初始化场景 ---
+    const container = document.getElementById('canvas-container');
+    
+    // 创建场景
+    const scene = new THREE.Scene();
+    // 修改背景色为浅灰色
+    scene.background = new THREE.Color(0xeef1f5);
+    // 雾化效果改为匹配背景
+    scene.fog = new THREE.FogExp2(0xeef1f5, 0.015);
+
+    // 创建相机
+    const camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(0, 20, 45);
+
+    // 创建渲染器
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.shadowMap.enabled = true; // 开启阴影
+    container.appendChild(renderer.domElement);
+
+    // --- 光照调整 (适应亮背景) ---
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7); // 环境光增强
+    scene.add(ambientLight);
+    
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    // --- 2. 控制器 ---
+    let controls;
+    try {
+        if (typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+        else if (typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+        
+        if(controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+        }
+    } catch(e) { console.warn("OrbitControls not loaded"); }
+
+    // --- 3. 对象管理 ---
+    const charges = [
+        { x: -10, y: 0, z: 0, q: 10, mesh: null },
+        { x: 10, y: 0, z: 0, q: -10, mesh: null }
+    ];
+    
+    // 组管理
+    let fieldLinesGroup = new THREE.Group();
+    let arrowGroup = new THREE.Group();
+    scene.add(fieldLinesGroup);
+    scene.add(arrowGroup);
+
+    // 创建电荷球体
+    const sphereGeo = new THREE.SphereGeometry(1.5, 32, 32);
+    
+    function createChargeMesh(color) {
+        const mat = new THREE.MeshPhongMaterial({ 
+            color: color, 
+            shininess: 100,
+            specular: 0x444444
+        });
+        const mesh = new THREE.Mesh(sphereGeo, mat);
+        mesh.castShadow = true;
+        return mesh;
+    }
+
+    charges[0].mesh = createChargeMesh(0xff3333);
+    charges[1].mesh = createChargeMesh(0x3333ff);
+    scene.add(charges[0].mesh);
+    scene.add(charges[1].mesh);
+
+    // 辅助网格 (颜色加深以适应亮背景)
+    const gridHelper = new THREE.GridHelper(100, 50, 0xaaaaaa, 0xd0d0d0);
+    gridHelper.position.y = -10;
+    scene.add(gridHelper);
+
+    // 预创建箭头几何体 (性能优化)
+    // 旋转几何体，使得圆锥尖端指向 Z 轴正方向，方便后续 lookAt
+    const coneGeometry = new THREE.ConeGeometry(0.35, 1.2, 8); 
+    coneGeometry.rotateX(Math.PI / 2); 
+
+    // --- 4. 物理计算 ---
+
+    function getElectricField(x, y, z) {
+        let ex = 0, ey = 0, ez = 0;
+        const k = 100;
+
+        charges.forEach(c => {
+            if (c.q === 0) return;
+            let dx = x - c.x;
+            let dy = y - c.y;
+            let dz = z - c.z;
+            let distSq = dx*dx + dy*dy + dz*dz;
+            let dist = Math.sqrt(distSq);
+            
+            if (dist < 0.1) dist = 0.1;
+
+            let E = k * c.q / (dist * dist * dist); // E = k*q/r^2 * (vec/r)
+            
+            ex += E * dx;
+            ey += E * dy;
+            ez += E * dz;
+        });
+
+        return new THREE.Vector3(ex, ey, ez);
+    }
+
+    // --- 5. 核心绘制 ---
+    
+    function updateVisualization() {
+        // 更新球体
+        charges[0].mesh.position.set(charges[0].x, charges[0].y, charges[0].z);
+        charges[1].mesh.position.set(charges[1].x, charges[1].y, charges[1].z);
+
+        // 颜色动态变化
+        charges[0].mesh.material.color.setHex(charges[0].q > 0 ? 0xff3333 : (charges[0].q < 0 ? 0x3333ff : 0x888888));
+        charges[1].mesh.material.color.setHex(charges[1].q > 0 ? 0xff3333 : (charges[1].q < 0 ? 0x3333ff : 0x888888));
+
+        // 清理旧对象
+        while(fieldLinesGroup.children.length > 0){ 
+            const obj = fieldLinesGroup.children[0];
+            obj.geometry.dispose();
+            obj.material.dispose();
+            fieldLinesGroup.remove(obj); 
+        }
+        while(arrowGroup.children.length > 0){
+            // 箭头复用了几何体，不需要 dispose geometry，只需要移除 mesh
+            arrowGroup.remove(arrowGroup.children[0]);
+        }
+
+        const density = parseInt(document.getElementById('slider-density').value);
+        const showArrows = document.getElementById('chk-arrows').checked;
+        const stepSize = 0.5;
+        const maxSteps = 250;
+
+        charges.forEach(c => {
+            if (c.q === 0) return;
+
+            let numLines = Math.floor(density * (Math.abs(c.q) / 10)); 
+            if (numLines < 4) numLines = 4;
+
+            // 材质颜色 (深一点以便在白背景显示)
+            const lineColorHex = c.q > 0 ? 0xcc0000 : 0x0000cc;
+            const lineMat = new THREE.LineBasicMaterial({ 
+                color: lineColorHex, 
+                opacity: 0.5, 
+                transparent: true 
+            });
+            const arrowMat = new THREE.MeshBasicMaterial({ color: lineColorHex });
+
+            for (let i = 0; i < numLines; i++) {
+                // 斐波那契球体分布
+                const phi = Math.acos(1 - 2 * (i + 0.5) / numLines);
+                const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+
+                const r = 2.0;
+                const startX = c.x + r * Math.sin(phi) * Math.cos(theta);
+                const startY = c.y + r * Math.sin(phi) * Math.sin(theta);
+                const startZ = c.z + r * Math.cos(phi);
+
+                const points = [];
+                let currPos = new THREE.Vector3(startX, startY, startZ);
+                points.push(currPos.clone());
+
+                // 追踪方向: 正电荷顺场强(1), 负电荷逆场强(-1)
+                let direction = c.q > 0 ? 1 : -1;
+
+                // 箭头生成间隔
+                let stepsSinceLastArrow = 0;
+                const arrowInterval = 25; // 每隔多少步画一个箭头
+
+                for (let step = 0; step < maxSteps; step++) {
+                    const E = getElectricField(currPos.x, currPos.y, currPos.z);
+                    const len = E.length();
+                    
+                    if (len === 0) break;
+
+                    // 计算下一步
+                    const moveVec = E.clone().normalize().multiplyScalar(stepSize * direction);
+                    currPos.add(moveVec);
+                    points.push(currPos.clone());
+
+                    // --- 绘制箭头逻辑 ---
+                    if (showArrows && step > 5 && stepsSinceLastArrow > arrowInterval) {
+                        // 创建箭头
+                        const arrow = new THREE.Mesh(coneGeometry, arrowMat);
+                        arrow.position.copy(currPos);
+                        
+                        // 关键：箭头始终指向场强 E 的真实方向
+                        // 无论我们是正向画线还是逆向画线，E 的方向是物理事实
+                        const target = currPos.clone().add(E);
+                        arrow.lookAt(target);
+                        
+                        arrowGroup.add(arrow);
+                        stepsSinceLastArrow = 0;
+                    }
+                    stepsSinceLastArrow++;
+
+                    // 边界检查
+                    if (currPos.length() > 60) break; 
+                    
+                    let hit = false;
+                    for(let targetC of charges) {
+                        let d = currPos.distanceTo(new THREE.Vector3(targetC.x, targetC.y, targetC.z));
+                        if(d < 1.5) hit = true;
+                    }
+                    if(hit) break;
+                }
+
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(geometry, lineMat);
+                fieldLinesGroup.add(line);
+            }
+        });
+    }
+
+    // --- 6. 交互监听 ---
+    const sQ1 = document.getElementById('slider-q1');
+    const sZ1 = document.getElementById('slider-z1');
+    const sQ2 = document.getElementById('slider-q2');
+    const sZ2 = document.getElementById('slider-z2');
+    const sDensity = document.getElementById('slider-density');
+    const chkRotate = document.getElementById('chk-rotate');
+
+    const vQ1 = document.getElementById('val-q1');
+    const vQ2 = document.getElementById('val-q2');
+
+    function onParamsChange() {
+        charges[0].q = parseInt(sQ1.value);
+        charges[0].z = parseFloat(sZ1.value);
+        charges[1].q = parseInt(sQ2.value);
+        charges[1].z = parseFloat(sZ2.value);
+
+        vQ1.innerText = charges[0].q;
+        vQ2.innerText = charges[1].q;
+
+        updateVisualization();
+    }
+
+    [sQ1, sZ1, sQ2, sZ2, sDensity].forEach(el => {
+        el.addEventListener('input', onParamsChange);
+    });
+
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    // --- 7. 动画 ---
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (chkRotate.checked && controls) {
+            controls.autoRotate = true;
+            controls.autoRotateSpeed = 2.0;
+        } else if (controls) {
+            controls.autoRotate = false;
+        }
+
+        if(controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // 启动
+    updateVisualization();
+    animate();
+
+</script>
+</body>
+</html>

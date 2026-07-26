@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 乒乓球物理模拟系统</title>
+    <style>
+        /* --- 全局样式 --- */
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Roboto, sans-serif; background-color: #121212; color: #fff; }
+        
+        #container { display: flex; width: 100vw; height: 100vh; }
+        
+        /* 左侧 3D 画布 */
+        #canvas-container { 
+            flex-grow: 1; 
+            position: relative; 
+            background: linear-gradient(to bottom, #cfd9df 0%, #e2ebf0 100%); 
+            overflow: hidden; 
+        }
+
+        /* 右侧控制面板 */
+        #sidebar {
+            width: 300px;
+            background: #1e1e2f;
+            padding: 25px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            display: flex; flex-direction: column; z-index: 20; border-left: 1px solid #333;
+        }
+
+        /* 控件样式 */
+        .control-group { margin-bottom: 25px; background: #2b2b40; padding: 15px; border-radius: 12px; border: 1px solid #3b3b55; }
+        .control-label { display: flex; justify-content: space-between; margin-bottom: 10px; font-size: 14px; color: #a0a0b0; font-weight: 600; }
+        .value-display { color: #4facfe; font-family: monospace; font-size: 16px; }
+
+        input[type=range] { -webkit-appearance: none; width: 100%; height: 6px; background: #444; border-radius: 3px; outline: none; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: #4facfe; border-radius: 50%; cursor: pointer; }
+
+        /* 按钮 */
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        button { flex: 1; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 14px; color: white; transition: 0.2s; }
+        #btn-start { background: linear-gradient(45deg, #11998e, #38ef7d); }
+        #btn-pause { background: linear-gradient(45deg, #f09819, #edde5d); color: #333; }
+        #btn-reset { background: linear-gradient(45deg, #2980b9, #6dd5fa); }
+        button:disabled { background: #444; color: #888; cursor: not-allowed; }
+        button:hover:not(:disabled) { filter: brightness(1.1); transform: translateY(-2px); }
+
+        #status-msg { text-align: center; margin-top: 10px; font-weight: bold; padding: 8px; border-radius: 6px; background: rgba(0,0,0,0.2); min-height: 20px; }
+
+        /* 悬浮图表 */
+        #chart-wrapper {
+            position: absolute; top: 20px; left: 20px; width: 380px;
+            background: rgba(255, 255, 255, 0.95); padding: 10px; border-radius: 12px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.15); cursor: move; z-index: 100;
+            display: block; /* 默认显示 */
+        }
+        #chart-header { display: flex; justify-content: space-between; padding-bottom: 5px; border-bottom: 1px solid #eee; color: #333; font-weight: bold; font-size: 13px; }
+        .checkbox-label { display: flex; align-items: center; cursor: pointer; margin-top: 10px; font-size: 14px; color: #ccc; }
+        .checkbox-label input { margin-right: 10px; accent-color: #4facfe; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container">
+        <div id="chart-wrapper">
+            <div id="chart-header">
+                <span>📊 侧视轨迹 (高度 Y / 距离 X)</span>
+                <span style="cursor:pointer;color:red" onclick="toggleChart(false)">×</span>
+            </div>
+            <canvas id="trajectoryChart"></canvas>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <h2 style="margin: 0 0 20px 0; font-size: 18px; color: #fff; border-bottom: 2px solid #4facfe; padding-bottom: 10px;">控制台</h2>
+
+        <div class="control-group">
+            <div class="control-label"><span>发射速率 (v)</span><span id="val-v" class="value-display">5.0</span></div>
+            <input type="range" id="slider-v" min="1" max="15" step="0.1" value="5.0">
+        </div>
+
+        <div class="control-group">
+            <div class="control-label"><span>水平角度 (θ)</span><span id="val-theta" class="value-display">0</span></div>
+            <input type="range" id="slider-theta" min="-45" max="45" step="1" value="0">
+        </div>
+
+        <div class="control-group" style="background:transparent; border:none; padding:0;">
+            <div id="status-msg">准备就绪</div>
+            <div class="btn-group">
+                <button id="btn-start">发射</button>
+                <button id="btn-pause" disabled>暂停</button>
+                <button id="btn-reset">重置</button>
+            </div>
+        </div>
+
+        <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid #333;">
+            <label class="checkbox-label"><input type="checkbox" id="chk-chart" checked onchange="toggleChart(this.checked)"> 实时图表追踪</label>
+            <label class="checkbox-label"><input type="checkbox" id="chk-trace" checked> 3D 轨迹显示</label>
+        </div>
+    </div>
+</div>
+
+<script src="three.min.js"></script>
+<script src="OrbitControls.js"></script>
+<script src="chart.min.js"></script>
+
+<script>
+    // === 参数配置 ===
+    const PARAMS = { H: 2, LAUNCH_H: 6, L1: 20, L2: 12, NET_X: 10, G: 9.8 };
+    let scene, camera, renderer, controls;
+    let ball, traceLine, myChart;
+    let isRunning = false, isPaused = false;
+    let velocity = new THREE.Vector3();
+    let trajectory = [];
+
+    // === 初始化 ===
+    function init() {
+        if (typeof THREE === 'undefined') { alert("错误: 找不到 three.min.js"); return; }
+        
+        const container = document.getElementById('canvas-container');
+        scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0xe2ebf0, 20, 100);
+
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(-15, 15, 20);
+        camera.lookAt(PARAMS.NET_X, 0, 0);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // 控制器兼容处理
+        let Ctrl = (typeof THREE !== 'undefined' && THREE.OrbitControls) ? THREE.OrbitControls : ((typeof OrbitControls !== 'undefined') ? OrbitControls : null);
+        if (Ctrl) {
+            controls = new Ctrl(camera, renderer.domElement);
+            controls.enableDamping = true;
+        }
+
+        // 灯光
+        scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 0.6));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(-10, 25, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        buildWorld();
+        initChart();
+        window.addEventListener('resize', onResize);
+        animate();
+    }
+
+    function buildWorld() {
+        // 1. 地面
+        const floor = new THREE.Mesh(new THREE.PlaneGeometry(100, 100), new THREE.MeshStandardMaterial({ color: 0xf5f5f5 }));
+        floor.rotation.x = -Math.PI / 2; floor.position.y = -0.1; floor.receiveShadow = true;
+        scene.add(floor);
+
+        // 2. 球台
+        const table = new THREE.Mesh(new THREE.BoxGeometry(PARAMS.L1, 0.5, PARAMS.L2), new THREE.MeshPhongMaterial({ color: 0x27408B }));
+        table.position.set(PARAMS.L1/2, -0.25, 0); table.receiveShadow = true;
+        scene.add(table);
+
+        // 3. 目标区(绿色)
+        const target = new THREE.Mesh(new THREE.PlaneGeometry(PARAMS.L1/2 - 0.5, PARAMS.L2 - 0.5), new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.2 }));
+        target.rotation.x = -Math.PI/2; target.position.set(PARAMS.L1 * 0.75, 0.02, 0);
+        scene.add(target);
+
+        // 4. 网
+        const net = new THREE.Mesh(new THREE.PlaneGeometry(PARAMS.L2, PARAMS.H), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6, side: THREE.DoubleSide }));
+        net.rotation.y = Math.PI/2; net.position.set(PARAMS.NET_X, PARAMS.H/2, 0);
+        scene.add(net);
+
+        // 5. 发射器柱
+        const pole = new THREE.Mesh(new THREE.BoxGeometry(0.5, PARAMS.LAUNCH_H, 0.5), new THREE.MeshStandardMaterial({ color: 0x555555 }));
+        pole.position.set(0, PARAMS.LAUNCH_H/2, 0);
+        scene.add(pole);
+
+        // 6. 轨迹线 (【修复关键】：必须在 resetBall 前定义)
+        traceLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 }));
+        scene.add(traceLine);
+
+        // 7. 乒乓球
+        ball = new THREE.Mesh(new THREE.SphereGeometry(0.25, 32, 32), new THREE.MeshPhongMaterial({ color: 0xffa500 }));
+        ball.castShadow = true;
+        scene.add(ball);
+
+        // 8. 最后再重置，确保 traceLine 已存在
+        resetBall();
+    }
+
+    function resetBall() {
+        ball.position.set(0, PARAMS.LAUNCH_H, 0);
+        ball.material.color.setHex(0xffa500);
+        trajectory = [];
+        // 这里需要 traceLine 已经存在
+        if(traceLine) traceLine.geometry.setFromPoints([]);
+        
+        if(myChart) {
+            myChart.data.datasets[0].data = [];
+            myChart.update();
+        }
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        if (isRunning && !isPaused) {
+            const dt = 0.016;
+            ball.position.addScaledVector(velocity, dt);
+            velocity.y -= PARAMS.G * dt;
+
+            // 轨迹记录
+            if (document.getElementById('chk-trace').checked) {
+                trajectory.push(ball.position.clone());
+                if (trajectory.length % 3 === 0) traceLine.geometry.setFromPoints(trajectory);
+            }
+            // 图表更新
+            if (myChart && trajectory.length % 5 === 0 && document.getElementById('chk-chart').checked) {
+                myChart.data.datasets[0].data.push({x: ball.position.x, y: ball.position.y});
+                myChart.update('none');
+            }
+            checkCollision();
+        }
+
+        if(controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    function checkCollision() {
+        const p = ball.position;
+        // 触网
+        if (Math.abs(p.x - PARAMS.NET_X) < 0.25 && p.y < PARAMS.H && Math.abs(p.z) < PARAMS.L2/2) {
+            stop("🔴 触网", 0xff4444);
+        }
+        // 落地
+        else if (p.y <= 0.15) {
+            p.y = 0.15;
+            if (p.x >= 0 && p.x <= PARAMS.L1 && Math.abs(p.z) <= PARAMS.L2/2) {
+                if (p.x > PARAMS.NET_X) stop("🟢 成功！", 0x00ff00);
+                else stop("⚪ 本方球台", 0xaaaaaa);
+            } else {
+                stop("⚫ 出界", 0x333333);
+            }
+        }
+    }
+
+    function stop(msg, color) {
+        isRunning = false;
+        ball.material.color.setHex(color);
+        const el = document.getElementById('status-msg');
+        el.innerText = msg;
+        el.style.color = (color === 0xff4444) ? '#ff5f6d' : (color === 0x00ff00 ? '#4facfe' : '#fff');
+        document.getElementById('btn-start').disabled = false;
+        document.getElementById('btn-pause').disabled = true;
+    }
+
+    // Chart
+    function initChart() {
+        if(typeof Chart === 'undefined') return;
+        const ctx = document.getElementById('trajectoryChart').getContext('2d');
+        myChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                datasets: [
+                    { label: '高度', borderColor: '#ff6384', pointRadius: 0, borderWidth: 2, data: [] },
+                    { label: '网', borderColor: '#333', borderDash: [5,5], data: [{x:PARAMS.NET_X, y:0}, {x:PARAMS.NET_X, y:PARAMS.H}] },
+                    { label: '台面', borderColor: '#27408B', borderWidth: 4, data: [{x:0, y:0}, {x:PARAMS.L1, y:0}] }
+                ]
+            },
+            options: { 
+                animation: false, 
+                interaction: { intersect: false },
+                scales: { x: { type: 'linear', min: -1, max: PARAMS.L1+2 }, y: { min: 0, max: PARAMS.LAUNCH_H+1 } }
+            }
+        });
+    }
+
+    // UI
+    const ui = { v: document.getElementById('slider-v'), t: document.getElementById('slider-theta') };
+    const updateUI = () => {
+        document.getElementById('val-v').innerText = parseFloat(ui.v.value).toFixed(1);
+        document.getElementById('val-theta').innerText = ui.t.value;
+    };
+    ui.v.oninput = updateUI; ui.t.oninput = updateUI;
+
+    document.getElementById('btn-start').onclick = () => {
+        if (!isPaused) {
+            resetBall();
+            const v = parseFloat(ui.v.value), ang = parseFloat(ui.t.value) * Math.PI / 180;
+            velocity.set(v * Math.cos(ang), 0, v * Math.sin(ang));
+            document.getElementById('status-msg').innerText = "🚀 飞行中...";
+        }
+        isRunning = true; isPaused = false;
+        document.getElementById('btn-start').disabled = true;
+        document.getElementById('btn-pause').disabled = false;
+    };
+    document.getElementById('btn-pause').onclick = () => { isPaused = true; document.getElementById('btn-start').disabled = false; };
+    document.getElementById('btn-reset').onclick = () => { isRunning = false; isPaused = false; resetBall(); document.getElementById('btn-start').disabled = false; };
+
+    // 拖拽图表
+    const cw = document.getElementById('chart-wrapper');
+    let drag = false, off = [0,0];
+    cw.onmousedown = e => { if(e.target.tagName!=='SPAN'){ drag=true; off=[cw.offsetLeft-e.clientX, cw.offsetTop-e.clientY]; }};
+    document.onmouseup = () => drag = false;
+    document.onmousemove = e => { if(drag) { e.preventDefault(); cw.style.left=(e.clientX+off[0])+'px'; cw.style.top=(e.clientY+off[1])+'px'; }};
+    function toggleChart(show) { cw.style.display = show ? 'block' : 'none'; document.getElementById('chk-chart').checked = show; }
+
+    function onResize() {
+        const c = document.getElementById('canvas-container');
+        camera.aspect = c.clientWidth / c.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(c.clientWidth, c.clientHeight);
+    }
+
+    init();
+</script>
+</body>
+</html>

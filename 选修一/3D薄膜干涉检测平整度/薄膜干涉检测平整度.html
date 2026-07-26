@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>薄膜干涉平整度检测演示 (凹凸版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; display: flex; height: 100vh; background-color: #1a1a1a; color: #eee; }
+        
+        /* 左侧 3D 容器 */
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        /* 右侧功能区 */
+        #sidebar { width: 300px; background-color: #2d2d2d; padding: 20px; box-shadow: -2px 0 5px rgba(0,0,0,0.5); display: flex; flex-direction: column; overflow-y: auto; z-index: 10; }
+        
+        /* 控件样式 */
+        h2 { margin-top: 0; color: #4facfe; font-size: 18px; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        .control-group { margin-bottom: 25px; background: #333; padding: 15px; border-radius: 5px; }
+        label { display: block; margin-bottom: 8px; font-size: 14px; font-weight: bold; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .value-display { font-size: 12px; color: #4facfe; float: right; font-family: monospace; }
+        
+        /* 左上角可拖动图表 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            height: 250px;
+            background: rgba(45, 45, 45, 0.9);
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 10px;
+            cursor: move; 
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            z-index: 100;
+        }
+        #chart-header {
+            font-size: 12px;
+            color: #ccc;
+            margin-bottom: 5px;
+            pointer-events: none; 
+            text-align: center;
+        }
+        canvas#interferenceChart { width: 100% !important; height: 90% !important; pointer-events: none; }
+        
+        /* 说明文字 */
+        .info-text { font-size: 12px; color: #bbb; line-height: 1.5; margin-top: 5px; }
+        .highlight { color: #4facfe; font-weight: bold; }
+        .note { color: #ff9f43; font-style: italic; }
+
+    </style>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <div id="chart-wrapper">
+            <div id="chart-header">:: 干涉强度分布图 (可拖动) ::</div>
+            <canvas id="interferenceChart"></canvas>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <h2>控制面板</h2>
+        
+        <div class="control-group">
+            <label>工件形状误差 <span id="val-bump" class="value-display">0.0 (平整)</span></label>
+            <input type="range" id="input-bump" min="-5.0" max="5.0" step="0.1" value="0.0">
+            <p class="info-text">
+                <span style="color:#ff6b6b">负值 ( &lt; 0 )</span> : 工件表面<strong>凹陷</strong><br>
+                <span style="color:#1dd1a1">正值 ( &gt; 0 )</span> : 工件表面<strong>凸起</strong><br>
+                <span>0.0</span> : 表面绝对平整
+            </p>
+        </div>
+
+        <div class="control-group">
+            <label>空气楔角 (倾斜度) <span id="val-angle" class="value-display">0.050</span></label>
+            <input type="range" id="input-angle" min="0" max="0.2" step="0.001" value="0.05">
+            <p class="info-text">调整标准平晶的倾斜角度，观察条纹密度的变化。</p>
+        </div>
+        
+        <div class="control-group">
+            <label>光波波长 (颜色) <span id="val-lambda" class="value-display">600nm</span></label>
+            <input type="range" id="input-lambda" min="400" max="700" step="10" value="600">
+        </div>
+
+        <div class="control-group">
+            <h3>检测原理</h3>
+            <p class="info-text">
+                通过观察干涉条纹的弯曲方向来判断凹凸：
+                <br><br>
+                当存在<strong>空气楔角</strong>时：
+                <br>
+                1. <strong>凸起</strong>：条纹凸向楔角尖端（变薄处）。
+                <br>
+                2. <strong>凹陷</strong>：条纹凸向楔角底部（变厚处）。
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let testSurface, flatGlass; 
+        
+        // 物理参数
+        const params = {
+            wedgeAngle: 0.05,  // 空气楔角
+            bumpHeight: 0.0,   // 缺陷高度 (正=凸, 负=凹)
+            wavelength: 600    // 波长 (nm)
+        };
+
+        // Chart.js 实例
+        let intensityChart;
+
+        // ================= 初始化程序 =================
+        function init() {
+            const container = document.getElementById('canvas-container');
+            
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222222);
+
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 15, 15);
+            camera.lookAt(0, 0, 0);
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            // 4. 控制器
+            if (typeof THREE.OrbitControls !== 'undefined') {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else if (typeof OrbitControls !== 'undefined') {
+                controls = new OrbitControls(camera, renderer.domElement);
+            }
+            if(controls) {
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+            }
+
+            // 5. 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // 6. 物体与图表
+            createObjects();
+            initChart();
+
+            // 7. 事件
+            window.addEventListener('resize', onWindowResize);
+            bindUI();
+
+            // 8. 循环
+            animate();
+        }
+
+        // ================= 创建 3D 物体 =================
+        function createObjects() {
+            // --- 待测工件 (下方) ---
+            // 增加细分度以获得更平滑的凹凸视觉效果
+            const geometry = new THREE.PlaneGeometry(10, 10, 150, 150);
+            const material = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                roughness: 0.4,
+                metalness: 0.1,
+                side: THREE.DoubleSide
+            });
+
+            testSurface = new THREE.Mesh(geometry, material);
+            testSurface.rotation.x = -Math.PI / 2;
+            scene.add(testSurface);
+
+            // --- 标准平晶 (上方透明玻璃) ---
+            const glassGeo = new THREE.PlaneGeometry(10, 10);
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0xaaccff,
+                transparent: true,
+                opacity: 0.2,
+                roughness: 0,
+                transmission: 0.9,
+                side: THREE.DoubleSide
+            });
+            flatGlass = new THREE.Mesh(glassGeo, glassMat);
+            flatGlass.rotation.x = -Math.PI / 2;
+            flatGlass.position.y = 0.5; // 基础高度
+            scene.add(flatGlass);
+
+            // 辅助网格
+            const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x333333);
+            scene.add(gridHelper);
+        }
+
+        // ================= 干涉物理计算 (核心) =================
+        function updateInterference() {
+            if (!testSurface) return;
+
+            const positions = testSurface.geometry.attributes.position;
+            const colors = [];
+            const count = positions.count;
+            const chartDataPoints = [];
+            
+            // 颜色基础
+            const rBase = params.wavelength < 550 ? 0.2 : 1.0;
+            const gBase = params.wavelength > 500 && params.wavelength < 650 ? 1.0 : 0.2;
+            const bBase = params.wavelength > 600 ? 0.2 : 1.0;
+
+            for (let i = 0; i < count; i++) {
+                const x = positions.getX(i);
+                const y = positions.getY(i); 
+                
+                // 1. 计算空气层厚度
+                // 楔角引起的高度 (线性增加)
+                let h_wedge = (x + 5) * params.wedgeAngle; 
+                
+                // 缺陷引起的高度 (高斯分布)
+                let dist = Math.sqrt(x*x + y*y);
+                // params.bumpHeight 可以是正(凸)或负(凹)
+                let h_defect = Math.exp(-dist * 0.5) * params.bumpHeight; 
+                
+                // 总空气隙 gap = 楔形高度 - 缺陷高度
+                // 如果是凹陷，params.bumpHeight为负，h_defect为负，gap变大，符合物理事实
+                let gap = h_wedge - h_defect;
+                if (gap < 0) gap = 0; 
+
+                // 2. 视觉变形 (Z轴)
+                // 只是为了在3D视图中看出凹凸形状，不影响干涉条纹计算
+                positions.setZ(i, h_defect * 0.5); 
+
+                // 3. 干涉公式 I = cos^2(delta/2)
+                const lambdaScale = params.wavelength / 40.0; 
+                const phase = (gap * 200) / lambdaScale; 
+                const intensity = 0.5 + 0.5 * Math.cos(phase);
+
+                // 4. 颜色映射
+                colors.push(intensity * rBase, intensity * gBase, intensity * bBase);
+
+                // 收集图表数据 (取中间行)
+                if (Math.floor(i / 151) === 75) { // 150段=151点，取中间第75行
+                    chartDataPoints.push({x: x, y: intensity});
+                }
+            }
+
+            testSurface.geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            positions.needsUpdate = true;
+            testSurface.geometry.attributes.color.needsUpdate = true;
+
+            updateChart(chartDataPoints);
+        }
+
+        // ================= Chart.js 图表 =================
+        function initChart() {
+            const ctx = document.getElementById('interferenceChart').getContext('2d');
+            intensityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array.from({length: 151}, (_, i) => i),
+                    datasets: [{
+                        label: '截面光强',
+                        data: [],
+                        borderColor: '#4facfe',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false, 
+                    interaction: { mode: 'none' },
+                    scales: {
+                        x: { display: false },
+                        y: { min: 0, max: 1.1, grid: { color: '#555' }, ticks: { display: false } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        function updateChart(data) {
+            if (!intensityChart) return;
+            intensityChart.data.datasets[0].data = data.map(p => p.y);
+            intensityChart.update();
+        }
+
+        // ================= 拖动功能 =================
+        const dragger = document.getElementById('chart-wrapper');
+        let isDragging = false, dragOffsetX, dragOffsetY;
+
+        dragger.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            dragOffsetX = e.clientX - dragger.offsetLeft;
+            dragOffsetY = e.clientY - dragger.offsetTop;
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                let left = e.clientX - dragOffsetX;
+                let top = e.clientY - dragOffsetY;
+                const container = document.getElementById('canvas-container');
+                left = Math.max(0, Math.min(left, container.clientWidth - dragger.offsetWidth));
+                top = Math.max(0, Math.min(top, container.clientHeight - dragger.offsetHeight));
+                dragger.style.left = left + 'px';
+                dragger.style.top = top + 'px';
+            }
+        });
+        document.addEventListener('mouseup', () => isDragging = false);
+
+        // ================= UI 绑定 =================
+        function bindUI() {
+            // 滑块监听
+            const inputs = ['input-angle', 'input-bump', 'input-lambda'];
+            inputs.forEach(id => {
+                document.getElementById(id).addEventListener('input', (e) => {
+                    const key = id.split('-')[1];
+                    let val = parseFloat(e.target.value);
+                    
+                    if (key === 'angle') params.wedgeAngle = val;
+                    if (key === 'bump') params.bumpHeight = val;
+                    if (key === 'lambda') params.wavelength = val;
+                    
+                    updateDisplays();
+                });
+            });
+        }
+
+        function updateDisplays() {
+            document.getElementById('val-angle').innerText = params.wedgeAngle.toFixed(3);
+            document.getElementById('val-lambda').innerText = params.wavelength + 'nm';
+            
+            // 专门处理凹凸的显示文字
+            const bumpElem = document.getElementById('val-bump');
+            const h = params.bumpHeight;
+            if (h > 0.1) {
+                bumpElem.innerText = `+${h.toFixed(1)} (凸)`;
+                bumpElem.style.color = '#1dd1a1';
+            } else if (h < -0.1) {
+                bumpElem.innerText = `${h.toFixed(1)} (凹)`;
+                bumpElem.style.color = '#ff6b6b';
+            } else {
+                bumpElem.innerText = '0.0 (平整)';
+                bumpElem.style.color = '#4facfe';
+            }
+        }
+
+        // ================= 渲染循环 =================
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            updateInterference();
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        // 启动
+        init();
+
+    </script>
+</body>
+</html>

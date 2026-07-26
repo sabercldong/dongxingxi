@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>打点计时器：小车直连版</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #2c3e50;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .main-container {
+            position: relative;
+            width: 950px;
+            background: #34495e;
+            border-radius: 12px;
+            box-shadow: 0 15px 40px rgba(0,0,0,0.6);
+            border: 1px solid #465c71;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            background: #2c3e50;
+            cursor: default;
+        }
+
+        /* 底部控制栏 */
+        .dashboard {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            background: rgba(28, 40, 51, 0.95);
+            padding: 15px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-top: 1px solid #5d6d7e;
+            backdrop-filter: blur(5px);
+        }
+
+        .mode-group {
+            display: flex;
+            gap: 8px;
+            background: rgba(255,255,255,0.05);
+            padding: 5px;
+            border-radius: 8px;
+        }
+
+        .mode-btn {
+            padding: 8px 16px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: #bdc3c7;
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .mode-btn.active {
+            background: #3498db;
+            color: white;
+            border-color: #2980b9;
+            font-weight: bold;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+        }
+
+        .btn-main {
+            padding: 10px 30px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 15px;
+            transition: 0.2s;
+        }
+
+        .btn-start { background: #27ae60; color: white; }
+        .btn-start:hover { background: #2ecc71; transform: translateY(-2px); }
+        .btn-start:disabled { background: #555; cursor: not-allowed; transform: none; }
+
+        .btn-reset { background: #c0392b; color: white; }
+        .btn-reset:hover { background: #e74c3c; transform: translateY(-2px); }
+
+        /* 右上角大字数据显示 */
+        .status-panel {
+            position: absolute;
+            top: 30px;
+            right: 40px;
+            text-align: right;
+            pointer-events: none;
+        }
+        
+        .big-data {
+            font-family: "Consolas", monospace;
+            font-size: 36px;
+            color: #f1c40f;
+            font-weight: bold;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        
+        .label { font-size: 13px; color: #95a5a6; margin-top: 2px; }
+
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <canvas id="simCanvas" width="950" height="420"></canvas>
+
+    <div class="status-panel">
+        <div class="big-data" id="speedDisplay">0</div>
+        <div class="label">速度 (cm/s)</div>
+        <div style="margin-top:20px;" class="big-data" id="dotCountDisplay">0</div>
+        <div class="label">已打点数</div>
+    </div>
+
+    <div class="dashboard">
+        <div class="mode-group">
+            <button class="mode-btn active" onclick="switchMode('uniform')">匀速拉动</button>
+            <button class="mode-btn" onclick="switchMode('accelerate')">匀加速</button>
+            <button class="mode-btn" onclick="switchMode('decelerate')">匀减速</button>
+        </div>
+
+        <div style="color: #bdc3c7; font-size: 13px;">
+            <span style="color:#e74c3c; font-weight:bold;">●</span> 
+            频率 f=50Hz (每 0.02s 打一点)
+        </div>
+
+        <div class="controls">
+            <button class="btn-main btn-start" id="startBtn">开始实验</button>
+            <button class="btn-main btn-reset" id="resetBtn">重置</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // --- 核心配置 ---
+    const NEEDLE_X = 180;     // 打点针位置
+    const TAPE_Y = 260;       // 纸带高度
+    const FREQ = 50;          // 频率 50Hz
+    const TIME_SCALE = 0.05;  // 0.05倍速慢放 (超级慢动作)
+    
+    // --- 物理参数 (像素单位大幅增加，拉大间距) ---
+    // 匀速: v0=600 (非常快，点很稀疏)
+    // 加速: a=800 (加速度极大，迅速拉开距离)
+    const CONFIG = {
+        uniform:    { v0: 600, a: 0 },         
+        accelerate: { v0: 100, a: 1200 },       
+        decelerate: { v0: 1200, a: -500 }      
+    };
+
+    // --- 状态变量 ---
+    let isRunning = false;
+    let mode = 'uniform';
+    let simTime = 0;
+    let lastRealTime = 0;
+    
+    let velocity = 0;
+    let tapeOffset = 0;
+    let dots = [];
+    
+    let needleY = 0;
+    let hasDottedCycle = false;
+    let impactAlpha = 0;
+    
+    // UI引用
+    const startBtn = document.getElementById('startBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const speedDisplay = document.getElementById('speedDisplay');
+    const dotCountDisplay = document.getElementById('dotCountDisplay');
+    const modeBtns = document.querySelectorAll('.mode-btn');
+
+    // --- 切换模式 ---
+    window.switchMode = function(newMode) {
+        if (isRunning) return;
+        mode = newMode;
+        modeBtns.forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+        resetExperiment();
+    }
+
+    // --- 主循环 ---
+    function loop(timestamp) {
+        if (!isRunning) return;
+        if (!lastRealTime) lastRealTime = timestamp;
+        
+        const dtReal = (timestamp - lastRealTime) / 1000;
+        lastRealTime = timestamp;
+        
+        // 慢动作转换
+        const dtSim = dtReal * TIME_SCALE;
+        simTime += dtSim;
+
+        // 1. 物理计算
+        const params = CONFIG[mode];
+        velocity += params.a * dtSim;
+        
+        if (mode === 'decelerate' && velocity <= 0) {
+            velocity = 0;
+            stopExperiment();
+        }
+
+        tapeOffset += velocity * dtSim;
+
+        // 2. 振针运动 (正弦波)
+        const amp = 25;
+        const phase = simTime * FREQ * 2 * Math.PI;
+        // sin=1时接触纸带 (TAPE_Y)
+        needleY = (TAPE_Y - amp) + amp * Math.sin(phase);
+
+        // 3. 打点判定
+        if (needleY > TAPE_Y - 2) {
+            if (!hasDottedCycle) {
+                // 记录打点位置 (相对于纸带头部的偏移量)
+                dots.push({ pos: tapeOffset });
+                hasDottedCycle = true;
+                impactAlpha = 1;
+                dotCountDisplay.innerText = dots.length;
+            }
+        } else if (needleY < TAPE_Y - 15) {
+            hasDottedCycle = false;
+        }
+
+        // 边界停止
+        if (tapeOffset > canvas.width * 2 && mode !== 'decelerate') {
+            stopExperiment();
+        }
+
+        // UI更新
+        // 假设 100px = 10cm，显示速度
+        speedDisplay.innerText = (velocity / 10).toFixed(0);
+        if (impactAlpha > 0) impactAlpha -= 0.15;
+
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    // --- 绘图逻辑 ---
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. 绘制背景刻度尺 (每 100px 一大格)
+        drawRuler();
+
+        // 2. 纸带系统坐标变换
+        ctx.save();
+        // 原点设为纸带头 (小车尾部位置)
+        const headX = NEEDLE_X + tapeOffset;
+        ctx.translate(headX, TAPE_Y);
+
+        // 3. 绘制小车 (直接画在原点右侧)
+        drawCar();
+
+        // 4. 绘制纸带 (从原点向左延伸)
+        ctx.fillStyle = '#ecf0f1';
+        ctx.shadowBlur = 5;
+        ctx.shadowColor = "rgba(0,0,0,0.2)";
+        // 纸带高度20px，去掉了之前的绳子，直接连车
+        ctx.fillRect(-20000, -10, 20000, 20); 
+        ctx.shadowBlur = 0;
+
+        // 5. 绘制打的点
+        ctx.fillStyle = '#2c3e50';
+        for (let dot of dots) {
+            ctx.beginPath();
+            // dot.pos 是正数，纸带向左延伸，所以是 -dot.pos
+            ctx.arc(-dot.pos, 0, 3, 0, Math.PI*2);
+            ctx.fill();
+        }
+        ctx.restore();
+
+        // 6. 绘制打点计时器 (位置固定)
+        drawTimerMachine();
+    }
+
+    // --- 辅助绘图函数 ---
+    function drawRuler() {
+        ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.font = '12px Arial';
+        ctx.beginPath();
+        for(let x=0; x<canvas.width; x+=100) {
+            ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height);
+            ctx.fillText((x/100 * 10) + "cm", x + 5, canvas.height - 100);
+        }
+        ctx.stroke();
+    }
+
+    function drawCar() {
+        // 小车尾部连接点在 (0, 0)
+        // 车身主体
+        const carColor = '#e67e22';
+        
+        ctx.save();
+        ctx.translate(5, -20); // 让小车紧贴纸带末端
+
+        // 车身
+        ctx.fillStyle = carColor;
+        ctx.beginPath();
+        ctx.moveTo(0, 30); // 尾部下
+        ctx.lineTo(0, 10); // 尾部上 (直接垂直，作为连接面)
+        ctx.lineTo(20, 0); // 顶部后
+        ctx.lineTo(80, 0); // 顶部前
+        ctx.lineTo(100, 20);// 车头
+        ctx.lineTo(100, 30);// 车底前
+        ctx.closePath();
+        ctx.fill();
+
+        // 车轮
+        ctx.fillStyle = '#333';
+        ctx.beginPath(); ctx.arc(25, 30, 9, 0, Math.PI*2); ctx.fill(); // 后轮
+        ctx.beginPath(); ctx.arc(80, 30, 9, 0, Math.PI*2); ctx.fill(); // 前轮
+        
+        ctx.restore();
+    }
+
+    function drawTimerMachine() {
+        // 复写纸
+        ctx.beginPath();
+        ctx.fillStyle = '#2980b9';
+        ctx.arc(NEEDLE_X, TAPE_Y, 13, 0, Math.PI*2);
+        ctx.fill();
+        
+        // 机器外壳
+        ctx.fillStyle = '#7f8c8d';
+        ctx.fillRect(NEEDLE_X - 12, TAPE_Y - 100, 24, 90);
+        ctx.fillStyle = '#34495e';
+        ctx.fillRect(NEEDLE_X - 40, TAPE_Y - 150, 80, 60); // 线圈盒
+
+        // 振针
+        ctx.beginPath();
+        ctx.moveTo(NEEDLE_X, TAPE_Y - 100);
+        ctx.lineTo(NEEDLE_X, needleY);
+        ctx.strokeStyle = '#e74c3c';
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+
+        // 针尖
+        ctx.beginPath();
+        ctx.arc(NEEDLE_X, needleY, 3, 0, Math.PI*2);
+        ctx.fillStyle = '#c0392b';
+        ctx.fill();
+
+        // 撞击光效
+        if (impactAlpha > 0) {
+            ctx.beginPath();
+            ctx.arc(NEEDLE_X, TAPE_Y, 5 + (1-impactAlpha)*25, 0, Math.PI*2);
+            ctx.strokeStyle = `rgba(241, 196, 15, ${impactAlpha})`;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+        }
+
+        // 前挡板 (半透明)
+        ctx.fillStyle = 'rgba(52, 73, 94, 0.6)';
+        ctx.fillRect(NEEDLE_X - 18, TAPE_Y - 15, 36, 30);
+    }
+
+    // --- 控制逻辑 ---
+    startBtn.addEventListener('click', () => {
+        if(isRunning) return;
+        isRunning = true;
+        simTime = 0;
+        lastRealTime = performance.now();
+        velocity = CONFIG[mode].v0;
+        startBtn.disabled = true;
+        startBtn.innerText = "实验进行中...";
+        requestAnimationFrame(loop);
+    });
+
+    function stopExperiment() {
+        isRunning = false;
+        startBtn.innerText = "已停止";
+    }
+
+    function resetExperiment() {
+        isRunning = false;
+        simTime = 0;
+        tapeOffset = 0;
+        velocity = CONFIG[mode].v0;
+        dots = [];
+        needleY = TAPE_Y - 25;
+        impactAlpha = 0;
+        
+        startBtn.disabled = false;
+        startBtn.innerText = "开始实验";
+        speedDisplay.innerText = (velocity / 10).toFixed(0);
+        dotCountDisplay.innerText = "0";
+        draw();
+    }
+
+    resetBtn.addEventListener('click', resetExperiment);
+
+    // 初始化
+    resetExperiment();
+
+</script>
+</body>
+</html>

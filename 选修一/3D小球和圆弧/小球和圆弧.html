@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>光滑圆弧冲浪 - 极简版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; }
+        
+        /* 错误提示 */
+        #debug-console {
+            position: absolute; top: 0; left: 0; width: 100%;
+            background: rgba(220, 53, 69, 0.9); color: white;
+            padding: 8px; z-index: 9999; display: none;
+            text-align: center; font-size: 14px;
+        }
+
+        /* 画布 */
+        canvas#gl-canvas { display: block; width: 100vw; height: 100vh; }
+        
+        /* === 右侧控制台 (无标题 + 滚动条) === */
+        #ui-sidebar {
+            position: absolute; top: 0; right: 0; bottom: 0; width: 280px;
+            background: rgba(20, 20, 25, 0.9); 
+            /* 调整内边距，因为没了标题，顶部多留点空隙 */
+            padding: 30px 20px 20px 20px;
+            border-left: 1px solid #444; color: #eee;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            
+            /* 关键：内容过多时显示垂直滚动条 */
+            overflow-y: auto; 
+            display: flex; flex-direction: column; gap: 20px;
+        }
+
+        /* 滚动条样式美化 (Chrome/Safari) */
+        #ui-sidebar::-webkit-scrollbar { width: 8px; }
+        #ui-sidebar::-webkit-scrollbar-track { background: #1a1a1a; }
+        #ui-sidebar::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        #ui-sidebar::-webkit-scrollbar-thumb:hover { background: #555; }
+        
+        /* 控件样式 */
+        .control-group { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+        label { display: flex; justify-content: space-between; font-size: 13px; color: #bbb; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #4facfe; }
+        
+        .btn-row { display: flex; gap: 10px; flex-shrink: 0; }
+        button { 
+            flex: 1; padding: 12px; border: none; border-radius: 4px; 
+            font-weight: bold; cursor: pointer; transition: 0.2s; font-size: 14px;
+        }
+        button:hover { filter: brightness(1.2); }
+        #btn-start { background: #28a745; color: white; }
+        #btn-pause { background: #ffc107; color: black; }
+        #btn-reset { background: #dc3545; color: white; }
+
+        /* 左侧悬浮图表 */
+        #chart-panel {
+            position: absolute; top: 20px; left: 20px; width: 360px;
+            background: rgba(0,0,0,0.85); border: 1px solid #555; border-radius: 6px;
+            overflow: hidden;
+        }
+        #chart-title { 
+            background: #333; padding: 8px 12px; font-size: 12px; font-weight: bold; 
+            color: #ccc; cursor: move; display: flex; justify-content: space-between;
+        }
+        #chart-content { height: 180px; padding: 5px; position: relative; }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+    <div id="debug-console"></div>
+
+    <div id="chart-panel">
+        <div id="chart-title"><span>📈 滑块速度 (v-t)</span><span>✋ 拖动</span></div>
+        <div id="chart-content"><canvas id="velocityChart"></canvas></div>
+    </div>
+
+    <div id="ui-sidebar">
+        <div class="btn-row">
+            <button id="btn-start">开始</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">重置</button>
+        </div>
+
+        <hr style="width:100%; border:0; border-top:1px solid #444; margin:0;">
+
+        <div class="control-group">
+            <label>小球质量 m <span id="txt-m">1.0</span></label>
+            <input type="range" id="inp-m" min="0.5" max="5.0" step="0.1" value="1.0">
+        </div>
+        <div class="control-group">
+            <label>滑块质量 M <span id="txt-M">3.0</span></label>
+            <input type="range" id="inp-M" min="1.0" max="10.0" step="0.5" value="3.0">
+        </div>
+        <div class="control-group">
+            <label>圆弧半径 R <span id="txt-R">3.0</span></label>
+            <input type="range" id="inp-R" min="2.0" max="5.0" step="0.1" value="3.0">
+        </div>
+        <div class="control-group">
+            <label>初速度 V0 <span id="txt-v0">6.0</span></label>
+            <input type="range" id="inp-v0" min="2.0" max="12.0" step="0.5" value="6.0">
+        </div>
+
+        <div style="margin-top:auto; color:#444; font-size:11px; text-align:center; padding-top: 20px;">
+            Minimal UI V12
+        </div>
+    </div>
+
+    <script>
+        // === 0. 基础设置 ===
+        function err(msg) { const d=document.getElementById('debug-console'); d.innerHTML="⚠️ "+msg; d.style.display='block'; }
+        if(typeof THREE === 'undefined') err("缺失 three.min.js");
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100);
+        camera.position.set(0, 4, 14);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.domElement.id = 'gl-canvas';
+        document.body.appendChild(renderer.domElement);
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 5);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+        scene.add(new THREE.GridHelper(60, 60, 0x444444, 0x222222));
+
+        let controls;
+        try {
+            const C = THREE.OrbitControls || OrbitControls;
+            controls = new C(camera, renderer.domElement);
+            controls.enableDamping = true;
+        } catch(e){}
+
+        // === 1. 物理对象 ===
+        const params = { m: 1.0, M: 3.0, R: 3.0, v0: 6.0, g: 9.8 };
+        const BALL_R = 0.3;
+        
+        let state = {
+            running: false, paused: false, t: 0,
+            ball: { x: -5, y: BALL_R, vx: 0, vy: 0 },
+            arc: { x: 2, vx: 0 },
+            trail: []
+        };
+
+        const ballMesh = new THREE.Mesh(
+            new THREE.SphereGeometry(BALL_R, 32, 32),
+            new THREE.MeshStandardMaterial({ color: 0xff4444, metalness: 0.3, roughness: 0.4 })
+        );
+        ballMesh.castShadow = true;
+        scene.add(ballMesh);
+
+        let arcMesh;
+        function createArc(R) {
+            if(arcMesh) scene.remove(arcMesh);
+            const shape = new THREE.Shape();
+            shape.moveTo(0, 0); 
+            shape.absarc(0, R, R, -Math.PI/2, 0, false);
+            shape.lineTo(R + 1, R);
+            shape.lineTo(R + 1, 0);
+            shape.lineTo(0, 0);
+            const geom = new THREE.ExtrudeGeometry(shape, { depth: 2, bevelEnabled: false });
+            geom.translate(0, 0, -1); 
+            arcMesh = new THREE.Mesh(geom, new THREE.MeshStandardMaterial({ color: 0x0088ff, opacity: 0.8, transparent: true, roughness: 0.2 }));
+            arcMesh.castShadow = true; arcMesh.receiveShadow = true;
+            scene.add(arcMesh);
+        }
+        createArc(params.R);
+
+        const trailGeo = new THREE.BufferGeometry();
+        const trailLine = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color: 0xffff00 }));
+        scene.add(trailLine);
+
+        // === 2. 物理核心 ===
+        function updatePhysics() {
+            if(!state.running || state.paused) return;
+            const dt = 1/120; const steps = 8;
+            for(let i=0; i<steps; i++) {
+                const subDt = dt/steps;
+                state.ball.vy -= params.g * subDt;
+                let bx = state.ball.x + state.ball.vx * subDt;
+                let by = state.ball.y + state.ball.vy * subDt;
+                let ax = state.arc.x + state.arc.vx * subDt;
+
+                if(by < BALL_R) { by = BALL_R; state.ball.vy = 0; }
+
+                const Cx = ax; const Cy = params.R;
+                if(bx > ax && bx < ax + params.R + BALL_R && by < params.R) {
+                    const dx = bx - Cx; const dy = by - Cy;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+                    const maxDist = params.R - BALL_R;
+                    if(dist > maxDist) {
+                        const angle = Math.atan2(dy, dx);
+                        bx = Cx + maxDist * Math.cos(angle);
+                        by = Cy + maxDist * Math.sin(angle);
+                        const nx = -Math.cos(angle); const ny = -Math.sin(angle);
+                        const vrel_n = (state.ball.vx - state.arc.vx)*nx + state.ball.vy*ny;
+                        if(vrel_n < 0) {
+                            const J = -(1.5) * vrel_n / (1/params.m + (nx*nx)/params.M);
+                            state.ball.vx += J * nx / params.m;
+                            state.ball.vy += J * ny / params.m;
+                            state.arc.vx -= J * nx / params.M;
+                        }
+                    }
+                }
+                state.ball.x = bx; state.ball.y = by; state.arc.x = ax;
+            }
+        }
+
+        // === 3. 图表配置 (无图例) ===
+        let vChart;
+        try {
+            const ctx = document.getElementById('velocityChart').getContext('2d');
+            vChart = new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: [{ label: '滑块速度', data: [], borderColor: '#4facfe', borderWidth: 2, pointRadius:0 }] },
+                options: { 
+                    responsive:true, 
+                    maintainAspectRatio:false, 
+                    animation:false,
+                    plugins: { legend: { display: false } }, // 隐藏图例
+                    scales:{ x:{display:false}, y:{grid:{color:'#333'}} } 
+                }
+            });
+        } catch(e) { err("Chart.js Error"); }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePhysics();
+            arcMesh.position.x = state.arc.x;
+            ballMesh.position.set(state.ball.x, state.ball.y, 0);
+
+            if(state.running && !state.paused && state.t++ % 3 === 0) {
+                state.trail.push(state.ball.x, state.ball.y, 0);
+                if(state.trail.length > 500) state.trail.splice(0,3);
+                trailGeo.setAttribute('position', new THREE.Float32BufferAttribute(state.trail, 3));
+                if(vChart && state.t % 5 === 0) {
+                    vChart.data.labels.push(state.t);
+                    vChart.data.datasets[0].data.push(state.arc.vx);
+                    if(vChart.data.labels.length > 60) { vChart.data.labels.shift(); vChart.data.datasets[0].data.shift(); }
+                    vChart.update();
+                }
+            }
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // === 4. 交互绑定 ===
+        function bind(id, obj, key) {
+            document.getElementById('inp-'+id).addEventListener('input', e => {
+                obj[key] = parseFloat(e.target.value);
+                document.getElementById('txt-'+id).innerText = obj[key].toFixed(1);
+                if(id === 'R') { reset(); createArc(params.R); }
+            });
+        }
+        bind('m', params, 'm'); bind('M', params, 'M'); bind('R', params, 'R'); bind('v0', params, 'v0');
+
+        function reset() {
+            state.running = false; state.paused = false; state.t = 0;
+            state.ball.x = -5; state.ball.y = BALL_R; state.ball.vx = 0; state.ball.vy = 0;
+            state.arc.x = 2; state.arc.vx = 0;
+            state.trail = []; trailGeo.setAttribute('position', new THREE.Float32BufferAttribute([], 3));
+            if(vChart) { vChart.data.labels=[]; vChart.data.datasets[0].data=[]; vChart.update(); }
+            document.getElementById('btn-start').disabled = false;
+        }
+
+        document.getElementById('btn-start').onclick = () => {
+            if(!state.running) { state.running = true; state.ball.vx = params.v0; }
+            state.paused = false;
+            document.getElementById('btn-start').disabled = true;
+        };
+        document.getElementById('btn-pause').onclick = () => state.paused = !state.paused;
+        document.getElementById('btn-reset').onclick = reset;
+        
+        window.onresize = () => { camera.aspect = window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); };
+        
+        const p = document.getElementById('chart-panel'); const h = document.getElementById('chart-title');
+        let d = {on:false, x:0, y:0};
+        h.onmousedown = e => { d.on=true; d.x=e.clientX-p.offsetLeft; d.y=e.clientY-p.offsetTop; };
+        document.onmouseup = () => d.on=false;
+        document.onmousemove = e => { if(d.on) { p.style.left=(e.clientX-d.x)+'px'; p.style.top=(e.clientY-d.y)+'px'; }};
+
+        animate();
+    </script>
+</body>
+</html>

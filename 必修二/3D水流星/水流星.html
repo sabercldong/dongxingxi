@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>水流星原理演示 (Water Meteor)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; background-color: #1a1a1a; }
+        #container { width: 100vw; height: 100vh; display: block; }
+        #ui-panel {
+            position: absolute; top: 0; right: 0; width: 280px; height: 100%;
+            background: rgba(30, 30, 30, 0.9); color: #fff; padding: 20px;
+            box-sizing: border-box; border-left: 2px solid #444; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 15px;
+        }
+        h2, h3 { margin: 0 0 10px 0; color: #4db8ff; }
+        .control-group { margin-bottom: 15px; border-bottom: 1px solid #555; padding-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-size: 14px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #aaa; font-size: 12px; }
+        .btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        .btn-start { background-color: #28a745; color: white; }
+        .btn-pause { background-color: #ffc107; color: black; }
+        .btn-reset { background-color: #dc3545; color: white; }
+        #chart-wrapper {
+            position: absolute; top: 20px; left: 20px; width: 350px; height: 240px;
+            background: rgba(255, 255, 255, 0.9); border-radius: 8px; padding: 10px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); cursor: move; z-index: 100;
+        }
+        #status-msg { color: #ff4d4d; font-weight: bold; min-height: 20px; margin-top: 5px; }
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <div id="container"></div>
+    <div id="chart-wrapper">
+        <div style="display:flex; justify-content:space-between; font-size:12px; font-weight:bold; color:#333; margin-bottom:5px;">
+            <span>实时数据：速度</span><span>(拖动面板)</span>
+        </div>
+        <canvas id="dataChart"></canvas>
+    </div>
+    <div id="ui-panel">
+        <h2>水流星演示</h2>
+        <div class="control-group">
+            <h3>运行控制</h3>
+            <div class="btn-row">
+                <button class="btn-start" onclick="app.play()">开始</button>
+                <button class="btn-pause" onclick="app.pause()">暂停</button>
+                <button class="btn-reset" onclick="app.reset()">还原</button>
+            </div>
+            <div id="status-msg"></div>
+        </div>
+        <div class="control-group">
+            <h3>参数设置</h3>
+            <label>绳长 (半径 R) <span id="val-radius" class="value-display">1.5m</span></label>
+            <input type="range" min="0.5" max="3.0" step="0.1" value="1.5" oninput="app.updateParam('radius', this.value)">
+            <label>初速度 <span id="val-speed" class="value-display">8.0</span></label>
+            <input type="range" min="2.0" max="15.0" step="0.5" value="8.0" oninput="app.updateParam('speed', this.value)">
+        </div>
+        <div class="control-group">
+            <h3>显示设置</h3>
+            <label style="display:flex;align-items:center;"><input type="checkbox" checked onchange="app.toggleChart(this.checked)" style="margin-right:10px;">显示图表</label>
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+
+    <script>
+        const app = {
+            scene: null, camera: null, renderer: null, controls: null,
+            objects: { group: null, rope: null, bucket: null, water: null, spillSystem: null },
+            chart: null,
+            state: { isPlaying: false, isPaused: false, angle: 0, omega: 0, radius: 1.5, initSpeed: 8.0, gravity: 9.8, spilled: false },
+            dataPoints: { v: [] },
+
+            init: function() {
+                this.initThree();
+                this.initObjects();
+                this.initChart();
+                this.initDrag();
+                this.animate();
+            },
+
+            initThree: function() {
+                const container = document.getElementById('container');
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x222222);
+                
+                const grid = new THREE.GridHelper(20, 20, 0x444444, 0x333333);
+                grid.rotation.x = Math.PI / 2; 
+                this.scene.add(grid);
+
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                this.scene.add(ambientLight);
+                const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                dirLight.position.set(5, 10, 10);
+                this.scene.add(dirLight);
+
+                this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+                this.camera.position.set(0, 0, 14); 
+
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                container.appendChild(this.renderer.domElement);
+
+                if (typeof OrbitControls !== 'undefined') this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                else if (THREE.OrbitControls) this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
+
+                window.addEventListener('resize', () => {
+                    this.camera.aspect = window.innerWidth / window.innerHeight;
+                    this.camera.updateProjectionMatrix();
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                });
+            },
+
+            initObjects: function() {
+                // 中心点
+                const pivot = new THREE.Mesh(new THREE.SphereGeometry(0.2), new THREE.MeshLambertMaterial({ color: 0xffaa00 }));
+                this.scene.add(pivot);
+
+                // 旋转大组
+                this.objects.group = new THREE.Group();
+                this.scene.add(this.objects.group);
+
+                // 绳子 (Line)
+                const ropeGeo = new THREE.BufferGeometry();
+                const ropeMat = new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 });
+                this.objects.rope = new THREE.Line(ropeGeo, ropeMat);
+                this.objects.group.add(this.objects.rope);
+
+                // 桶容器 (挂在绳子末端)
+                this.objects.bucket = new THREE.Group();
+                this.objects.group.add(this.objects.bucket);
+
+                // --- 桶的模型构建 ---
+                const hR = 0.4; // 提手半径
+                const bH = 0.6; // 桶高
+                
+                // 1. 提手 (倒U型)
+                // Torus画出来默认是圆环，arc=PI是半圆。
+                // 默认位置是XY平面，上半圆。我们只需要把它往下移半径的距离，
+                // 这样它的最高点(顶)就在(0,0,0)，刚好接绳子。
+                const handleGeo = new THREE.TorusGeometry(hR, 0.03, 8, 32, Math.PI);
+                const handleMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+                const handle = new THREE.Mesh(handleGeo, handleMat);
+                handle.position.y = -hR; 
+                this.objects.bucket.add(handle);
+
+                // 2. 桶身 (连接在提手两端)
+                // 提手两端在 y = -hR。所以桶顶也在 -hR。
+                // 桶中心 = -hR - (bH/2)
+                const bucketGeo = new THREE.CylinderGeometry(0.35, 0.25, bH, 32, 1, true);
+                const bucketMat = new THREE.MeshPhongMaterial({ color: 0xaaaaaa, side: THREE.DoubleSide });
+                const bucket = new THREE.Mesh(bucketGeo, bucketMat);
+                bucket.position.y = -hR - (bH/2);
+                this.objects.bucket.add(bucket);
+
+                // 3. 桶底
+                const botGeo = new THREE.CircleGeometry(0.25, 32);
+                const bot = new THREE.Mesh(botGeo, bucketMat);
+                bot.rotation.x = Math.PI/2;
+                bot.position.y = -hR - bH;
+                this.objects.bucket.add(bot);
+
+                // 4. 水
+                const waterGeo = new THREE.CylinderGeometry(0.34, 0.24, bH*0.8, 32);
+                const waterMat = new THREE.MeshPhongMaterial({ color: 0x00aaff, transparent: true, opacity: 0.8 });
+                this.objects.water = new THREE.Mesh(waterGeo, waterMat);
+                this.objects.water.position.y = -hR - (bH/2) - 0.05; // 略低于桶口
+                this.objects.bucket.add(this.objects.water);
+
+                // 5. 粒子系统 (水洒出)
+                const pGeo = new THREE.BufferGeometry();
+                const pPos = new Float32Array(300 * 3);
+                pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+                this.objects.spillSystem = new THREE.Points(pGeo, new THREE.PointsMaterial({ color: 0x00aaff, size: 0.08 }));
+                this.objects.spillSystem.visible = false;
+                this.scene.add(this.objects.spillSystem);
+
+                this.updateGeometry();
+            },
+
+            updateGeometry: function() {
+                const r = this.state.radius;
+                // 更新绳子: (0,0,0) -> (0, -r, 0)
+                this.objects.rope.geometry.setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0, -r, 0)]);
+                // 更新桶位置
+                this.objects.bucket.position.set(0, -r, 0);
+            },
+
+            animate: function() {
+                requestAnimationFrame(() => app.animate());
+                
+                if (app.state.isPlaying && !app.state.isPaused && !app.state.spilled) {
+                    const dt = 0.016;
+                    // 物理模拟
+                    const alpha = -(app.state.gravity / app.state.radius) * Math.sin(app.state.angle);
+                    app.state.omega += alpha * dt;
+                    app.state.omega *= 0.999;
+                    app.state.angle += app.state.omega * dt;
+
+                    const v = Math.abs(app.state.omega * app.state.radius);
+                    
+                    // 临界判断
+                    let normAngle = app.state.angle % (Math.PI*2);
+                    if(normAngle < 0) normAngle += Math.PI*2;
+                    // 最高点是 PI
+                    if(Math.abs(normAngle - Math.PI) < 0.5) {
+                        if(v < Math.sqrt(app.state.gravity * app.state.radius)) {
+                            app.spillWater();
+                        }
+                    }
+                    app.updateChart(v);
+                }
+
+                // 渲染更新
+                if(this.objects.group) this.objects.group.rotation.z = this.state.angle;
+                
+                if(this.state.spilled) {
+                    const pos = this.objects.spillSystem.geometry.attributes.position.array;
+                    for(let i=1; i<pos.length; i+=3) pos[i] -= 0.15; // 下落
+                    this.objects.spillSystem.geometry.attributes.position.needsUpdate = true;
+                }
+
+                if(this.controls) this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            },
+
+            spillWater: function() {
+                this.state.spilled = true;
+                document.getElementById('status-msg').innerText = "失败！速度不足，水洒出了！";
+                this.objects.water.visible = false;
+                this.objects.spillSystem.visible = true;
+                
+                const worldPos = new THREE.Vector3();
+                this.objects.bucket.getWorldPosition(worldPos);
+                
+                const pos = this.objects.spillSystem.geometry.attributes.position.array;
+                for(let i=0; i<pos.length; i+=3) {
+                    pos[i] = worldPos.x + (Math.random()-0.5);
+                    pos[i+1] = worldPos.y + (Math.random()-0.5);
+                    pos[i+2] = worldPos.z + (Math.random()-0.5);
+                }
+                this.objects.spillSystem.geometry.attributes.position.needsUpdate = true;
+            },
+
+            // --- 控制逻辑 ---
+            play: function() {
+                if(this.state.spilled) this.reset();
+                this.state.isPlaying = true; this.state.isPaused = false;
+                document.getElementById('status-msg').innerText = "运行中...";
+                if(Math.abs(this.state.omega) < 0.1) this.state.omega = this.state.initSpeed/this.state.radius;
+            },
+            pause: function() { this.state.isPaused = true; document.getElementById('status-msg').innerText = "已暂停"; },
+            reset: function() {
+                this.state.isPlaying = false; this.state.isPaused = false; this.state.spilled = false;
+                this.state.angle = 0; this.state.omega = 0;
+                this.objects.water.visible = true; this.objects.spillSystem.visible = false;
+                this.objects.group.rotation.z = 0;
+                document.getElementById('status-msg').innerText = "";
+                if(this.chart) { this.dataPoints.v = []; this.chart.data.datasets[0].data = []; this.chart.update(); }
+            },
+            updateParam: function(k, v) {
+                v = parseFloat(v);
+                if(k==='radius') { this.state.radius = v; document.getElementById('val-radius').innerText = v.toFixed(1)+"m"; this.updateGeometry(); }
+                if(k==='speed') { this.state.initSpeed = v; document.getElementById('val-speed').innerText = v.toFixed(1); }
+            },
+            
+            // --- 图表 ---
+            initChart: function() {
+                if(typeof Chart === 'undefined') return;
+                const ctx = document.getElementById('dataChart').getContext('2d');
+                this.chart = new Chart(ctx, {
+                    type: 'line',
+                    data: { labels: [], datasets: [{ label: '速度', borderColor: '#4bc0c0', data: [], borderWidth: 2, pointRadius: 0 }] },
+                    options: { responsive: true, maintainAspectRatio: false, animation: false, scales: { x: {display:false}, y: {min:0} } }
+                });
+            },
+            updateChart: function(v) {
+                if(!this.chart) return;
+                this.dataPoints.v.push(v);
+                if(this.dataPoints.v.length > 50) this.dataPoints.v.shift();
+                this.chart.data.labels = new Array(this.dataPoints.v.length).fill('');
+                this.chart.data.datasets[0].data = this.dataPoints.v;
+                if(Math.random()>0.5) this.chart.update('none');
+            },
+            toggleChart: function(s) { document.getElementById('chart-wrapper').classList.toggle('hidden', !s); },
+            initDrag: function() {
+                const el = document.getElementById('chart-wrapper');
+                let dragging = false, off = {x:0, y:0};
+                el.onmousedown = e => { dragging=true; off.x=e.clientX-el.offsetLeft; off.y=e.clientY-el.offsetTop; };
+                document.onmousemove = e => { if(dragging) { el.style.left=(e.clientX-off.x)+'px'; el.style.top=(e.clientY-off.y)+'px'; }};
+                document.onmouseup = () => dragging = false;
+            }
+        };
+        window.onload = () => app.init();
+    </script>
+</body>
+</html>

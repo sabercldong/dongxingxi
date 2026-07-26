@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>直线加速器 (完美适配修复版)</title>
+    <style>
+        /* --- 基础样式 --- */
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #f0f2f5; color: #333; }
+        
+        /* 布局容器 */
+        #container { 
+            display: flex; 
+            width: 100vw; 
+            height: 100vh; 
+        }
+
+        /* 3D 画布容器：关键修复 flex: 1 让它自动填满 */
+        #canvas-container { 
+            flex: 1; 
+            position: relative; 
+            background: #fff; 
+            overflow: hidden; /* 防止 Canvas 出现滚动条 */
+        }
+
+        /* --- 悬浮示波器窗口 --- */
+        #floating-charts {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 380px;
+            background-color: rgba(255, 255, 255, 0.96);
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #drag-handle {
+            background: linear-gradient(90deg, #1565c0, #0d47a1);
+            padding: 10px 15px;
+            cursor: move;
+            font-weight: bold;
+            color: #fff;
+            border-radius: 8px 8px 0 0;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .chart-content { padding: 15px 20px; }
+
+        canvas.graph {
+            width: 100%;
+            height: 120px;
+            background: #fafafa;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            margin-bottom: 20px;
+            display: block;
+        }
+        .graph-label { font-size: 0.9rem; color: #333; margin-bottom: 5px; font-weight: 700; display:flex; justify-content:space-between;}
+        
+        .tag-u { color: #d32f2f; }
+        .tag-v { color: #00838f; }
+
+        /* --- 右侧控制栏 --- */
+        #sidebar {
+            width: 300px;
+            background-color: #fff;
+            border-left: 1px solid #ddd;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.05);
+            z-index: 10;
+            flex-shrink: 0; /* 防止侧边栏被压缩 */
+            overflow-y: auto; /* 允许侧边栏内容过多时滚动 */
+        }
+
+        .control-group { background: #f8f9fa; padding: 15px; border-radius: 8px; border: 1px solid #eee; }
+        h2 { margin: 0 0 10px 0; color: #1565c0; font-size: 1.2rem; border-bottom: 2px solid #e0e0e0; padding-bottom: 8px; }
+        
+        button {
+            width: 30%; padding: 8px; border: none; border-radius: 4px; cursor: pointer; color: white; font-weight: bold;
+            transition: transform 0.1s;
+        }
+        button:active { transform: scale(0.95); }
+        #btn-start { background: #2e7d32; }
+        #btn-pause { background: #f57f17; }
+        #btn-reset { background: #c62828; }
+        
+        .status-text { margin-top:10px; font-size: 0.85rem; color: #666; font-family: monospace; }
+        
+        input[type=range] { width: 100%; accent-color: #1565c0; cursor: pointer; }
+    </style>
+    
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+</head>
+<body>
+
+<div id="floating-charts">
+    <div id="drag-handle">
+        <span>≡ 物理图像监测</span>
+        <span style="font-size:0.8em; opacity:0.8;"></span>
+    </div>
+    <div class="chart-content">
+        <div class="graph-label">
+            <span>交变电压 U-t</span>
+            <span class="tag-u">■ 方波</span>
+        </div>
+        <canvas id="graph-u" class="graph"></canvas>
+        
+        <div class="graph-label">
+            <span>粒子速度 v-t</span>
+            <span class="tag-v">■ 阶梯波</span>
+        </div>
+        <canvas id="graph-v" class="graph"></canvas>
+    </div>
+</div>
+
+<div id="container">
+    <div id="canvas-container"></div>
+    <div id="sidebar">
+        <h2>直线加速器演示</h2>
+        <div class="control-group">
+            <div style="display:flex; justify-content:space-between;">
+                <button id="btn-start">开始</button>
+                <button id="btn-pause">暂停</button>
+                <button id="btn-reset">重置</button>
+            </div>
+            <div class="status-text" id="status-display">状态: 系统就绪</div>
+        </div>
+        <div class="control-group">
+            <label>加速电压 <span id="val-u">1.0</span> kV</label>
+            <input type="range" id="input-voltage" min="0.5" max="3.0" step="0.1" value="1.0">
+            <br><br>
+            <label>演示速度 (x<span id="val-spd">1.0</span>)</label>
+            <input type="range" id="input-speed" min="0.1" max="5.0" step="0.1" value="1.0">
+        </div>
+        <div class="control-group">
+            <div style="font-size:0.85rem; color:#555; line-height: 1.6;">
+                <b>物理状态:</b><br>
+                位置: <span id="data-loc" style="color:#d32f2f; font-weight:bold;">-</span><br>
+                电压极性: <span id="data-pol" style="font-weight:bold; font-family:monospace;">0</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 1. Three.js 场景初始化 ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xffffff);
+    scene.fog = new THREE.Fog(0xffffff, 50, 1500);
+
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 5000);
+    camera.position.set(10, 25, 45);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // 初始化时设置一次大小
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // ==========================================
+    // 【关键修复】添加 ResizeObserver 监听容器大小变化
+    // ==========================================
+    const resizeObserver = new ResizeObserver(() => {
+        const width = container.clientWidth;
+        const height = container.clientHeight;
+        
+        // 1. 更新相机长宽比
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        
+        // 2. 更新渲染器大小
+        renderer.setSize(width, height);
+    });
+    // 开始监听
+    resizeObserver.observe(container);
+    // ==========================================
+
+    let controls;
+    if (typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+    else if (typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+    if(controls) { controls.target.set(10,0,0); controls.enableDamping = true; }
+
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xeeeeee, 0.8));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+    dirLight.position.set(30, 50, 20);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.3));
+
+    const grid = new THREE.GridHelper(3000, 300, 0xaaaaaa, 0xeeeeee);
+    grid.position.y = -6; grid.position.x = 1000;
+    scene.add(grid);
+
+    // --- 2. 构建加速器 ---
+    const tubesGroup = new THREE.Group();
+    scene.add(tubesGroup);
+    const tubeData = [];
+    const NUM_TUBES = 60;
+    let currentX = 0;
+    
+    const matOdd = new THREE.MeshStandardMaterial({ color: 0x1976d2, metalness:0.6, roughness:0.3 });
+    const matEven = new THREE.MeshStandardMaterial({ color: 0x90a4ae, metalness:0.6, roughness:0.3 });
+    const matBus = new THREE.MeshStandardMaterial({ color: 0xff8f00, metalness:0.8 });
+
+    const BUS_Y = 5;
+    const busTop = new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.15,1000,8), matBus);
+    busTop.rotation.z = Math.PI/2; busTop.position.set(500, BUS_Y, 0); tubesGroup.add(busTop);
+    const busBot = new THREE.Mesh(new THREE.CylinderGeometry(0.15,0.15,1000,8), matBus);
+    busBot.rotation.z = Math.PI/2; busBot.position.set(500, -BUS_Y, 0); tubesGroup.add(busBot);
+
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(1.5,1.5,0.2,32), matEven);
+    plate.rotation.z = Math.PI/2; plate.position.set(-3,0,0); tubesGroup.add(plate);
+    drawWire(-3, 'top');
+
+    for(let n=1; n<=NUM_TUBES; n++){
+        const len = 3.0 * Math.sqrt(n); 
+        const gap = 1.0;
+        const cx = currentX + gap + len/2;
+        const tube = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, len, 24, 1, true), (n%2!==0)?matOdd:matEven);
+        tube.rotation.z = Math.PI/2; tube.position.set(cx, 0, 0); tube.castShadow = true;
+        tubesGroup.add(tube);
+        tubeData.push({ id: n, start: currentX+gap, end: currentX+gap+len, len: len });
+        drawWire(cx, (n%2!==0) ? 'bottom' : 'top');
+        if(n%5===0 || n===1) addLabel(n, cx, 2.5);
+        currentX += gap + len;
+    }
+
+    const particle = new THREE.Mesh(new THREE.SphereGeometry(0.4,16,16), new THREE.MeshBasicMaterial({color:0xd50000}));
+    scene.add(particle);
+
+    function drawWire(x, side) {
+        const yEnd = (side==='top') ? BUS_Y : -BUS_Y;
+        const tubeSurfaceY = (side==='top') ? 1.2 : -1.2;
+        const pts = [new THREE.Vector3(x, tubeSurfaceY, 0), new THREE.Vector3(x, yEnd, 0)];
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color:0x333, linewidth:2}));
+        tubesGroup.add(line);
+        const joint = new THREE.Mesh(new THREE.SphereGeometry(0.25), matBus);
+        joint.position.set(x, yEnd, 0); tubesGroup.add(joint);
+    }
+
+    function addLabel(txt, x, y) {
+        const cvs = document.createElement('canvas'); cvs.width=64; cvs.height=64;
+        const ctx = cvs.getContext('2d');
+        ctx.fillStyle='#333'; ctx.font='bold 40px Arial'; ctx.textAlign='center'; ctx.textBaseline='middle';
+        ctx.fillText(txt, 32, 32);
+        const spr = new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(cvs)}));
+        spr.position.set(x, y, 0); spr.scale.set(3,3,1); tubesGroup.add(spr);
+    }
+
+    // --- 3. 物理逻辑与图表 ---
+    let isRunning = false;
+    let velocity = 0;
+    let particleX = -3;
+    let params = { u: 1.0, spd: 1.0 };
+    const maxPts = 400;
+    let dataU = new Array(maxPts).fill(0);
+    let dataV = new Array(maxPts).fill(0);
+    const clock = new THREE.Clock();
+    
+    function animate() {
+        requestAnimationFrame(animate);
+        const dt = clock.getDelta() * params.spd;
+
+        if(isRunning) {
+            particleX += velocity * dt;
+            particle.position.x = particleX;
+
+            let inTube = false;
+            let currentTube = null;
+            for(let t of tubeData) {
+                if(particleX >= t.start && particleX <= t.end) { inTube = true; currentTube = t; break; }
+            }
+
+            let uInst = 0; 
+            let inGap = !inTube && particleX < tubeData[NUM_TUBES-1].end + 5;
+
+            // --- 核心物理与波形逻辑修正 ---
+            if(inGap) {
+                // 缝隙中：必须为正电压进行加速
+                velocity += (12.0 * params.u) * dt; 
+                uInst = params.u;
+                document.getElementById('data-loc').innerText = "加速间隙 (Gap)";
+                document.getElementById('data-pol').innerText = "+ u (加速)";
+                document.getElementById('data-pol').style.color = "#d32f2f";
+            } else if (currentTube) {
+                // 管子中：速度不变
+                // 【关键修正】为了画出教科书上的"方波" (50%占空比)：
+                // 粒子在管中运动对应交流电的一个半周期(T/2)。
+                // 前半段(0~T/4)电压仍处于正半周(或正向衰减)，后半段(T/4~T/2)电压进入负半周。
+                // 这样画出来的图才是宽度相等的方波。
+                let progress = (particleX - currentTube.start) / currentTube.len;
+                if (progress < 0.5) {
+                    uInst = params.u; // 保持上一阶段的电势
+                } else {
+                    uInst = -params.u; // 翻转电势
+                }
+
+                document.getElementById('data-loc').innerText = "金属管 No." + currentTube.id;
+                document.getElementById('data-pol').innerText = (uInst>0 ? "+u" : "-u") + " (屏蔽)";
+                document.getElementById('data-pol').style.color = (uInst>0 ? "#d32f2f" : "#1976d2");
+            } else {
+                uInst = 0;
+            }
+
+            // 更新图表数组
+            dataU.push(uInst); dataU.shift();
+            dataV.push(velocity); dataV.shift();
+
+            if(controls) {
+                controls.target.x = particleX;
+                camera.position.x = particleX + 15;
+            }
+        }
+        
+        drawGraphU();
+        drawGraphV();
+        
+        if(controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // --- 4. 绘图函数 (完全使用你提供的风格代码) ---
+
+    function resizeCanvas(canvas) {
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        if (canvas.width !== width || canvas.height !== height) {
+            canvas.width = width;
+            canvas.height = height;
+        }
+    }
+
+    // 绘制 U-t 图像 (双极性，轴在中间，红色方波)
+    function drawGraphU() {
+        const cvs = document.getElementById('graph-u');
+        resizeCanvas(cvs);
+        const ctx = cvs.getContext('2d');
+        const w = cvs.width;
+        const h = cvs.height;
+        
+        ctx.clearRect(0,0,w,h);
+        
+        const paddingLeft = 35;
+        const paddingRight = 10;
+        const yZero = h / 2; // 中轴线
+
+        // 坐标轴
+        ctx.strokeStyle = '#999'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(paddingLeft, 5); ctx.lineTo(paddingLeft, h-5); ctx.stroke(); // 纵
+        ctx.beginPath(); ctx.moveTo(paddingLeft, yZero); ctx.lineTo(w-paddingRight, yZero); ctx.stroke(); // 横
+        
+        drawArrow(ctx, paddingLeft, 5, 'up');
+        drawArrow(ctx, w-paddingRight, yZero, 'right');
+
+        // 标签
+        ctx.fillStyle = '#333'; ctx.font = '12px Arial'; ctx.textAlign = 'right';
+        ctx.fillText('U', paddingLeft - 5, 15);
+        ctx.fillText('t', w-5, yZero + 15);
+        
+        const scaleY = (h/2 - 15) / (params.u || 1); 
+        
+        ctx.fillStyle = '#d32f2f';
+        ctx.fillText('+u', paddingLeft - 5, yZero - params.u * scaleY + 4);
+        ctx.fillText('-u', paddingLeft - 5, yZero + params.u * scaleY + 4);
+        ctx.fillStyle = '#666';
+        ctx.fillText('0', paddingLeft - 5, yZero + 4);
+
+        // 绘制方波
+        ctx.beginPath();
+        ctx.strokeStyle = '#d32f2f';
+        ctx.lineWidth = 2;
+
+        for (let i = 0; i < dataU.length; i++) {
+            const x = paddingLeft + (i / maxPts) * (w - paddingLeft - paddingRight);
+            const y = yZero - dataU[i] * scaleY;
+
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                const prevX = paddingLeft + ((i - 1) / maxPts) * (w - paddingLeft - paddingRight);
+                const prevY = yZero - dataU[i-1] * scaleY;
+                ctx.lineTo(x, prevY); // 横向
+                ctx.lineTo(x, y);     // 纵向突变 (方波关键)
+            }
+        }
+        ctx.stroke();
+    }
+
+    // 绘制 v-t 图像 (单极性，轴在底部，青色阶梯)
+    function drawGraphV() {
+        const cvs = document.getElementById('graph-v');
+        resizeCanvas(cvs);
+        const ctx = cvs.getContext('2d');
+        const w = cvs.width;
+        const h = cvs.height;
+
+        ctx.clearRect(0,0,w,h);
+
+        const paddingLeft = 35;
+        const paddingRight = 10;
+        const paddingBottom = 20;
+        const yZero = h - paddingBottom; // 底轴线
+
+        // 坐标轴
+        ctx.strokeStyle = '#999'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(paddingLeft, 5); ctx.lineTo(paddingLeft, yZero); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(paddingLeft, yZero); ctx.lineTo(w-paddingRight, yZero); ctx.stroke();
+        
+        drawArrow(ctx, paddingLeft, 5, 'up');
+        drawArrow(ctx, w-paddingRight, yZero, 'right');
+
+        // 标签
+        ctx.fillStyle = '#333'; ctx.font = '12px Arial'; ctx.textAlign = 'right';
+        ctx.fillText('v', paddingLeft - 5, 15);
+        ctx.fillText('t', w-5, yZero + 15);
+        ctx.fillText('0', paddingLeft - 5, yZero);
+
+        let maxV = 0;
+        for(let v of dataV) maxV = Math.max(maxV, v);
+        if(maxV < 1) maxV = 5; 
+        const scaleY = (yZero - 15) / maxV;
+
+        ctx.beginPath();
+        ctx.strokeStyle = '#00838f';
+        ctx.lineWidth = 2;
+
+        for (let i = 0; i < dataV.length; i++) {
+            const x = paddingLeft + (i / maxPts) * (w - paddingLeft - paddingRight);
+            const y = yZero - dataV[i] * scaleY; 
+
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        
+        // 实时数值
+        ctx.fillStyle = '#00838f';
+        ctx.fillText(velocity.toFixed(1), w-5, 15);
+    }
+
+    function drawArrow(ctx, x, y, dir) {
+        ctx.beginPath();
+        if(dir==='up') { ctx.moveTo(x-3, y+5); ctx.lineTo(x, y); ctx.lineTo(x+3, y+5); }
+        else if(dir==='right') { ctx.moveTo(x-5, y-3); ctx.lineTo(x, y); ctx.lineTo(x-5, y+3); }
+        ctx.stroke();
+    }
+
+    // --- 交互 ---
+    document.getElementById('btn-start').onclick = () => { isRunning = true; };
+    document.getElementById('btn-pause').onclick = () => { isRunning = false; };
+    document.getElementById('btn-reset').onclick = () => {
+        isRunning = false; velocity = 0; particleX = -3;
+        dataU.fill(0); dataV.fill(0);
+        particle.position.x = -3;
+        drawGraphU(); drawGraphV();
+        controls.target.set(0,0,0); camera.position.set(10,25,45);
+        document.getElementById('status-display').innerText="状态: 已重置";
+    };
+
+    document.getElementById('input-voltage').oninput = function() {
+        params.u = parseFloat(this.value);
+        document.getElementById('val-u').innerText = params.u.toFixed(1);
+    };
+    document.getElementById('input-speed').oninput = function() {
+        params.spd = parseFloat(this.value);
+        document.getElementById('val-spd').innerText = params.spd.toFixed(1);
+    };
+
+    const floatBox = document.getElementById('floating-charts');
+    const handle = document.getElementById('drag-handle');
+    let isDrag = false, dx=0, dy=0;
+    handle.onmousedown = e => { isDrag=true; dx=e.clientX-floatBox.offsetLeft; dy=e.clientY-floatBox.offsetTop; };
+    document.onmousemove = e => { if(isDrag){ floatBox.style.left=(e.clientX-dx)+'px'; floatBox.style.top=(e.clientY-dy)+'px'; }};
+    document.onmouseup = () => isDrag=false;
+
+    drawGraphU();
+    drawGraphV();
+    animate();
+
+</script>
+</body>
+</html>

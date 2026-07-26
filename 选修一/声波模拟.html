@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>声波传播模拟 (Sound Wave Simulation)</title>
+    <style>
+        :root {
+            --bg-color: #0f172a; /* 深蓝夜空色 */
+            --panel-color: #1e293b;
+            --text-color: #e2e8f0;
+            --accent-color: #38bdf8; /* 天蓝色 */
+            --highlight-red: #f43f5e;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .simulation-area {
+            flex-grow: 1;
+            position: relative;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        canvas {
+            background-color: transparent;
+        }
+
+        /* 控制面板 */
+        .control-panel {
+            width: 300px;
+            background-color: var(--panel-color);
+            padding: 25px;
+            box-shadow: -5px 0 20px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+        }
+
+        h2 {
+            margin: 0 0 10px 0;
+            font-size: 1.4rem;
+            color: var(--accent-color);
+            border-bottom: 2px solid #334155;
+            padding-bottom: 10px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+            color: #94a3b8;
+        }
+
+        span.val {
+            color: var(--accent-color);
+            font-family: monospace;
+            font-weight: bold;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: var(--accent-color);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        #btnToggle { background-color: var(--accent-color); color: #0f172a; }
+        #btnReset { background-color: #475569; color: white; }
+        button:hover { filter: brightness(1.1); }
+
+        .info-box {
+            margin-top: auto;
+            font-size: 0.85rem;
+            color: #94a3b8;
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 8px;
+            line-height: 1.5;
+        }
+
+        .key-point {
+            color: var(--highlight-red);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="simulation-area" id="simArea">
+        <canvas id="soundCanvas"></canvas>
+    </div>
+
+    <div class="control-panel">
+        <h2>声波 (空气中传播)</h2>
+
+        <div class="control-group">
+            <label>响度/振幅 (Loudness) <span id="valAmp" class="val">20</span></label>
+            <input type="range" id="inpAmp" min="5" max="40" value="20">
+        </div>
+
+        <div class="control-group">
+            <label>音调/频率 (Pitch) <span id="valFreq" class="val">1.0</span></label>
+            <input type="range" id="inpFreq" min="0.5" max="3.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label>声速 (Speed) <span id="valSpeed" class="val">1.0</span></label>
+            <input type="range" id="inpSpeed" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="btn-group">
+            <button id="btnToggle">暂停 / 播放</button>
+            <button id="btnReset">重置</button>
+        </div>
+
+        <div class="info-box">
+            <p><strong>图示说明：</strong></p>
+            <ul style="padding-left: 20px; margin: 5px 0;">
+                <li><strong>粒子</strong>：代表空气分子。</li>
+                <li><strong>亮色区域</strong>：密部（压缩），压强高。</li>
+                <li><strong>暗色区域</strong>：疏部（稀疏），压强低。</li>
+                <li><span class="key-point">红色粒子</span>：标记特定空气分子。观察它们只在原位附近<strong>左右振动</strong>，不随波迁移。</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('soundCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('simArea');
+
+    // 状态
+    let isRunning = true;
+    let time = 0;
+    
+    // 粒子系统
+    let particles = [];
+    const rows = 25;      // 纵向行数
+    const cols = 60;      // 横向列数 (基础密度)
+    
+    // 参数
+    const params = {
+        amp: 20,          // 振幅 (像素)
+        freq: 1.0,        // 频率
+        speed: 1.0,       // 波速
+        wavelength: 200   // 波长基准
+    };
+
+    // UI 元素
+    const ui = {
+        amp: document.getElementById('inpAmp'),
+        freq: document.getElementById('inpFreq'),
+        speed: document.getElementById('inpSpeed'),
+        displayAmp: document.getElementById('valAmp'),
+        displayFreq: document.getElementById('valFreq'),
+        displaySpeed: document.getElementById('valSpeed'),
+        btnToggle: document.getElementById('btnToggle'),
+        btnReset: document.getElementById('btnReset')
+    };
+
+    // 初始化
+    function resize() {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        initParticles();
+    }
+    window.addEventListener('resize', resize);
+
+    function initParticles() {
+        particles = [];
+        const spacingX = canvas.width / cols;
+        const spacingY = canvas.height / rows;
+
+        for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+                particles.push({
+                    baseX: c * spacingX + spacingX/2, // 平衡位置 X
+                    baseY: r * spacingY + spacingY/2, // 平衡位置 Y
+                    x: 0,
+                    y: 0,
+                    row: r,
+                    col: c,
+                    isTracker: (c === Math.floor(cols/4)) // 标记第1/4处的列为追踪粒子
+                });
+            }
+        }
+    }
+
+    function updateParams() {
+        params.amp = parseFloat(ui.amp.value);
+        params.freq = parseFloat(ui.freq.value);
+        params.speed = parseFloat(ui.speed.value);
+
+        ui.displayAmp.textContent = params.amp;
+        ui.displayFreq.textContent = params.freq;
+        ui.displaySpeed.textContent = params.speed;
+    }
+
+    // 事件绑定
+    ui.amp.addEventListener('input', updateParams);
+    ui.freq.addEventListener('input', updateParams);
+    ui.speed.addEventListener('input', updateParams);
+    
+    ui.btnToggle.addEventListener('click', () => {
+        isRunning = !isRunning;
+    });
+
+    ui.btnReset.addEventListener('click', () => {
+        ui.amp.value = 20;
+        ui.freq.value = 1.0;
+        ui.speed.value = 1.0;
+        time = 0;
+        updateParams();
+    });
+
+    // 绘制循环
+    function loop() {
+        if (!isRunning) {
+            requestAnimationFrame(loop);
+            return;
+        }
+
+        // 1. 清除画布 (带一点拖影效果可选，这里用纯色清除保持清晰)
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const k = (2 * Math.PI) / params.wavelength; // 波数
+        // 频率越高，波长越短 (模拟声学特性: v = f * lambda -> lambda = v/f)
+        // 这里简化模拟，让 k 随频率变化
+        const currentK = k * params.freq; 
+        const omega = 0.1 * params.speed * params.freq; // 角频率
+
+        // 2. 绘制声源 (左侧振动板)
+        const sourceX = 20 + params.amp * Math.sin(-time * omega); // 简单的振动源位置
+        ctx.fillStyle = '#444';
+        ctx.fillRect(0, 0, sourceX, canvas.height);
+        ctx.strokeStyle = '#666';
+        ctx.beginPath();
+        ctx.moveTo(sourceX, 0);
+        ctx.lineTo(sourceX, canvas.height);
+        ctx.stroke();
+
+
+        // 3. 更新并绘制所有粒子
+        particles.forEach(p => {
+            // 计算纵波位移 (只在 X 轴方向)
+            // 公式: Displacement = A * sin(kx - wt)
+            // 注意：相位应该基于粒子的平衡位置 p.baseX
+            const phase = currentK * p.baseX - time * omega;
+            const displacement = params.amp * Math.sin(phase);
+            
+            p.x = p.baseX + displacement;
+            p.y = p.baseY;
+
+            // 视觉效果：计算局部密度来改变颜色
+            // cos 是 sin 的导数，代表变化率（疏密程度）
+            // 当 cos 为负时 (压缩)，cos 为正时 (稀疏)
+            const density = Math.cos(phase); 
+            
+            ctx.beginPath();
+            
+            if (p.isTracker) {
+                // 红色标记粒子
+                ctx.fillStyle = '#f43f5e';
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // 绘制一条竖直虚线指示其平衡位置
+                if (p.row === 0) { // 只画一次线
+                    ctx.strokeStyle = 'rgba(244, 63, 94, 0.3)';
+                    ctx.setLineDash([5, 5]);
+                    ctx.moveTo(p.baseX, 0);
+                    ctx.lineTo(p.baseX, canvas.height);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            } else {
+                // 普通空气分子
+                // 根据密度调整颜色亮度和透明度
+                // 压缩区 (density < 0) -> 亮青色
+                // 稀疏区 (density > 0) -> 暗蓝色
+                const brightness = 50 - density * 40; // 范围大约 10 - 90
+                const alpha = 0.4 - density * 0.3;    // 越密越不透明
+                
+                ctx.fillStyle = `hsla(199, 90%, ${brightness}%, ${alpha})`;
+                
+                // 粒子大小也可以随密度微调，增加视觉冲击力
+                const radius = 2 - density * 0.5; 
+                ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        });
+
+        // 4. 绘制“波形”参考线 (可选，画在上方帮助理解这是正弦波)
+        // 将粒子位置映射为正弦波形
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+        ctx.lineWidth = 2;
+        for (let x = 0; x < canvas.width; x+=5) {
+            const phase = currentK * x - time * omega;
+            const y = canvas.height - 50 - params.amp * Math.sin(phase); // 画在底部
+            if (x===0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+        ctx.fillStyle = '#666';
+        ctx.font = '12px Arial';
+        ctx.fillText("对应的正弦波形 (Displacement Graph)", 10, canvas.height - 20);
+
+        time += 1;
+        requestAnimationFrame(loop);
+    }
+
+    // 启动
+    resize();
+    initParticles();
+    updateParams();
+    loop();
+
+</script>
+
+</body>
+</html>

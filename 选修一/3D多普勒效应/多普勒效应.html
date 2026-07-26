@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 多普勒效应演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #111; }
+        
+        /* 3D 容器 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 左上角拖拽图表 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            height: 250px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            cursor: move; /* 提示可拖拽 */
+            z-index: 100;
+            padding: 10px;
+        }
+        #chart-header {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+            pointer-events: none; /* 让鼠标事件穿透到div */
+            text-align: center;
+        }
+
+        /* 右侧功能区 */
+        #sidebar {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 280px;
+            height: 100vh;
+            background: rgba(30, 30, 30, 0.85);
+            backdrop-filter: blur(10px);
+            border-left: 1px solid #444;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto; /* 允许滚动 */
+            z-index: 99;
+            color: white;
+            transition: transform 0.3s ease;
+        }
+
+        /* 控件样式 */
+        .control-group { margin-bottom: 25px; }
+        .control-group label { display: block; margin-bottom: 8px; font-size: 14px; color: #aaa; }
+        .control-group input[type="range"] { width: 100%; cursor: pointer; }
+        
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn-start { background-color: #28a745; color: white; }
+        .btn-start:hover { background-color: #218838; }
+        .btn-pause { background-color: #ffc107; color: black; }
+        .btn-pause:hover { background-color: #e0a800; }
+        .btn-reset { background-color: #dc3545; color: white; }
+        .btn-reset:hover { background-color: #c82333; }
+
+        .value-display { float: right; color: #fff; font-weight: bold; }
+        
+        hr { border: 0; border-top: 1px solid #555; margin: 20px 0; }
+    </style>
+</head>
+<body>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">:: 按住此处拖动 :: <br> 接收到的频率变化</div>
+        <canvas id="freqChart"></canvas>
+    </div>
+
+    <div id="sidebar">
+        <h2>控制面板</h2>
+        <div class="control-group">
+            <button id="btnStart" class="btn-start">开始 (Start)</button>
+            <button id="btnPause" class="btn-pause">暂停 (Pause)</button>
+            <button id="btnReset" class="btn-reset">还原 (Reset)</button>
+        </div>
+
+        <hr>
+
+        <div class="control-group">
+            <label>波源速度 (Source Speed) <span id="valSpeed" class="value-display">0.5</span></label>
+            <input type="range" id="sliderSpeed" min="0" max="2.0" step="0.1" value="0.5">
+        </div>
+
+        <div class="control-group">
+            <label>波速 (Wave Speed) <span id="valWaveSpeed" class="value-display">1.0</span></label>
+            <input type="range" id="sliderWaveSpeed" min="0.5" max="3.0" step="0.1" value="1.0">
+            <p style="font-size: 12px; color: #888;">*当波源速度 > 波速时产生激波 (音爆)</p>
+        </div>
+
+        <div class="control-group">
+            <label>发射频率 (Emission Rate)</label>
+            <input type="range" id="sliderFreq" min="5" max="30" step="1" value="10">
+        </div>
+        
+        <div style="margin-top: 50px; font-size: 12px; color: #666;">
+            <p>说明：</p>
+            <ul>
+                <li>红色球体：移动的声源</li>
+                <li>绿色方块：静止的观察者</li>
+                <li>白色圆环：声波</li>
+            </ul>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+
+    <script>
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let isRunning = false;
+        let clock = new THREE.Clock();
+        
+        // 物理对象
+        let sourceMesh, observerMesh;
+        let waves = []; // 存储波浪对象
+        
+        // 参数
+        const params = {
+            sourceSpeed: 0.5,
+            waveSpeed: 1.0,
+            emissionRate: 10, // 每多少帧发射一次
+            emissionTimer: 0
+        };
+
+        // 图表相关
+        let chart;
+        let chartData = [];
+        const maxDataPoints = 50;
+
+        // ================= 初始化 =================
+        init();
+        initChart();
+        animate();
+        makeDraggable(document.getElementById("chart-wrapper"));
+
+        function init() {
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222222);
+            // 添加网格辅助
+            const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x333333);
+            scene.add(gridHelper);
+
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 30, 30);
+            camera.lookAt(0, 0, 0);
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 4. 轨道控制器 (OrbitControls)
+            // 兼容性处理：检查 THREE.OrbitControls 是否存在
+            if (THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+            } else {
+                console.warn("未找到 THREE.OrbitControls，请检查文件名是否正确 (例如需改为 OrbitControls.js) 且文件内容是兼容非模块化的版本。");
+                // 尝试全局查找（有些旧版本直接暴露 OrbitControls）
+                if(window.OrbitControls) {
+                     controls = new window.OrbitControls(camera, renderer.domElement);
+                }
+            }
+
+            // 5. 灯光
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            scene.add(dirLight);
+
+            // 6. 创建物体
+            createObjects();
+
+            // 7. 窗口大小调整监听
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // 8. 绑定按钮事件
+            setupUI();
+        }
+
+        function createObjects() {
+            // 波源 (红色球)
+            const sourceGeo = new THREE.SphereGeometry(0.8, 32, 32);
+            const sourceMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+            sourceMesh = new THREE.Mesh(sourceGeo, sourceMat);
+            sourceMesh.position.set(-15, 0.5, 0); // 起始位置
+            scene.add(sourceMesh);
+
+            // 观察者 (绿色方块) - 用于计算图表数据
+            const obsGeo = new THREE.BoxGeometry(1, 1, 1);
+            const obsMat = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
+            observerMesh = new THREE.Mesh(obsGeo, obsMat);
+            observerMesh.position.set(10, 0.5, 5); // 放在侧面一点，观察侧向多普勒
+            scene.add(observerMesh);
+            
+            // 观察者文字标签 (简单模拟)
+            // 这里不引入额外的字体库，仅用颜色区分
+        }
+
+        // ================= 图表逻辑 =================
+        function initChart() {
+            const ctx = document.getElementById('freqChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(maxDataPoints).fill(''),
+                    datasets: [{
+                        label: '观测频率 (模拟)',
+                        data: Array(maxDataPoints).fill(1),
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 2,
+                        fill: false,
+                        pointRadius: 0,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false, // 禁用动画以提高性能
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            suggestedMin: 0.5,
+                            suggestedMax: 2.0
+                        },
+                        x: { display: false }
+                    }
+                }
+            });
+        }
+
+        function updateChart(observedFreq) {
+            chartData.push(observedFreq);
+            if (chartData.length > maxDataPoints) {
+                chartData.shift();
+            }
+            chart.data.datasets[0].data = chartData;
+            chart.update();
+        }
+
+        // ================= 动画循环 =================
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (controls) controls.update();
+
+            if (isRunning) {
+                const delta = clock.getDelta(); // 获取时间间隔
+                
+                // 1. 移动波源
+                sourceMesh.position.x += params.sourceSpeed * 10 * delta; 
+                
+                // 边界重置：如果跑太远了，重置回左边，方便循环观察
+                if (sourceMesh.position.x > 20) {
+                    sourceMesh.position.x = -20;
+                    // 清空之前的波，避免视觉混乱
+                    clearWaves();
+                }
+
+                // 2. 发射波浪
+                params.emissionTimer++;
+                if (params.emissionTimer > (35 - params.emissionRate)) {
+                    emitWave(sourceMesh.position.clone());
+                    params.emissionTimer = 0;
+                }
+
+                // 3. 更新所有波浪
+                updateWaves(delta);
+
+                // 4. 计算多普勒频率用于图表
+                // 简单物理模拟：计算相对速度
+                // 矢量：波源 -> 观察者
+                const dx = observerMesh.position.x - sourceMesh.position.x;
+                const dz = observerMesh.position.z - sourceMesh.position.z;
+                const dist = Math.sqrt(dx*dx + dz*dz);
+                
+                // 夹角余弦 (速度方向是X轴正向)
+                // cos_theta = (v_source · vec_source_to_obs) / (|v|*|vec|)
+                // 简化：v_source只在x轴，所以点积就是 dx
+                const cosTheta = dx / dist;
+                
+                // 多普勒公式: f_obs = f_src * (v_wave / (v_wave - v_source * cosTheta))
+                // 注意：当 v_source * cosTheta > v_wave 时会发生音爆，公式分母为负或0
+                let denominator = params.waveSpeed - params.sourceSpeed * cosTheta;
+                let obsFreq = 1;
+                
+                if (Math.abs(denominator) < 0.01) obsFreq = 5; // 模拟极大值
+                else obsFreq = params.waveSpeed / denominator;
+                
+                // 限制显示范围防止图表炸掉
+                obsFreq = Math.min(Math.max(obsFreq, 0), 5);
+
+                updateChart(obsFreq);
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // ================= 波浪逻辑 =================
+        function emitWave(position) {
+            // 创建一个圆环表示波前
+            const geometry = new THREE.RingGeometry(0.1, 0.2, 32); 
+            // 旋转使其平躺在地面
+            geometry.rotateX(-Math.PI / 2);
+            
+            const material = new THREE.MeshBasicMaterial({ 
+                color: 0xffffff, 
+                transparent: true, 
+                opacity: 0.8,
+                side: THREE.DoubleSide
+            });
+            
+            const wave = new THREE.Mesh(geometry, material);
+            wave.position.copy(position);
+            wave.position.y = 0.1; // 略高于地面防止闪烁
+            
+            // 自定义属性：已存在时间
+            wave.userData = { age: 0 };
+            
+            scene.add(wave);
+            waves.push(wave);
+        }
+
+        function updateWaves(delta) {
+            for (let i = waves.length - 1; i >= 0; i--) {
+                const wave = waves[i];
+                wave.userData.age += delta;
+                
+                // 半径扩大: r = v * t
+                // RingGeometry 比较难直接改半径，我们用 scale
+                // 初始半径约 0.15 (平均)，我们需要它按速度扩大
+                // Scale 1 = 0.15 units. Target radius = speed * age.
+                // Scale factor roughly: (speed * age) / 0.15
+                // 简化视觉效果：
+                const currentScale = 1 + (params.waveSpeed * 5 * wave.userData.age);
+                wave.scale.set(currentScale, currentScale, 1); // Z轴是高度，保持不变
+
+                // 渐隐
+                if (wave.userData.age > 5) {
+                    wave.material.opacity -= delta * 0.5;
+                }
+
+                // 移除
+                if (wave.material.opacity <= 0) {
+                    scene.remove(wave);
+                    waves.splice(i, 1);
+                }
+            }
+        }
+
+        function clearWaves() {
+            waves.forEach(w => scene.remove(w));
+            waves = [];
+        }
+
+        // ================= UI & 交互逻辑 =================
+        function setupUI() {
+            // 按钮
+            document.getElementById('btnStart').onclick = () => { isRunning = true; clock.start(); };
+            document.getElementById('btnPause').onclick = () => { isRunning = false; clock.stop(); };
+            document.getElementById('btnReset').onclick = () => {
+                isRunning = false;
+                sourceMesh.position.set(-15, 0.5, 0);
+                clearWaves();
+                chartData = Array(maxDataPoints).fill(1);
+                chart.update();
+            };
+
+            // 滑块
+            const sSpeed = document.getElementById('sliderSpeed');
+            sSpeed.oninput = function() { 
+                params.sourceSpeed = parseFloat(this.value); 
+                document.getElementById('valSpeed').innerText = this.value;
+            };
+
+            const sWaveSpeed = document.getElementById('sliderWaveSpeed');
+            sWaveSpeed.oninput = function() {
+                params.waveSpeed = parseFloat(this.value);
+                document.getElementById('valWaveSpeed').innerText = this.value;
+            };
+            
+            const sFreq = document.getElementById('sliderFreq');
+            sFreq.oninput = function() {
+                params.emissionRate = parseFloat(this.value);
+            };
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // ================= 拖拽功能实现 =================
+        function makeDraggable(elmnt) {
+            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+            elmnt.onmousedown = dragMouseDown;
+
+            function dragMouseDown(e) {
+                e = e || window.event;
+                e.preventDefault();
+                // 获取鼠标初始位置
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                document.onmouseup = closeDragElement;
+                document.onmousemove = elementDrag;
+            }
+
+            function elementDrag(e) {
+                e = e || window.event;
+                e.preventDefault();
+                // 计算新位置
+                pos1 = pos3 - e.clientX;
+                pos2 = pos4 - e.clientY;
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                // 设置元素新位置
+                elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+                elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+            }
+
+            function closeDragElement() {
+                document.onmouseup = null;
+                document.onmousemove = null;
+            }
+        }
+    </script>
+</body>
+</html>

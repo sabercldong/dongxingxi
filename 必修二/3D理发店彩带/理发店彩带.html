@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Barber Pole - Scrollable UI</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #222; }
+        
+        #container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧 3D 区域 */
+        #canvas-box {
+            flex-grow: 1;
+            position: relative;
+            background-color: #111;
+            overflow: hidden;
+        }
+
+        /* 右侧功能区 */
+        #ui-panel {
+            width: 320px;
+            min-width: 320px;
+            background-color: #f8f9fa;
+            padding: 25px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.2);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+            border-left: 1px solid #ccc;
+            
+            overflow-y: auto; 
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        #ui-panel::-webkit-scrollbar {
+            width: 8px;
+        }
+        #ui-panel::-webkit-scrollbar-track {
+            background: #f1f1f1; 
+        }
+        #ui-panel::-webkit-scrollbar-thumb {
+            background: #ccc; 
+            border-radius: 4px;
+        }
+        #ui-panel::-webkit-scrollbar-thumb:hover {
+            background: #aaa; 
+        }
+
+        h2 { margin: 0 0 5px 0; color: #333; font-size: 22px; border-bottom: 2px solid #007bff; padding-bottom: 10px; display: inline-block;}
+        
+        .control-group {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            flex-shrink: 0;
+        }
+
+        label { display: block; margin-bottom: 8px; font-weight: 600; font-size: 14px; color: #495057; }
+        
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 13px;
+            transition: all 0.2s;
+            color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .btn-start { background-color: #28a745; }
+        .btn-pause { background-color: #ffc107; color: #333; }
+        .btn-reset { background-color: #dc3545; }
+        .btn-dir   { background-color: #17a2b8; width: 100%; margin-top: 5px;}
+
+        button:hover { opacity: 0.9; transform: translateY(-1px); }
+        button:active { transform: translateY(1px); }
+
+        .status-box {
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 5px;
+            text-align: center;
+            font-size: 13px;
+            color: #555;
+        }
+
+        #direction-indicator {
+            font-weight: bold;
+            color: #007bff;
+            font-size: 16px;
+            margin-top: 5px;
+            display: block;
+        }
+
+        .spacer {
+            height: 20px;
+            flex-shrink: 0;
+        }
+    </style>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="container">
+        <div id="canvas-box"></div>
+
+        <div id="ui-panel">
+            <div>
+                <h2>理发店灯柱</h2>
+                <div style="font-size:12px; color:#666;">方向可视化增强版</div>
+            </div>
+            
+            <div class="control-group">
+                <label>运行控制</label>
+                <div class="btn-group">
+                    <button class="btn-start" onclick="setAnimState(true)">开始</button>
+                    <button class="btn-pause" onclick="setAnimState(false)">暂停</button>
+                    <button class="btn-reset" onclick="resetApp()">还原</button>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>旋转方向</label>
+                <div class="status-box">
+                    当前方向:
+                    <span id="direction-indicator">⟳ 顺时针 (下行)</span>
+                </div>
+                <button class="btn-dir" onclick="toggleDirection()">切换方向 ⇋</button>
+            </div>
+
+            <div class="control-group">
+                <label>旋转速度</label>
+                <input type="range" id="speedSlider" min="0" max="5.0" step="0.1" value="2.0">
+            </div>
+
+            <div class="control-group">
+                <label>灯柱粗细</label>
+                <input type="range" id="scaleSlider" min="0.5" max="2.5" step="0.1" value="1.0">
+            </div>
+
+            <div class="control-group">
+                <label>条纹密度</label>
+                <input type="range" id="densitySlider" min="2" max="10" step="1" value="4">
+            </div>
+
+            <div class="control-group">
+                <label>其它信息</label>
+                <div style="font-size: 12px; color: #666; line-height: 1.6;">
+                    观察顶部的小杆子确认真实转向。<br>
+                    若屏幕较小，可上下滚动此面板。
+                </div>
+            </div>
+
+            <div class="spacer"></div>
+        </div>
+    </div>
+
+    <script type="x-shader/x-vertex" id="vertexShader">
+        varying vec2 vUv;
+        varying vec3 vNormal;
+        void main() {
+            vUv = uv;
+            vNormal = normalize(normalMatrix * normal);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+    </script>
+
+    <script type="x-shader/x-fragment" id="fragmentShader">
+        uniform float uTime;
+        uniform float uDensity;
+        varying vec2 vUv;
+        varying vec3 vNormal;
+
+        void main() {
+            vec3 lightDir = normalize(vec3(0.5, 0.5, 1.0));
+            float diff = max(dot(vNormal, lightDir), 0.3);
+            
+            // 【核心修复】：将 - uTime 修改为了 + uTime
+            float pos = vUv.y * uDensity + vUv.x + uTime;
+            float pattern = fract(pos);
+            
+            vec3 color;
+            // 红白蓝经典配色
+            if (pattern < 0.25) color = vec3(0.9, 0.1, 0.1);      // Red
+            else if (pattern < 0.5) color = vec3(0.95, 0.95, 0.95); // White
+            else if (pattern < 0.75) color = vec3(0.1, 0.1, 0.9);   // Blue
+            else color = vec3(0.95, 0.95, 0.95);                    // White
+
+            // 高光
+            float shine = pow(max(dot(reflect(-lightDir, vNormal), vec3(0,0,1)), 0.0), 20.0) * 0.5;
+            gl_FragColor = vec4(color * diff + shine, 1.0);
+        }
+    </script>
+
+    <script>
+        // --- 变量 ---
+        let scene, camera, renderer, controls;
+        let poleMesh, innerCylinder, directionIndicator;
+        let isAnimating = true;
+        let baseSpeed = 2.0;
+        let direction = 1; // 1 = 顺时针/下行, -1 = 逆时针/上行
+        let clock = new THREE.Clock();
+        
+        // --- 初始化 ---
+        function init() {
+            const container = document.getElementById('canvas-box');
+            
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222);
+
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+            camera.position.set(0, 0, 18);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            if (THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+            }
+
+            poleMesh = new THREE.Group();
+            scene.add(poleMesh);
+
+            createInnerCylinder();
+            createCaps();
+            createDirectionIndicator();
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            window.addEventListener('resize', onWindowResize);
+            animate();
+        }
+
+        function createInnerCylinder() {
+            const vShader = document.getElementById('vertexShader').textContent;
+            const fShader = document.getElementById('fragmentShader').textContent;
+
+            const material = new THREE.ShaderMaterial({
+                uniforms: {
+                    uTime: { value: 0.0 },
+                    uDensity: { value: 4.0 }
+                },
+                vertexShader: vShader,
+                fragmentShader: fShader,
+                side: THREE.DoubleSide
+            });
+
+            const geometry = new THREE.CylinderGeometry(2, 2, 10, 64);
+            innerCylinder = new THREE.Mesh(geometry, material);
+            poleMesh.add(innerCylinder);
+        }
+
+        function createCaps() {
+            const capMat = new THREE.MeshStandardMaterial({ 
+                color: 0x888888, 
+                roughness: 0.3, 
+                metalness: 0.9 
+            });
+            const capGeo = new THREE.SphereGeometry(2.1, 32, 16, 0, Math.PI * 2, 0, Math.PI/2);
+
+            const topCap = new THREE.Mesh(capGeo, capMat);
+            topCap.position.y = 5;
+            poleMesh.add(topCap);
+
+            const bottomCap = topCap.clone();
+            bottomCap.scale.y = -1;
+            bottomCap.position.y = -5;
+            poleMesh.add(bottomCap);
+
+            poleMesh.userData.topCap = topCap;
+            poleMesh.userData.bottomCap = bottomCap;
+        }
+
+        function createDirectionIndicator() {
+            const pivot = new THREE.Group();
+            pivot.position.y = 7.1; 
+            
+            const stickGeo = new THREE.BoxGeometry(0.2, 1.5, 0.2);
+            const stickMat = new THREE.MeshStandardMaterial({ color: 0xff0000 }); 
+            const stick = new THREE.Mesh(stickGeo, stickMat);
+            stick.position.y = 0.75;
+            
+            const flagGeo = new THREE.BoxGeometry(1.5, 0.4, 0.1);
+            const flagMat = new THREE.MeshStandardMaterial({ color: 0xffcc00 }); 
+            const flag = new THREE.Mesh(flagGeo, flagMat);
+            flag.position.set(0.6, 1.4, 0); 
+
+            pivot.add(stick);
+            pivot.add(flag);
+            
+            directionIndicator = pivot;
+            poleMesh.add(directionIndicator);
+        }
+
+        function onWindowResize() {
+            const container = document.getElementById('canvas-box');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+
+            const delta = clock.getDelta();
+
+            if (isAnimating) {
+                const moveAmount = baseSpeed * direction * delta;
+
+                if (innerCylinder) {
+                    innerCylinder.material.uniforms.uTime.value += moveAmount;
+                }
+
+                if (directionIndicator) {
+                    directionIndicator.rotation.y -= moveAmount * 0.5; 
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function toggleDirection() {
+            direction *= -1;
+            updateDirectionUI();
+        }
+
+        function updateDirectionUI() {
+            const label = document.getElementById('direction-indicator');
+            if (direction === 1) {
+                label.innerText = "⟳ 顺时针 (下行)";
+                label.style.color = "#007bff"; 
+            } else {
+                label.innerText = "⟲ 逆时针 (上行)";
+                label.style.color = "#dc3545"; 
+            }
+        }
+
+        function setAnimState(state) {
+            isAnimating = state;
+        }
+
+        function resetApp() {
+            isAnimating = true;
+            baseSpeed = 2.0;
+            direction = 1;
+            
+            camera.position.set(0, 0, 18);
+            camera.lookAt(0, 0, 0);
+
+            if (innerCylinder) {
+                innerCylinder.material.uniforms.uTime.value = 0.0;
+                innerCylinder.material.uniforms.uDensity.value = 4.0;
+            }
+            if (directionIndicator) directionIndicator.rotation.y = 0;
+
+            document.getElementById('speedSlider').value = 2.0;
+            document.getElementById('scaleSlider').value = 1.0;
+            document.getElementById('densitySlider').value = 4.0;
+            updateDirectionUI();
+            updateScale(1.0);
+        }
+
+        document.getElementById('speedSlider').addEventListener('input', (e) => {
+            baseSpeed = parseFloat(e.target.value);
+        });
+
+        document.getElementById('densitySlider').addEventListener('input', (e) => {
+            if(innerCylinder) innerCylinder.material.uniforms.uDensity.value = parseFloat(e.target.value);
+        });
+
+        document.getElementById('scaleSlider').addEventListener('input', (e) => {
+            updateScale(parseFloat(e.target.value));
+        });
+
+        function updateScale(val) {
+            if (innerCylinder) innerCylinder.scale.set(val, 1, val);
+            if (poleMesh && poleMesh.userData.topCap) {
+                poleMesh.userData.topCap.scale.set(val, 1, val);
+                poleMesh.userData.bottomCap.scale.set(val, -1, val);
+            }
+        }
+
+        window.onload = init;
+
+    </script>
+</body>
+</html>

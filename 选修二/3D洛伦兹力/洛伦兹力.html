@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lorentz Force 3D (Enhanced UI)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #fff; color: #333; }
+        
+        /* 3D 容器 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; background: #fff; }
+
+        /* 右侧功能区 */
+        #ui-panel {
+            position: absolute; top: 0; right: 0; width: 340px; height: 100vh;
+            background: rgba(250, 250, 252, 0.95); border-left: 1px solid #e0e0e0;
+            padding: 20px; box-sizing: border-box; overflow-y: auto;
+            box-shadow: -2px 0 15px rgba(0,0,0,0.05); z-index: 10;
+        }
+
+        h2 { font-size: 18px; margin-top: 0; color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 20px; }
+        h3.section-title { font-size: 14px; color: #666; margin: 15px 0 10px 0; border-bottom: 1px solid #eee; padding-bottom: 5px; }
+        
+        .control-group { margin-bottom: 15px; }
+        label { display: block; font-size: 13px; color: #555; margin-bottom: 5px; font-weight: 600; }
+        
+        /* 新增：输入行布局 (滑块 + 数字框) */
+        .input-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+        input[type="range"] { flex-grow: 1; cursor: pointer; }
+        input[type="number"] { 
+            width: 60px; padding: 4px; border: 1px solid #ccc; border-radius: 4px; 
+            text-align: right; font-family: monospace; color: #3498db; font-weight: bold;
+        }
+        input[type="number"]:focus { border-color: #3498db; outline: none; }
+
+        .legend-item { display: flex; align-items: center; margin-bottom: 8px; font-size: 13px; color: #444; }
+        .color-box { width: 12px; height: 12px; margin-right: 8px; border-radius: 2px; border: 1px solid rgba(0,0,0,0.1); }
+        
+        #force-output {
+            background: #f0f7fd; padding: 12px; border-radius: 6px; 
+            border: 1px solid #d0e3f0; margin-bottom: 20px; text-align: center;
+        }
+        .result-text { font-size: 20px; font-weight: bold; color: #c0392b; display: block; margin-top: 5px;}
+
+        /* 错误提示层 */
+        #error-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 9999;
+            justify-content: center; align-items: center; flex-direction: column;
+        }
+        #error-box {
+            background: #fff; padding: 30px; border-radius: 8px; max-width: 600px; text-align: left;
+            border-left: 5px solid #e74c3c; font-family: monospace;
+        }
+    </style>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="error-overlay">
+        <div id="error-box">
+            <h3 style="margin-top:0; color:#c0392b;">Error</h3>
+            <p id="error-text">Unknown Error</p>
+            <button onclick="document.getElementById('error-overlay').style.display='none'" style="padding:5px 15px; cursor:pointer;">关闭提示</button>
+        </div>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <div id="ui-panel">
+        <h2>洛伦兹力全空间演示</h2>
+
+        <div id="force-output">
+            <span style="font-size: 12px; color: #2980b9;">受力大小 |F| = |q(v × B)|</span>
+            <span class="result-text" id="force-magnitude">0.00</span>
+        </div>
+
+        <h3 class="section-title">粒子属性</h3>
+        <div class="control-group">
+            <label>电荷量 (q)</label>
+            <div class="input-row">
+                <input type="range" id="range-q" min="-5" max="5" step="0.1" value="1.0">
+                <input type="number" id="num-q" min="-5" max="5" step="0.1" value="1.0">
+            </div>
+        </div>
+
+        <h3 class="section-title">环境磁场 (B)</h3>
+        <div class="control-group">
+            <label>磁场强度 By (绿色)</label>
+            <div class="input-row">
+                <input type="range" id="range-b" min="-10" max="10" step="0.1" value="2.0">
+                <input type="number" id="num-b" min="-10" max="10" step="0.1" value="2.0">
+            </div>
+        </div>
+        
+        <h3 class="section-title">速度向量 (v)</h3>
+        <div class="control-group">
+            <label>速度 Vx</label>
+            <div class="input-row">
+                <input type="range" id="range-vx" min="-10" max="10" step="0.1" value="3.0">
+                <input type="number" id="num-vx" min="-10" max="10" step="0.1" value="3.0">
+            </div>
+        </div>
+        <div class="control-group">
+            <label>速度 Vy</label>
+            <div class="input-row">
+                <input type="range" id="range-vy" min="-10" max="10" step="0.1" value="0.0">
+                <input type="number" id="num-vy" min="-10" max="10" step="0.1" value="0.0">
+            </div>
+        </div>
+        <div class="control-group">
+            <label>速度 Vz</label>
+            <div class="input-row">
+                <input type="range" id="range-vz" min="-10" max="10" step="0.1" value="2.0">
+                <input type="number" id="num-vz" min="-10" max="10" step="0.1" value="2.0">
+            </div>
+        </div>
+
+        <h3 class="section-title">图例</h3>
+        <div style="margin-top:10px;">
+            <div class="legend-item"><div class="color-box" style="background:red;"></div>中心粒子</div>
+            <div class="legend-item"><div class="color-box" style="background:blue;"></div>速度向量 (v)</div>
+            <div class="legend-item"><div class="color-box" style="background:rgba(0, 200, 0, 1);"></div>中心磁场向量 (B)</div>
+            <div class="legend-item"><div class="color-box" style="background:magenta;"></div><strong>受力向量 (F)</strong></div>
+        </div>
+        <div style="font-size: 12px; color:#888; margin-top:10px;">
+            注：坐标轴 X(红), Y(绿), Z(蓝)
+        </div>
+    </div>
+
+    <script>
+        // 错误捕获
+        function showError(msg) {
+            document.getElementById('error-overlay').style.display = 'flex';
+            document.getElementById('error-text').innerText = msg;
+            console.error(msg);
+        }
+
+        let scene, camera, renderer, controls;
+        let vArrow, bMainArrow, fArrow; 
+        let fieldArrowsGrid = []; 
+
+        let params = {
+            q: 1.0,
+            B: new THREE.Vector3(0, 2.0, 0),
+            v: new THREE.Vector3(3.0, 0, 2.0)
+        };
+        
+        const origin = new THREE.Vector3(0, 0, 0);
+
+        // --- 新增：创建文字标签的函数 (Canvas -> Texture -> Sprite) ---
+        function createTextLabel(text, color) {
+            try {
+                const canvas = document.createElement('canvas');
+                const size = 64; 
+                canvas.width = size;
+                canvas.height = size;
+                
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = color;
+                ctx.font = 'bold 48px Arial';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, size/2, size/2);
+                
+                // 兼容旧版：尝试 CanvasTexture，如果失败使用 Texture
+                let texture;
+                if(typeof THREE.CanvasTexture !== 'undefined') {
+                    texture = new THREE.CanvasTexture(canvas);
+                } else {
+                    texture = new THREE.Texture(canvas);
+                    texture.needsUpdate = true;
+                }
+                
+                const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
+                const sprite = new THREE.Sprite(material);
+                sprite.scale.set(2, 2, 2); // 调整标签大小
+                return sprite;
+            } catch (e) {
+                console.warn("Label creation failed", e);
+                return new THREE.Object3D(); 
+            }
+        }
+
+        function initThree() {
+            try {
+                if (typeof THREE === 'undefined') throw new Error("three.min.js 未加载");
+
+                const container = document.getElementById('canvas-container');
+
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0xffffff); 
+                scene.fog = new THREE.Fog(0xffffff, 30, 100);
+
+                camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 200);
+                camera.position.set(20, 20, 30);
+                camera.lookAt(origin);
+
+                renderer = new THREE.WebGLRenderer({ antialias: true });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.setPixelRatio(window.devicePixelRatio);
+                container.appendChild(renderer.domElement);
+
+                // --- 控制器加载 ---
+                try {
+                    if (typeof THREE.OrbitControls !== 'undefined') {
+                        controls = new THREE.OrbitControls(camera, renderer.domElement);
+                    } else if (typeof OrbitControls !== 'undefined') {
+                        controls = new OrbitControls(camera, renderer.domElement);
+                    }
+                    if (controls) {
+                        controls.enableDamping = true;
+                        controls.dampingFactor = 0.05;
+                    }
+                } catch (err) { console.warn("Controls skipped"); }
+
+                // --- 坐标轴与标签 ---
+                // 1. 标准坐标轴
+                const axesHelper = new THREE.AxesHelper(12); // 加长一点以便放置标签
+                scene.add(axesHelper);
+
+                // 2. 添加 X, Y, Z 文字标签
+                const labelX = createTextLabel("X", "#cc0000"); // 红色
+                labelX.position.set(13, 0, 0);
+                scene.add(labelX);
+
+                const labelY = createTextLabel("Y", "#00aa00"); // 绿色
+                labelY.position.set(0, 13, 0);
+                scene.add(labelY);
+
+                const labelZ = createTextLabel("Z", "#0000cc"); // 蓝色
+                labelZ.position.set(0, 0, 13);
+                scene.add(labelZ);
+                
+                const gridHelper = new THREE.GridHelper(40, 40, 0xdddddd, 0xf5f5f5);
+                scene.add(gridHelper);
+
+                // 灯光
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+                scene.add(ambientLight);
+                const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+                dirLight.position.set(10, 20, 10);
+                scene.add(dirLight);
+
+                // 粒子
+                const sphereGeo = new THREE.SphereGeometry(0.5, 32, 32);
+                const sphereMat = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+                const particle = new THREE.Mesh(sphereGeo, sphereMat);
+                scene.add(particle);
+
+                // 箭头
+                vArrow = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), origin, 1, 0x0000ff, 0.8, 0.4);
+                scene.add(vArrow);
+
+                bMainArrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), origin, 1, 0x00cc00, 0.8, 0.4);
+                scene.add(bMainArrow);
+
+                fArrow = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), origin, 1, 0xff00ff, 1.0, 0.6);
+                fArrow.line.scale.set(2, 1, 2); 
+                scene.add(fArrow);
+
+                createBackgroundField();
+                window.addEventListener('resize', onWindowResize, false);
+                
+                animate();
+
+            } catch (e) {
+                showError("Init Failed: " + e.message);
+            }
+        }
+
+        function createBackgroundField() {
+            const spacing = 6; 
+            const range = 18;  
+            const initialDir = new THREE.Vector3(0, 1, 0);
+            
+            for (let x = -range; x <= range; x += spacing) {
+                for (let y = -range; y <= range; y += spacing) {
+                    for (let z = -range; z <= range; z += spacing) {
+                        if (Math.abs(x) < 2 && Math.abs(y) < 2 && Math.abs(z) < 2) continue;
+                        const pos = new THREE.Vector3(x, y, z);
+                        const arrow = new THREE.ArrowHelper(initialDir, pos, 1, 0x00cc00, 0.6, 0.3);
+                        // 兼容性透明度设置
+                        if(arrow.line.material) { arrow.line.material.transparent = true; arrow.line.material.opacity = 0.3; }
+                        if(arrow.cone.material) { arrow.cone.material.transparent = true; arrow.cone.material.opacity = 0.3; }
+                        scene.add(arrow);
+                        fieldArrowsGrid.push(arrow);
+                    }
+                }
+            }
+        }
+
+        function onWindowResize() {
+            if(!camera || !renderer) return;
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // 核心：更新物理向量
+        function updateVectors() {
+            if(!vArrow) return; 
+
+            // 1. 更新速度向量显示
+            const vLen = params.v.length();
+            if (vLen > 0.05) {
+                vArrow.visible = true;
+                vArrow.setDirection(params.v.clone().normalize());
+                vArrow.setLength(vLen, vLen * 0.2, vLen * 0.1); 
+            } else {
+                vArrow.visible = false;
+            }
+
+            // 2. 更新磁场向量显示
+            const bLen = Math.abs(params.B.y);
+            const bDir = params.B.clone().normalize();
+             if (bLen > 0.05) {
+                bMainArrow.visible = true;
+                bMainArrow.setDirection(bDir);
+                bMainArrow.setLength(bLen, bLen * 0.2, bLen * 0.1);
+            } else {
+                bMainArrow.visible = false;
+            }
+
+            // 3. 更新背景网格
+            const gridArrowLen = bLen * 0.8;
+            fieldArrowsGrid.forEach(arrow => {
+                if (bLen > 0.05) {
+                    arrow.visible = true;
+                    arrow.setDirection(bDir);
+                    arrow.setLength(gridArrowLen, gridArrowLen*0.25, gridArrowLen*0.12);
+                } else {
+                    arrow.visible = false;
+                }
+            });
+
+            // 4. 计算洛伦兹力 F = q(v x B)
+            let F = new THREE.Vector3().copy(params.v).cross(params.B);
+            F.multiplyScalar(params.q);
+
+            const fLen = F.length();
+            const outEl = document.getElementById('force-magnitude');
+            if(outEl) outEl.innerText = fLen.toFixed(2);
+
+            if (fLen > 0.05) {
+                fArrow.visible = true;
+                fArrow.setDirection(F.clone().normalize());
+                let visualLength = Math.min(fLen, 12); 
+                fArrow.setLength(visualLength, visualLength * 0.2, visualLength * 0.1);
+            } else {
+                fArrow.visible = false;
+            }
+        }
+
+        // --- 双向绑定逻辑：滑块 <-> 输入框 ---
+        function bindDualInput(rangeId, numId, paramKey, subKey) {
+            const rangeEl = document.getElementById(rangeId);
+            const numEl = document.getElementById(numId);
+            if(!rangeEl || !numEl) return;
+
+            // 滑块拖动 -> 更新输入框 -> 更新物理
+            rangeEl.addEventListener('input', () => {
+                numEl.value = rangeEl.value;
+                updateParam(paramKey, subKey, parseFloat(rangeEl.value));
+            });
+
+            // 输入框输入 -> 更新滑块 -> 更新物理
+            numEl.addEventListener('input', () => {
+                rangeEl.value = numEl.value; // 滑块会自动限制范围，但数值可以超出显示
+                updateParam(paramKey, subKey, parseFloat(numEl.value));
+            });
+        }
+
+        function updateParam(key, subKey, value) {
+            if (isNaN(value)) return;
+            if (subKey) {
+                params[key][subKey] = value;
+            } else {
+                params[key] = value;
+            }
+            updateVectors();
+        }
+
+        function initInputs() {
+            // 绑定所有控件对
+            bindDualInput('range-q', 'num-q', 'q', null);
+            bindDualInput('range-b', 'num-b', 'B', 'y');
+            bindDualInput('range-vx', 'num-vx', 'v', 'x');
+            bindDualInput('range-vy', 'num-vy', 'v', 'y');
+            bindDualInput('range-vz', 'num-vz', 'v', 'z');
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            if (renderer && scene && camera) renderer.render(scene, camera);
+        }
+
+        window.onload = function() {
+            initThree();
+            initInputs();
+            updateVectors();
+        };
+
+    </script>
+</body>
+</html>

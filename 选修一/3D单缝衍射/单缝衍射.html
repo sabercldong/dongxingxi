@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>单缝衍射 3D 模拟 (颜色同步版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        /* 主容器 */
+        #container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧功能区 */
+        #sidebar {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 300px;
+            height: 100%;
+            background: rgba(30, 30, 30, 0.9);
+            color: #fff;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto; /* 滚轮支持 */
+            border-left: 1px solid #444;
+            transition: transform 0.3s;
+            z-index: 200;
+        }
+
+        /* 左上角可拖动图表容器 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 400px;
+            height: 250px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            cursor: grab;
+            z-index: 100;
+        }
+        #chart-wrapper:active { cursor: grabbing; }
+
+        /* 控件样式 */
+        .control-group { margin-bottom: 20px; border-bottom: 1px solid #555; padding-bottom: 15px; }
+        .control-group h3 { margin-top: 0; font-size: 16px; color: #4db8ff; }
+        label { display: block; margin-top: 10px; font-size: 14px; }
+        input[type="range"] { width: 100%; margin: 5px 0; cursor: pointer; }
+        .value-display { float: right; color: #aaa; font-size: 12px; }
+
+        /* 按钮组 */
+        .btn-group { display: flex; gap: 10px; margin-bottom: 20px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        #btn-start { background-color: #28a745; color: white; }
+        #btn-pause { background-color: #ffc107; color: black; }
+        #btn-reset { background-color: #dc3545; color: white; }
+        button:hover { opacity: 0.9; }
+
+    </style>
+</head>
+<body>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+    <script src="./chart.min.js"></script>
+
+    <div id="container"></div>
+
+    <div id="chart-wrapper">
+        <canvas id="diffractionChart"></canvas>
+    </div>
+
+    <div id="sidebar">
+        <h2>单缝衍射控制台</h2>
+        <div class="btn-group">
+            <button id="btn-start">开始</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">还原</button>
+        </div>
+
+        <div class="control-group">
+            <h3>参数设置</h3>
+            
+            <label>
+                波长 (nm): <span id="val-wavelength" class="value-display">600</span>
+                <input type="range" id="wavelength" min="380" max="750" step="5" value="600">
+            </label>
+
+            <label>
+                缝宽 a (μm): <span id="val-slit" class="value-display">10</span>
+                <input type="range" id="slitWidth" min="2" max="50" step="0.5" value="10">
+            </label>
+
+            <label>
+                屏幕距离 D (m): <span id="val-distance" class="value-display">1.0</span>
+                <input type="range" id="distance" min="0.5" max="3.0" step="0.1" value="1.0">
+            </label>
+            
+            <label>
+                光强增益: <span id="val-intensity" class="value-display">1.0</span>
+                <input type="range" id="intensity" min="0.1" max="5.0" step="0.1" value="1.0">
+            </label>
+        </div>
+        
+        <div style="font-size: 12px; color: #888; margin-top: 20px;">
+            <p>操作说明：</p>
+            <ul>
+                <li><strong>光源颜色随波长改变</strong></li>
+                <li>左键拖动旋转视角</li>
+                <li>右键拖动平移</li>
+                <li>滚轮缩放</li>
+                <li>左上角图表可拖拽移动</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let slitMeshLeft, slitMeshRight, screenMesh, lightRays, sourceMesh;
+        let chartInstance;
+        let isAnimating = true;
+        let animationTime = 0;
+        
+        // 物理参数
+        const params = {
+            wavelength: 600, // nm
+            slitWidth: 10,   // micrometer
+            distance: 1.0,   // meter
+            baseIntensity: 1.0
+        };
+
+        // DOM 元素
+        const elContainer = document.getElementById('container');
+        const elChartWrapper = document.getElementById('chart-wrapper');
+
+        // ================= 初始化程序 =================
+        function init() {
+            initThree();
+            initObjects();
+            initChart();
+            initListeners();
+            initDraggable();
+            // 初始化颜色
+            updateAllColors(); 
+            animate();
+        }
+
+        // ================= Three.js 场景设置 =================
+        function initThree() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x000000, 0.002);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(-2.5, 1.5, 3.5); 
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            elContainer.appendChild(renderer.domElement);
+
+            if (typeof THREE.OrbitControls === 'function') {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+                controls.screenSpacePanning = true;
+            } else {
+                alert("OrbitControls 未加载，请检查文件名。");
+            }
+
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+        }
+
+        // ================= 3D 物体构建 =================
+        function initObjects() {
+            // 1. 光源 (球体)
+            const sourceGeo = new THREE.SphereGeometry(0.15, 32, 32);
+            // 材质颜色将在 updateAllColors 中设置
+            const sourceMat = new THREE.MeshBasicMaterial({ color: 0xffffff }); 
+            sourceMesh = new THREE.Mesh(sourceGeo, sourceMat);
+            sourceMesh.position.set(0, 0, -2);
+            
+            // 添加一个点光源让周围的物体有一点光泽
+            const pointLight = new THREE.PointLight(0xffffff, 1, 10);
+            sourceMesh.add(pointLight); // 点光源跟随球体
+            
+            scene.add(sourceMesh);
+
+            // 2. 挡板 (Slit)
+            const slitMat = new THREE.MeshPhongMaterial({ 
+                color: 0x222222, 
+                side: THREE.DoubleSide,
+                specular: 0x111111,
+                shininess: 50
+            });
+            const slitGeo = new THREE.PlaneGeometry(2, 4);
+
+            slitMeshLeft = new THREE.Mesh(slitGeo, slitMat);
+            slitMeshRight = new THREE.Mesh(slitGeo, slitMat);
+            
+            updateSlitGeometry();
+            scene.add(slitMeshLeft);
+            scene.add(slitMeshRight);
+
+            // 3. 接收屏 (Screen)
+            const screenGeo = new THREE.PlaneGeometry(4, 2, 64, 64);
+            
+            // Shader Uniforms
+            const screenUniforms = {
+                uColor: { value: new THREE.Color(0xffffff) },
+                uWavelength: { value: params.wavelength }, 
+                uSlitWidth: { value: params.slitWidth },   
+                uDistance: { value: params.distance },     
+                uIntensity: { value: params.baseIntensity }
+            };
+
+            const screenMat = new THREE.ShaderMaterial({
+                uniforms: screenUniforms,
+                side: THREE.DoubleSide,
+                transparent: true, // 允许透明以便与背景融合
+                vertexShader: `
+                    varying vec2 vUv;
+                    varying vec3 vPos;
+                    void main() {
+                        vUv = uv;
+                        vPos = position;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform vec3 uColor;
+                    uniform float uWavelength;
+                    uniform float uSlitWidth;
+                    uniform float uDistance;
+                    uniform float uIntensity;
+                    varying vec3 vPos;
+
+                    void main() {
+                        float x = vPos.x;
+                        float dist = sqrt(x*x + uDistance*uDistance);
+                        float sinTheta = x / dist;
+                        
+                        // 计算 beta (注意单位归一化)
+                        // slit(um) * 1000 -> nm
+                        float k = 3.14159 * (uSlitWidth * 1000.0) * sinTheta / uWavelength;
+                        
+                        float I = 1.0;
+                        if (abs(k) > 0.001) {
+                            I = pow(sin(k) / k, 2.0);
+                        }
+                        
+                        vec3 finalColor = uColor * I * uIntensity;
+                        
+                        // 简单的网格背景
+                        float grid = 0.0;
+                        if (mod(vPos.x, 0.5) < 0.01 || mod(vPos.y, 0.5) < 0.01) grid = 0.15;
+                        
+                        // 屏幕底色 + 衍射光
+                        gl_FragColor = vec4(finalColor + vec3(grid), 0.9);
+                    }
+                `
+            });
+
+            screenMesh = new THREE.Mesh(screenGeo, screenMat);
+            screenMesh.position.set(0, 0, params.distance); 
+            screenMesh.userData = { uniforms: screenUniforms };
+            scene.add(screenMesh);
+
+            // 4. 光线模拟 (Rays)
+            const rayCount = 150;
+            const geometry = new THREE.BufferGeometry();
+            const positions = new Float32Array(rayCount * 6); 
+            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            
+            const material = new THREE.LineBasicMaterial({ 
+                color: 0xffffff, // 初始白色，稍后更新
+                transparent: true, 
+                opacity: 0.4 
+            });
+            lightRays = new THREE.LineSegments(geometry, material);
+            lightRays.frustumCulled = false; 
+            scene.add(lightRays);
+        }
+
+        // ================= 核心逻辑：颜色同步 =================
+        function updateAllColors() {
+            const colorHex = wavelengthToColor(params.wavelength);
+            const colorObj = new THREE.Color(colorHex);
+
+            // 1. 更新光源球体颜色
+            if (sourceMesh) {
+                sourceMesh.material.color = colorObj;
+                // 同时更新球体上的点光源颜色
+                sourceMesh.children[0].color = colorObj;
+            }
+
+            // 2. 更新光线颜色
+            if (lightRays) {
+                lightRays.material.color = colorObj;
+            }
+
+            // 3. 更新屏幕 Shader 颜色
+            if (screenMesh) {
+                screenMesh.userData.uniforms.uColor.value = colorObj;
+            }
+
+            // 4. 更新图表曲线颜色
+            if (chartInstance) {
+                chartInstance.data.datasets[0].borderColor = colorHex;
+                // 图表背景稍微带点颜色（可选）
+                chartInstance.data.datasets[0].backgroundColor = colorHex + '33'; // 加点透明度
+                chartInstance.update();
+            }
+        }
+
+        function updateSlitGeometry() {
+            const displayGap = params.slitWidth / 50.0; 
+            slitMeshLeft.position.set(-(1 + displayGap/2), 0, 0);
+            slitMeshRight.position.set((1 + displayGap/2), 0, 0);
+        }
+
+        function updateScreenUniforms() {
+            if(screenMesh) {
+                screenMesh.position.z = params.distance;
+                screenMesh.userData.uniforms.uWavelength.value = params.wavelength;
+                screenMesh.userData.uniforms.uSlitWidth.value = params.slitWidth;
+                screenMesh.userData.uniforms.uDistance.value = params.distance;
+                screenMesh.userData.uniforms.uIntensity.value = params.baseIntensity;
+            }
+        }
+
+        function updateRays() {
+            if (!isAnimating) return;
+
+            const positions = lightRays.geometry.attributes.position.array;
+            const displayGap = params.slitWidth / 50.0;
+            
+            for (let i = 0; i < positions.length / 6; i++) {
+                // 起点
+                const startX = (Math.random() - 0.5) * displayGap;
+                const startY = (Math.random() - 0.5) * 2;
+                const startZ = 0;
+
+                // 终点 (使用概率分布)
+                let targetX, intensity;
+                let attempts = 0;
+                do {
+                    targetX = (Math.random() - 0.5) * 4; 
+                    const theta = Math.atan(targetX / params.distance);
+                    const beta = (Math.PI * (params.slitWidth * 1000) * Math.sin(theta)) / params.wavelength;
+                    intensity = (beta === 0) ? 1 : Math.pow(Math.sin(beta)/beta, 2);
+                    attempts++;
+                } while (Math.random() > intensity && attempts < 8);
+
+                const targetY = startY * (params.distance + 2) / 2;
+                const targetZ = params.distance;
+
+                // 简单的粒子流动特效
+                const speed = 0.05;
+                const offset = (Date.now() * 0.001 * speed + i * 0.1) % 1;
+                
+                // 线段不仅随机，而且起点终点稍微动一动
+                const idx = i * 6;
+                positions[idx] = startX;
+                positions[idx+1] = startY;
+                positions[idx+2] = startZ;
+                
+                positions[idx+3] = targetX;
+                positions[idx+4] = targetY;
+                positions[idx+5] = targetZ;
+            }
+            lightRays.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // ================= Chart.js 图表 =================
+        function initChart() {
+            const ctx = document.getElementById('diffractionChart').getContext('2d');
+            
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [], 
+                    datasets: [{
+                        label: '相对光强 (I/I₀)',
+                        data: [],
+                        borderColor: '#ff0000',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        fill: true, // 开启填充
+                        backgroundColor: 'rgba(255, 0, 0, 0.1)',
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: {
+                        x: { 
+                            title: { display: true, text: '位置 x (cm)' },
+                            ticks: { maxTicksLimit: 8 }
+                        },
+                        y: { 
+                            min: 0, max: 1.1,
+                            title: { display: true, text: '强度' }
+                        }
+                    },
+                    plugins: {
+                        legend: { labels: { boxWidth: 10 } }
+                    }
+                }
+            });
+
+            updateChartData();
+        }
+
+        function updateChartData() {
+            const dataPoints = [];
+            const labels = [];
+            const range = 2.0; 
+            const steps = 100;
+            
+            for (let i = 0; i <= steps; i++) {
+                const x = -range + (range * 2 * i) / steps;
+                const theta = Math.atan(x / params.distance);
+                const beta = (Math.PI * (params.slitWidth * 1000) * Math.sin(theta)) / params.wavelength;
+                let I = 0;
+                if (Math.abs(beta) < 0.0001) I = 1;
+                else I = Math.pow(Math.sin(beta)/beta, 2);
+                
+                labels.push(x.toFixed(2));
+                dataPoints.push(I);
+            }
+
+            chartInstance.data.labels = labels;
+            chartInstance.data.datasets[0].data = dataPoints;
+            chartInstance.update();
+        }
+
+        // ================= 物理：波长转 RGB 颜色 =================
+        function wavelengthToColor(wavelength) {
+            let R, G, B;
+            if (wavelength >= 380 && wavelength < 440) {
+                R = -1 * (wavelength - 440) / (440 - 380); G = 0; B = 1;
+            } else if (wavelength >= 440 && wavelength < 490) {
+                R = 0; G = (wavelength - 440) / (490 - 440); B = 1;
+            } else if (wavelength >= 490 && wavelength < 510) {
+                R = 0; G = 1; B = -1 * (wavelength - 510) / (510 - 490);
+            } else if (wavelength >= 510 && wavelength < 580) {
+                R = (wavelength - 510) / (580 - 510); G = 1; B = 0;
+            } else if (wavelength >= 580 && wavelength < 645) {
+                R = 1; G = -1 * (wavelength - 645) / (645 - 580); B = 0;
+            } else if (wavelength >= 645 && wavelength <= 750) {
+                R = 1; G = 0; B = 0;
+            } else {
+                R = 0; G = 0; B = 0;
+            }
+            
+            // 简单 gamma 校正让颜色更亮
+            const gamma = 0.8;
+            R = Math.pow(R, gamma);
+            G = Math.pow(G, gamma);
+            B = Math.pow(B, gamma);
+
+            const toHex = (c) => {
+                const hex = Math.round(c * 255).toString(16);
+                return hex.length == 1 ? "0" + hex : hex;
+            };
+            return "#" + toHex(R) + toHex(G) + toHex(B);
+        }
+
+        // ================= UI 交互 =================
+        function initListeners() {
+            const bindSlider = (id, paramKey, displayId, needsColorUpdate = false) => {
+                const el = document.getElementById(id);
+                el.addEventListener('input', (e) => {
+                    params[paramKey] = parseFloat(e.target.value);
+                    document.getElementById(displayId).textContent = params[paramKey];
+                    
+                    if (needsColorUpdate) updateAllColors();
+                    updateSlitGeometry();
+                    updateScreenUniforms();
+                    updateChartData();
+                });
+            };
+
+            bindSlider('wavelength', 'wavelength', 'val-wavelength', true); // 需要更新颜色
+            bindSlider('slitWidth', 'slitWidth', 'val-slit');
+            bindSlider('distance', 'distance', 'val-distance');
+            bindSlider('intensity', 'baseIntensity', 'val-intensity');
+
+            document.getElementById('btn-start').addEventListener('click', () => { isAnimating = true; lightRays.visible = true; });
+            document.getElementById('btn-pause').addEventListener('click', () => { isAnimating = false; });
+            document.getElementById('btn-reset').addEventListener('click', () => {
+                params.wavelength = 600;
+                params.slitWidth = 10;
+                params.distance = 1.0;
+                params.baseIntensity = 1.0;
+                
+                document.getElementById('wavelength').value = 600;
+                document.getElementById('val-wavelength').textContent = 600;
+                document.getElementById('slitWidth').value = 10;
+                document.getElementById('val-slit').textContent = 10;
+                document.getElementById('distance').value = 1.0;
+                document.getElementById('val-distance').textContent = 1.0;
+                document.getElementById('intensity').value = 1.0;
+                document.getElementById('val-intensity').textContent = 1.0;
+
+                camera.position.set(-2.5, 1.5, 3.5);
+                controls.reset();
+                
+                updateAllColors(); // 重置颜色
+                updateSlitGeometry();
+                updateScreenUniforms();
+                updateChartData();
+                isAnimating = true;
+                lightRays.visible = true;
+            });
+            
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        // ================= 拖拽逻辑 =================
+        function initDraggable() {
+            let isDragging = false;
+            let startX, startY, initialLeft, initialTop;
+
+            elChartWrapper.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                initialLeft = elChartWrapper.offsetLeft;
+                initialTop = elChartWrapper.offsetTop;
+                e.preventDefault();
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const dx = e.clientX - startX;
+                const dy = e.clientY - startY;
+                elChartWrapper.style.left = `${initialLeft + dx}px`;
+                elChartWrapper.style.top = `${initialTop + dy}px`;
+            });
+
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            
+            if (isAnimating) {
+                animationTime += 0.01;
+                if(lightRays) {
+                    lightRays.material.opacity = 0.4 + Math.sin(animationTime * 5) * 0.1;
+                    updateRays();
+                }
+            }
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

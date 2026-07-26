@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>单粒子逐个扫描 - 磁场边界演示</title>
+    <style>
+        /* --- 布局核心样式 --- */
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh; /* 强制单屏高度 */
+            overflow: hidden; /* 禁止整个网页滚动 */
+            display: flex; /* 启用左右分栏 */
+            background-color: #f0f2f5;
+        }
+
+        /* --- 左侧：演示区域 --- */
+        .simulation-area {
+            flex: 1; /* 自动占据剩余宽度 */
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #e9ecef;
+            padding: 20px;
+            box-sizing: border-box;
+            position: relative;
+            
+            /* 【关键修复 1】允许 Flex 子项收缩，防止撑破布局 */
+            min-width: 0; 
+        }
+
+        .canvas-box {
+            position: relative;
+            
+            /* 【关键修复 2】响应式宽度设定 */
+            width: 100%;         /* 默认占满父容器 */
+            max-width: 800px;    /* 但最大不超过 800px */
+            
+            /* 【关键修复 3】锁定 16:9 比例 (800/450)，确保物理画面不变形 */
+            aspect-ratio: 16 / 9; 
+            
+            border: 2px solid #333;
+            background-color: #fff;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            
+            /* 防止高度溢出 */
+            max-height: 100%;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            /* 强制 Canvas 元素填满容器，内部分辨率依然是 800x450 */
+            width: 100%; 
+            height: 100%;
+        }
+
+        /* --- 右侧：功能控制区 --- */
+        .sidebar {
+            width: 320px; /* 固定宽度 */
+            min-width: 300px;
+            height: 100%;
+            background: white;
+            border-left: 1px solid #ddd;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.05);
+            padding: 30px 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            
+            /* 允许侧边栏内容过多时出现滚动条 */
+            overflow-y: auto; 
+            z-index: 10; /* 提高层级，防止意外遮挡 */
+        }
+
+        h2 {
+            color: #333;
+            font-size: 1.4rem;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+            display: inline-block;
+        }
+
+        .info-panel {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 25px;
+            border: 1px solid #eee;
+        }
+
+        .info-text {
+            font-size: 16px;
+            color: #333;
+            font-weight: bold;
+            margin: 0;
+        }
+
+        /* --- 控件样式 --- */
+        .controls-group {
+            display: flex;
+            flex-direction: column; /* 垂直排列按钮 */
+            gap: 15px;
+        }
+
+        .control-item {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        label {
+            font-size: 14px;
+            color: #666;
+            font-weight: 600;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        button {
+            padding: 12px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+            transition: background 0.2s;
+            width: 100%; /* 按钮充满侧边栏宽度 */
+            font-weight: 500;
+        }
+
+        button:hover { background-color: #0056b3; }
+        
+        button.pause { background-color: #6c757d; }
+        button.pause:hover { background-color: #5a6268; }
+
+        button.reset { background-color: #dc3545; margin-top: 10px; }
+        button.reset:hover { background-color: #c82333; }
+
+        /* 美化滚动条 (Chrome/Safari) */
+        .sidebar::-webkit-scrollbar { width: 8px; }
+        .sidebar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .sidebar::-webkit-scrollbar-thumb { background: #ccc; border-radius: 4px; }
+        .sidebar::-webkit-scrollbar-thumb:hover { background: #aaa; }
+
+    </style>
+</head>
+<body>
+
+    <div class="simulation-area">
+        <div class="canvas-box">
+            <canvas id="bgCanvas" width="800" height="450"></canvas>
+            <canvas id="animCanvas" width="800" height="450"></canvas>
+        </div>
+    </div>
+
+    <div class="sidebar">
+        <h2>单粒子扫描演示</h2>
+        
+        <div class="info-panel">
+            <label>当前状态：</label>
+            <div class="info-text" id="statusInfo">准备就绪</div>
+        </div>
+
+        <div class="controls-group">
+            <div class="control-item">
+                <label for="speedRange">扫描/运动速度 (1-10)</label>
+                <input type="range" id="speedRange" min="1" max="10" value="5">
+            </div>
+
+            <button onclick="startScan()">开始扫描</button>
+            <button class="pause" onclick="pauseScan()">暂停</button>
+            <button class="reset" onclick="resetScan()">重置系统</button>
+        </div>
+
+        <div style="margin-top: 30px; color: #888; font-size: 13px; line-height: 1.6;">
+            <p><strong>操作说明：</strong></p>
+            <ul>
+                <li>点击“开始扫描”启动自动角度变化。</li>
+                <li>粒子从 0° (水平向右) 到 180° (水平向左) 依次发射。</li>
+                <li>每次发射间隔会自动等待上一粒子消失。</li>
+                <li>通过滑块调节运动的快慢。</li>
+            </ul>
+        </div>
+        <div style="height: 50px;"></div>
+    </div>
+
+    <script>
+        // --- 核心逻辑完全保持不变 ---
+        const bgCanvas = document.getElementById('bgCanvas');
+        const animCanvas = document.getElementById('animCanvas');
+        const ctxBg = bgCanvas.getContext('2d');
+        const ctxAnim = animCanvas.getContext('2d');
+
+        // --- 物理参数 (基于 800x450 的坐标系) ---
+        const R = 120; // 粒子圆周运动半径 (像素)
+        const OX = 400; // 发射点原点 X
+        const OY = 380; // 发射点原点 Y (平板位置)
+        
+        // --- 运行状态 ---
+        let isRunning = false;
+        let animationId;
+        let currentAngle = 0; // 当前发射角度 (0度=水平向右, 180度=水平向左)
+        let particle = null;  // 当前存在的唯一粒子对象
+
+        // 粒子类
+        class Particle {
+            constructor(angleDeg) {
+                this.angleDeg = angleDeg;
+                // 将角度转换为弧度。注意：物理y轴向上，Canvas y轴向下。
+                // 0度向右 -> Canvas (1, 0)
+                // 90度向上 -> Canvas (0, -1)
+                const rad = angleDeg * Math.PI / 180;
+                
+                this.x = OX;
+                this.y = OY;
+                
+                // 初始速度单位向量
+                this.vx = Math.cos(rad);   // 向右为正
+                this.vy = -Math.sin(rad);  // 向上为负(Canvas坐标)
+                
+                this.path = [{x: this.x, y: this.y}]; // 记录本次路径用于最后绘制
+                this.isDead = false;
+            }
+
+            update(speed) {
+                if (this.isDead) return;
+
+                // 匀速圆周运动逻辑：
+                // 每一帧，速度向量逆时针旋转一个小角度 dTheta
+                // 线速度 v 恒定，角速度 w = v/R
+                const omega = speed / R; 
+                
+                // 旋转向量 (逆时针)
+                // x' = x cos(θ) - y sin(θ)
+                // y' = x sin(θ) + y cos(θ)
+                // 在Canvas坐标系中，y向下。物理逆时针旋转在Canvas也是逆时针（数值计算一致）
+                const cos = Math.cos(-omega); // 注意符号，让它看起来是逆时针打转
+                const sin = Math.sin(-omega);
+
+                const nextVx = this.vx * cos - this.vy * sin;
+                const nextVy = this.vx * sin + this.vy * cos;
+                
+                this.vx = nextVx;
+                this.vy = nextVy;
+
+                // 更新位置
+                this.x += this.vx * speed;
+                this.y += this.vy * speed;
+
+                this.path.push({x: this.x, y: this.y});
+
+                // 碰撞检测：如果碰到平板 (y > OY) 且不是刚发射那几帧
+                if (this.path.length > 5 && this.y >= OY) {
+                    this.isDead = true;
+                    this.y = OY; // 修正到板上
+                }
+                
+                // 边界检测：防止无限跑
+                if (this.x < -50 || this.x > 850 || this.y < -50) {
+                    this.isDead = true;
+                }
+            }
+
+            draw(ctx) {
+                // 画当前粒子点
+                ctx.beginPath();
+                ctx.fillStyle = "red";
+                ctx.arc(this.x, this.y, 5, 0, Math.PI * 2);
+                ctx.fill();
+
+                // 画当前拖尾 (实时的亮线)
+                ctx.beginPath();
+                ctx.strokeStyle = "red";
+                ctx.lineWidth = 2;
+                if(this.path.length > 0) {
+                    ctx.moveTo(this.path[0].x, this.path[0].y);
+                    for(let p of this.path) ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+            }
+
+            // 当粒子死掉时，把它的轨迹“印”在背景层上
+            stampToBackground(ctx) {
+                ctx.beginPath();
+                // 使用半透明蓝色，表示累积区域
+                ctx.strokeStyle = "rgba(0, 100, 255, 0.15)"; 
+                ctx.lineWidth = 2;
+                if(this.path.length > 0) {
+                    ctx.moveTo(this.path[0].x, this.path[0].y);
+                    for(let p of this.path) ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+            }
+        }
+
+        // --- 绘图与逻辑 ---
+
+        function drawStaticBackground() {
+            // 清空背景层
+            ctxBg.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+            
+            // 1. 画磁场 (×)
+            ctxBg.fillStyle = "#ccc";
+            ctxBg.font = "14px Arial";
+            ctxBg.textAlign = "center";
+            ctxBg.textBaseline = "middle";
+            for (let x = 30; x < bgCanvas.width; x += 50) {
+                for (let y = 30; y < OY; y += 50) {
+                    ctxBg.fillText("×", x, y);
+                }
+            }
+
+            // 2. 画平板 MN
+            ctxBg.beginPath();
+            ctxBg.strokeStyle = "black";
+            ctxBg.lineWidth = 4;
+            ctxBg.moveTo(0, OY);
+            ctxBg.lineTo(bgCanvas.width, OY);
+            ctxBg.stroke();
+
+            // 3. 标记点
+            ctxBg.fillStyle = "black";
+            ctxBg.beginPath();
+            ctxBg.arc(OX, OY, 4, 0, Math.PI*2);
+            ctxBg.fill();
+            ctxBg.fillText("O", OX, OY + 15);
+            ctxBg.fillText("M", 20, OY + 20);
+            ctxBg.fillText("N", 780, OY + 20);
+        }
+
+        function loop() {
+            if (!isRunning) return;
+
+            const speed = parseInt(document.getElementById('speedRange').value);
+            
+            // 清除动画层 (只清除运动的粒子，不清除背景轨迹)
+            ctxAnim.clearRect(0, 0, animCanvas.width, animCanvas.height);
+
+            // 逻辑：如果没有粒子，或者当前粒子死了，就发射下一个
+            if (particle === null) {
+                if (currentAngle <= 180) {
+                    particle = new Particle(currentAngle);
+                    document.getElementById('statusInfo').innerText = `当前发射角度: ${currentAngle}°`;
+                } else {
+                    document.getElementById('statusInfo').innerText = "扫描完成";
+                    isRunning = false;
+                    return; // 结束
+                }
+            }
+
+            if (particle) {
+                // 更新位置
+                particle.update(speed);
+                // 绘制当前粒子
+                particle.draw(ctxAnim);
+
+                // 如果粒子这一帧死了
+                if (particle.isDead) {
+                    // 把轨迹印在背景上
+                    particle.stampToBackground(ctxBg);
+                    // 销毁粒子对象
+                    particle = null;
+                    // 增加角度，准备下一发
+                    currentAngle += 3; // 每次偏转3度
+                }
+            }
+
+            animationId = requestAnimationFrame(loop);
+        }
+
+        // --- 按钮功能 ---
+        function startScan() {
+            if (isRunning) return;
+            // 如果已经跑完了，重置再跑
+            if (currentAngle > 180) resetScan();
+            
+            isRunning = true;
+            loop();
+        }
+
+        function pauseScan() {
+            isRunning = false;
+            cancelAnimationFrame(animationId);
+        }
+
+        function resetScan() {
+            isRunning = false;
+            cancelAnimationFrame(animationId);
+            particle = null;
+            currentAngle = 0;
+            ctxAnim.clearRect(0, 0, animCanvas.width, animCanvas.height);
+            drawStaticBackground(); // 重画背景（同时也清除了之前印上去的轨迹）
+            document.getElementById('statusInfo').innerText = "已重置";
+        }
+
+        // 初始化
+        drawStaticBackground();
+
+    </script>
+</body>
+</html>

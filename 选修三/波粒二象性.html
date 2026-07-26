@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>波粒二象性：双缝干涉演示</title>
+    <style>
+        :root {
+            --bg-color: #080808;
+            --panel-bg: #181818;
+            --text-main: #e0e0e0;
+            --text-sub: #9ca3af;
+            --accent-cyan: #22d3ee; /* 量子波 */
+            --accent-gold: #fbbf24; /* 观测者 */
+            --border: #333;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh;
+            width: 100vw;
+            display: flex; /* 使用 Flex 布局 */
+            flex-direction: row; /* 显式声明横向排列 */
+            overflow: hidden; /* 禁止滚动 */
+        }
+
+        /* === 左侧：仿真画布区域 === */
+        #sim-container {
+            flex: 1; /* 自动占据剩余所有空间 */
+            position: relative;
+            background: radial-gradient(circle at 30% 50%, #1a1a1a 0%, #000 80%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            order: 1; /* 确保在左侧 */
+            min-width: 0; /* 防止被内容撑大 */
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 观测者（眼睛）图标 */
+        #observer-eye {
+            position: absolute;
+            top: 38%; /* 放在缝隙上方 */
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 3rem;
+            opacity: 0;
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            pointer-events: none;
+            filter: drop-shadow(0 0 15px var(--accent-gold));
+        }
+        #observer-eye.active {
+            opacity: 1;
+            transform: translate(-50%, 0) scale(1);
+        }
+
+        /* 状态浮层 */
+        .status-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #333;
+            font-size: 0.9rem;
+            color: var(--text-sub);
+            pointer-events: none;
+        }
+        .status-overlay strong { color: #fff; }
+
+        /* === 右侧：功能控制区 === */
+        #sidebar {
+            width: 320px; /* 固定宽度 */
+            min-width: 320px;
+            height: 100vh;
+            background-color: var(--panel-bg);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            box-shadow: -5px 0 20px rgba(0,0,0,0.5);
+            z-index: 100; /* 确保层级最高 */
+            order: 2; /* 确保在右侧 */
+            flex-shrink: 0; /* 禁止宽度被压缩 */
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(255,255,255,0.02);
+        }
+        .sidebar-header h2 {
+            margin: 0;
+            font-size: 1.2rem;
+            color: #fff;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto; /* 允许内部滚动 */
+            padding: 20px;
+        }
+
+        /* 控件组 */
+        .control-group {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+
+        .group-title {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #666;
+            margin-bottom: 12px;
+            font-weight: 600;
+        }
+
+        /* 单选按钮样式 */
+        .radio-option {
+            display: flex;
+            align-items: center;
+            margin-bottom: 10px;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        .radio-option:hover { background: rgba(255,255,255,0.05); }
+        .radio-option input { margin-right: 12px; accent-color: var(--accent-cyan); }
+        .radio-info { display: flex; flex-direction: column; }
+        .radio-label { font-size: 0.95rem; color: #ddd; }
+        .radio-desc { font-size: 0.75rem; color: #777; margin-top: 2px; }
+
+        /* 切换开关 */
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .toggle-label { font-size: 0.9rem; color: #ddd; }
+        
+        /* 按钮 */
+        button.btn-reset {
+            width: 100%;
+            padding: 12px;
+            background: #262626;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        button.btn-reset:hover { background: #333; border-color: #666; }
+        button.btn-reset:active { transform: translateY(1px); }
+
+        /* 说明区域 */
+        .info-panel {
+            margin-top: auto;
+            border-top: 1px solid var(--border);
+            padding-top: 15px;
+            font-size: 0.85rem;
+            color: #888;
+            line-height: 1.6;
+        }
+        .highlight { color: var(--accent-cyan); font-weight: bold; }
+        .warn { color: var(--accent-gold); font-weight: bold; }
+
+    </style>
+</head>
+<body>
+
+    <main id="sim-container">
+        <canvas id="mainCanvas"></canvas>
+        <div id="observer-eye">👁️</div>
+        <div class="status-overlay">
+            模式: <strong id="status-mode">量子叠加态</strong> | 
+            探测器: <strong id="status-obs" style="color:#666">关闭</strong>
+        </div>
+    </main>
+
+    <aside id="sidebar">
+        <div class="sidebar-header">
+            <h2>⚛️ 波粒二象性</h2>
+        </div>
+
+        <div class="sidebar-content">
+            
+            <div class="control-group">
+                <div class="group-title">物质形态 (Mode)</div>
+                
+                <label class="radio-option">
+                    <input type="radio" name="mode" value="particle" onclick="switchMode('particle')">
+                    <div class="radio-info">
+                        <span class="radio-label">经典粒子 (Particle)</span>
+                        <span class="radio-desc">像子弹一样，无干涉</span>
+                    </div>
+                </label>
+
+                <label class="radio-option">
+                    <input type="radio" name="mode" value="wave" onclick="switchMode('wave')">
+                    <div class="radio-info">
+                        <span class="radio-label">经典波动 (Wave)</span>
+                        <span class="radio-desc">像水波一样，完全干涉</span>
+                    </div>
+                </label>
+
+                <label class="radio-option">
+                    <input type="radio" name="mode" value="quantum" checked onclick="switchMode('quantum')">
+                    <div class="radio-info">
+                        <span class="radio-label">量子力学 (Quantum)</span>
+                        <span class="radio-desc">单个电子的概率波干涉</span>
+                    </div>
+                </label>
+            </div>
+
+            <div class="control-group">
+                <div class="group-title">实验环境 (Environment)</div>
+                
+                <div class="toggle-row">
+                    <div class="toggle-label">
+                        探测器 (Observer)<br>
+                        <span style="font-size:0.75rem; color:#666">观测通过了哪个缝</span>
+                    </div>
+                    <input type="checkbox" id="obs-toggle" onchange="toggleObserver()">
+                </div>
+
+                <div class="toggle-row">
+                    <div class="toggle-label">发射速度</div>
+                    <input type="range" id="speed-range" min="1" max="10" value="5" style="width:100px;">
+                </div>
+
+                <button class="btn-reset" onclick="resetExperiment()">清除屏幕 & 重置</button>
+            </div>
+
+            <div class="info-panel" id="info-text">
+                <p><strong>当前现象：</strong></p>
+                <p>即使电子是一个个发射的，如果不去观测它，它就像波一样同时穿过两个缝隙，在屏幕上形成<span class="highlight">明暗相间的干涉条纹</span>。</p>
+            </div>
+        </div>
+    </aside>
+
+<script>
+    // === 初始化画布 ===
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // === 状态变量 ===
+    let width, height;
+    let particles = [];
+    let screenPixels = []; // 记录屏幕击中次数
+    let mode = 'quantum';  // 'particle', 'wave', 'quantum'
+    let observerActive = false;
+    let frameCount = 0;
+
+    // 物理参数
+    const CONFIG = {
+        barrierX: 0.5,     // 挡板在宽度的 50% 处
+        slitGap: 100,      // 双缝间距
+        slitWidth: 15,     // 缝宽
+        wavelength: 25,    // 模拟波长
+        screenX: 0.95      // 屏幕位置
+    };
+
+    // === 生命周期 ===
+    function init() {
+        window.addEventListener('resize', resize);
+        resize();
+        animate();
+    }
+
+    function resize() {
+        width = canvas.parentElement.clientWidth;
+        height = canvas.parentElement.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+        resetExperiment();
+    }
+
+    function resetExperiment() {
+        particles = [];
+        // 重置屏幕数据
+        screenPixels = new Array(height).fill(0);
+    }
+
+    // === 交互逻辑 ===
+    function switchMode(newMode) {
+        mode = newMode;
+        resetExperiment();
+        updateUI();
+    }
+
+    function toggleObserver() {
+        observerActive = document.getElementById('obs-toggle').checked;
+        const eye = document.getElementById('observer-eye');
+        if (observerActive) eye.classList.add('active');
+        else eye.classList.remove('active');
+        
+        updateUI();
+    }
+
+    function updateUI() {
+        const info = document.getElementById('info-text');
+        const statusMode = document.getElementById('status-mode');
+        const statusObs = document.getElementById('status-obs');
+
+        statusObs.textContent = observerActive ? "开启 (ON)" : "关闭 (OFF)";
+        statusObs.style.color = observerActive ? "var(--accent-gold)" : "#666";
+
+        if (mode === 'particle') {
+            statusMode.textContent = "宏观粒子态";
+            info.innerHTML = "<p>经典粒子模式：子弹穿过缝隙，直线传播，屏幕上只有<strong>两条亮带</strong>。</p>";
+            document.getElementById('obs-toggle').disabled = true; 
+        } else if (mode === 'wave') {
+            statusMode.textContent = "经典波动态";
+            info.innerHTML = "<p>经典波动模式：波经过双缝产生衍射和干涉，屏幕显示连续的<strong>强度分布波形</strong>。</p>";
+            document.getElementById('obs-toggle').disabled = true;
+        } else if (mode === 'quantum') {
+            statusMode.textContent = "量子叠加态";
+            document.getElementById('obs-toggle').disabled = false;
+            if (observerActive) {
+                info.innerHTML = "<p class='warn'>观测者效应！</p><p>因为你知道了电子穿过哪个缝，波函数坍缩。电子表现为粒子性，<strong>干涉条纹消失</strong>。</p>";
+            } else {
+                info.innerHTML = "<p>量子模式：单个电子同时通过双缝（概率波）。大量电子累积后，屏幕显现<span class='highlight'>干涉条纹</span>。</p>";
+            }
+        }
+    }
+
+    // === 物理核心 ===
+    function spawnParticle() {
+        const speedMultiplier = parseInt(document.getElementById('speed-range').value);
+        const count = speedMultiplier; // 发射频率
+
+        for (let i = 0; i < count; i++) {
+            particles.push({
+                x: 50, // 源位置
+                y: height / 2 + (Math.random() - 0.5) * 20,
+                vx: 5,
+                vy: (Math.random() - 0.5) * 1, // 初始微小散射
+                state: 'source', // source -> slit -> screen
+                color: mode === 'quantum' ? '#22d3ee' : '#ffffff'
+            });
+        }
+    }
+
+    function getInterferenceVy(y, slitY1, slitY2) {
+        // 模拟干涉概率分布
+        const rand = Math.random();
+        let order = 0;
+        
+        // 分布概率权重
+        if (rand < 0.35) order = 0;
+        else if (rand < 0.65) order = Math.random() > 0.5 ? 1 : -1;
+        else if (rand < 0.85) order = Math.random() > 0.5 ? 2 : -2;
+        else order = Math.random() > 0.5 ? 3 : -3;
+
+        // 根据级数计算偏转角
+        const L = (width * (1 - CONFIG.barrierX)); 
+        const d = CONFIG.slitGap;
+        const targetYOffset = (L * CONFIG.wavelength * order) / d;
+
+        // 加上随机扩散（衍射包络）
+        const noise = (Math.random() - 0.5) * 40;
+        const finalDy = targetYOffset + noise;
+        
+        // 反推 vy (假设 vx=5)
+        const vx = 5;
+        const timeToScreen = L / vx;
+        return finalDy / timeToScreen;
+    }
+
+    // === 动画循环 ===
+    function animate() {
+        ctx.fillStyle = "#080808"; 
+        ctx.fillRect(0, 0, width, height);
+
+        const bx = width * CONFIG.barrierX;
+        const cy = height / 2;
+        const sy1 = cy - CONFIG.slitGap / 2;
+        const sy2 = cy + CONFIG.slitGap / 2;
+        const sx = width - 20;
+
+        // 1. 绘制环境
+        drawEnvironment(bx, sy1, sy2, sx);
+
+        // 2. 逻辑分流
+        if (mode === 'wave') {
+            drawWaves(bx, sy1, sy2, sx);
+        } else {
+            // 粒子系统
+            if (frameCount % 2 === 0) spawnParticle(); 
+            updateAndDrawParticles(bx, sy1, sy2, sx);
+            drawScreenHistogram(sx);
+        }
+
+        frameCount++;
+        requestAnimationFrame(animate);
+    }
+
+    function updateAndDrawParticles(bx, sy1, sy2, sx) {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            let p = particles[i];
+            
+            p.x += p.vx;
+            p.y += p.vy;
+
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, mode === 'quantum' ? 2 : 2.5, 0, Math.PI*2);
+            ctx.fill();
+
+            // 碰撞逻辑：挡板
+            if (p.state === 'source' && p.x >= bx) {
+                const inSlit1 = Math.abs(p.y - sy1) < CONFIG.slitWidth;
+                const inSlit2 = Math.abs(p.y - sy2) < CONFIG.slitWidth;
+
+                if (inSlit1 || inSlit2) {
+                    p.state = 'passed';
+                    
+                    if (mode === 'particle' || (mode === 'quantum' && observerActive)) {
+                        p.vy += (Math.random() - 0.5) * 1.5; // 经典散射
+                    } else {
+                        p.vy = getInterferenceVy(p.y, sy1, sy2); // 量子干涉
+                    }
+                } else {
+                    particles.splice(i, 1);
+                    continue;
+                }
+            }
+
+            // 碰撞逻辑：屏幕
+            if (p.x >= sx) {
+                const pixelIndex = Math.floor(p.y);
+                if (pixelIndex >= 0 && pixelIndex < height) {
+                    screenPixels[pixelIndex] += 1;
+                }
+                particles.splice(i, 1);
+            }
+        }
+    }
+
+    function drawScreenHistogram(sx) {
+        ctx.fillStyle = (mode === 'quantum' && !observerActive) ? "rgba(34, 211, 238, 0.6)" : "rgba(255, 255, 255, 0.6)";
+        
+        let maxVal = 1;
+        for(let v of screenPixels) maxVal = Math.max(maxVal, v);
+
+        ctx.beginPath();
+        for (let y = 0; y < height; y++) {
+            if (screenPixels[y] > 0) {
+                const barLen = (screenPixels[y] / maxVal) * 120;
+                ctx.fillRect(sx, y, barLen, 1);
+            }
+        }
+    }
+
+    function drawWaves(bx, sy1, sy2, sx) {
+        const time = Date.now() / 100;
+        
+        // 源波
+        ctx.strokeStyle = "rgba(100, 100, 100, 0.3)";
+        ctx.beginPath();
+        for (let r = 0; r < bx; r += 10) {
+            const phase = (r / 5) - time;
+            const alpha = (Math.sin(phase) + 1) / 4;
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(0, height/2, r, -0.5, 0.5);
+            ctx.stroke();
+        }
+
+        // 干涉波
+        ctx.beginPath();
+        ctx.strokeStyle = "var(--accent-cyan)";
+        ctx.lineWidth = 2;
+        
+        const D = width - bx;
+        
+        for (let y = 0; y < height; y++) {
+            const r1 = Math.sqrt(Math.pow(D, 2) + Math.pow(y - sy1, 2));
+            const r2 = Math.sqrt(Math.pow(D, 2) + Math.pow(y - sy2, 2));
+            const delta = r2 - r1;
+            
+            const intensity = Math.cos(Math.PI * delta / CONFIG.wavelength); 
+            const envelope = Math.exp(-Math.pow((y - height/2)/200, 2));
+            const finalI = (intensity * intensity) * envelope;
+            
+            const xPos = sx + finalI * 100;
+            if (y === 0) ctx.moveTo(xPos, y);
+            else ctx.lineTo(xPos, y);
+        }
+        ctx.stroke();
+    }
+
+    function drawEnvironment(bx, sy1, sy2, sx) {
+        ctx.fillStyle = "#333";
+        ctx.fillRect(bx, 0, 4, sy1 - CONFIG.slitWidth);
+        ctx.fillRect(bx, sy1 + CONFIG.slitWidth, 4, sy2 - sy1 - 2*CONFIG.slitWidth);
+        ctx.fillRect(bx, sy2 + CONFIG.slitWidth, 4, height);
+
+        ctx.beginPath();
+        ctx.arc(20, height/2, 8, 0, Math.PI*2);
+        ctx.fillStyle = "#666";
+        ctx.fill();
+
+        ctx.fillStyle = "#222";
+        ctx.fillRect(sx, 0, 2, height);
+    }
+
+    init();
+</script>
+</body>
+</html>

@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>人船模型 - 动量守恒模拟 (修复版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif; background-color: #1e1e1e; color: #fff; }
+        
+        #container { display: flex; width: 100vw; height: 100vh; }
+        
+        #scene-container { 
+            flex-grow: 1; 
+            position: relative; 
+            overflow: hidden; 
+            background: linear-gradient(to top, #1e3c72, #2a5298); 
+        }
+        
+        #sidebar {
+            width: 320px;
+            background: #252526;
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; border-bottom: 2px solid #00bcd4; padding-bottom: 10px; font-size: 18px; }
+        h3 { font-size: 14px; color: #aaa; margin: 10px 0 5px 0; border-bottom: 1px solid #444; }
+
+        .control-group { margin-bottom: 12px; background: #333; padding: 10px; border-radius: 4px; }
+        label { display: flex; justify-content: space-between; font-size: 13px; color: #ddd; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: #00bcd4; }
+        .value-display { color: #00bcd4; font-weight: bold; font-family: monospace; }
+
+        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            transition: 0.2s;
+            font-size: 14px;
+        }
+        .btn-start { background-color: #2e7d32; }
+        .btn-pause { background-color: #f57f17; }
+        .btn-reset { background-color: #c62828; }
+        button:hover { opacity: 0.9; filter: brightness(1.1); }
+
+        #chart-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 380px;
+            height: 260px;
+            background: rgba(30, 30, 30, 0.95);
+            border: 1px solid #555;
+            border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.6);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+        #chart-header {
+            padding: 8px 12px;
+            background: #00bcd4;
+            border-radius: 8px 8px 0 0;
+            font-size: 12px;
+            color: #000;
+            font-weight: bold;
+            user-select: none;
+            cursor: move;
+            display: flex;
+            justify-content: space-between;
+        }
+        #chart-content { padding: 5px; flex-grow: 1; position: relative; }
+        
+        .physics-note { 
+            font-size: 12px; 
+            color: #ccc; 
+            margin-top: 20px; 
+            line-height: 1.6; 
+            background: #333; 
+            padding: 10px; 
+            border-radius: 4px;
+        }
+        .highlight { color: #00bcd4; font-weight: bold;}
+
+    </style>
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="scene-container"></div>
+
+    <div id="sidebar">
+        <h2>🚢 人船模型控制台</h2>
+        
+        <h3>物理参数</h3>
+        <div class="control-group">
+            <label>船的质量 (M) <span id="val-M" class="value-display">100 kg</span></label>
+            <input type="range" id="input-M" min="20" max="500" step="10" value="100">
+        </div>
+
+        <div class="control-group">
+            <label>人的质量 (m) <span id="val-m" class="value-display">50 kg</span></label>
+            <input type="range" id="input-m" min="20" max="150" step="5" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>人相对船的速度 (Vrel) <span id="val-vrel" class="value-display">2.0 m/s</span></label>
+            <input type="range" id="input-vrel" min="0.5" max="5.0" step="0.1" value="2.0">
+        </div>
+
+        <h3>操作</h3>
+        <div class="btn-group">
+            <button class="btn-start" id="btn-start">▶ 行走</button>
+            <button class="btn-pause" id="btn-pause">⏸ 暂停</button>
+            <button class="btn-reset" id="btn-reset">↺ 还原</button>
+        </div>
+
+        <div class="physics-note">
+            <strong>原理说明：</strong><br>
+            假设水面无摩擦，系统水平动量守恒。<br>
+            <span class="highlight">mV<sub>人</sub> + MV<sub>船</sub> = 0</span><br>
+            (速度均为相对于地面的速度)<br>
+            <hr style="border:0; border-top:1px solid #555; margin:5px 0;">
+            人相对船走动时，船会反向运动。<br>
+            船速 V<sub>船</sub> = - [m / (M+m)] × V<sub>相对</sub>
+        </div>
+    </div>
+</div>
+
+<div id="chart-card">
+    <div id="chart-header">
+        <span>📊 速度对比图 (拖动此处)</span>
+        <span>v - t</span>
+    </div>
+    <div id="chart-content">
+        <canvas id="velocityChart"></canvas>
+    </div>
+</div>
+
+<script>
+    // ================= 1. 全局变量 =================
+    let scene, camera, renderer, controls;
+    let boatGroup, personGroup; 
+    let waterMesh;
+    let isRunning = false;
+    
+    // 物理参数
+    let params = {
+        M: 100,     // 船质量
+        m: 50,      // 人质量
+        v_rel: 2.0, // 人相对船的速度 (标量)
+        boatLen: 10 // 船长
+    };
+
+    // 状态变量
+    let state = {
+        boatX: 0,       // 船的世界坐标 X
+        personLocalX: 0,// 人在船上的局部坐标 X
+        walkDir: 1,     // 1 为向右，-1 为向左
+        v_boat: 0,      // 船对地速度
+        v_person: 0,    // 人对地速度
+        simTime: 0      // 模拟时间 (用于动画摇摆)
+    };
+
+    // Chart
+    let vChart;
+    let frameCount = 0;
+
+    // ================= 2. 初始化 Three.js =================
+    function initThree() {
+        const container = document.getElementById('scene-container');
+
+        scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x1e3c72, 0.02);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 8, 25);
+
+        const ambLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        scene.add(dirLight);
+
+        createWater();
+        createBoatAndPerson();
+
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        }
+        
+        if (controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+            controls.maxPolarAngle = Math.PI / 2 - 0.1;
+        }
+
+        window.addEventListener('resize', onWindowResize);
+    }
+
+    function createWater() {
+        const waterGeo = new THREE.PlaneGeometry(1000, 1000);
+        const waterMat = new THREE.MeshPhongMaterial({ 
+            color: 0x006994, 
+            transparent: true, 
+            opacity: 0.8,
+            specular: 0x111111 
+        });
+        waterMesh = new THREE.Mesh(waterGeo, waterMat);
+        waterMesh.rotation.x = -Math.PI / 2;
+        waterMesh.receiveShadow = true;
+        scene.add(waterMesh);
+        
+        const grid = new THREE.GridHelper(200, 50, 0xffffff, 0x444444);
+        grid.position.y = 0.01;
+        grid.material.opacity = 0.2;
+        grid.material.transparent = true;
+        scene.add(grid);
+    }
+
+    function createBoatAndPerson() {
+        boatGroup = new THREE.Group();
+        scene.add(boatGroup);
+
+        const hullGeo = new THREE.BoxGeometry(params.boatLen, 1, 3);
+        const hullMat = new THREE.MeshPhongMaterial({ color: 0x8d6e63 });
+        const hull = new THREE.Mesh(hullGeo, hullMat);
+        hull.position.y = 0.5;
+        hull.castShadow = true;
+        hull.receiveShadow = true;
+        boatGroup.add(hull);
+
+        const bowGeo = new THREE.BoxGeometry(2, 1, 3);
+        const bow = new THREE.Mesh(bowGeo, hullMat);
+        bow.position.set(params.boatLen/2 + 0.5, 0.7, 0);
+        bow.rotation.z = -0.3;
+        bow.scale.x = 0.8;
+        boatGroup.add(bow);
+
+        const sternGeo = new THREE.BoxGeometry(2, 1, 3);
+        const stern = new THREE.Mesh(sternGeo, hullMat);
+        stern.position.set(-params.boatLen/2 - 0.5, 0.7, 0);
+        stern.rotation.z = 0.3;
+        stern.scale.x = 0.8;
+        boatGroup.add(stern);
+
+        personGroup = new THREE.Group();
+        personGroup.position.set(0, 1, 0);
+        boatGroup.add(personGroup);
+
+        const bodyGeo = new THREE.CylinderGeometry(0.3, 0.3, 1.6, 16);
+        const bodyMat = new THREE.MeshPhongMaterial({ color: 0xffeb3b });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.y = 0.8;
+        body.castShadow = true;
+        personGroup.add(body);
+
+        const headGeo = new THREE.SphereGeometry(0.35, 16, 16);
+        const headMat = new THREE.MeshPhongMaterial({ color: 0xffcc80 });
+        const head = new THREE.Mesh(headGeo, headMat);
+        head.position.y = 1.8;
+        head.castShadow = true;
+        personGroup.add(head);
+        
+        personGroup.position.x = -params.boatLen / 2 + 1;
+        state.personLocalX = personGroup.position.x;
+    }
+
+    // ================= 3. 图表逻辑 =================
+    function initChart() {
+        const ctx = document.getElementById('velocityChart').getContext('2d');
+        
+        vChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(50).fill(''),
+                datasets: [
+                    {
+                        label: '人对地速度',
+                        data: Array(50).fill(0),
+                        borderColor: '#ffeb3b',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.1
+                    },
+                    {
+                        label: '船对地速度',
+                        data: Array(50).fill(0),
+                        borderColor: '#8d6e63',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.1
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false,
+                scales: {
+                    x: { display: false },
+                    y: {
+                        suggestedMin: -2,
+                        suggestedMax: 2,
+                        grid: { color: '#444' },
+                        ticks: { color: '#ccc' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#fff' } }
+                }
+            }
+        });
+    }
+
+    function updateChart(vp, vb) {
+        if (!vChart) return;
+        vChart.data.datasets[0].data.shift();
+        vChart.data.datasets[1].data.shift();
+        vChart.data.datasets[0].data.push(vp);
+        vChart.data.datasets[1].data.push(vb);
+        vChart.update();
+    }
+
+    // ================= 4. 物理核心 & 动画循环 =================
+    function updatePhysics(dt) {
+        // 1. 确定行走方向
+        const limit = params.boatLen / 2 - 0.5;
+        if (state.personLocalX >= limit) {
+            state.walkDir = -1; 
+        } else if (state.personLocalX <= -limit) {
+            state.walkDir = 1;  
+        }
+
+        // 2. 计算速度
+        let v_rel_vector = params.v_rel * state.walkDir;
+        state.v_boat = - (params.m * v_rel_vector) / (params.M + params.m);
+        state.v_person = state.v_boat + v_rel_vector;
+
+        // 3. 更新位置
+        state.boatX += state.v_boat * dt;
+        state.personLocalX += v_rel_vector * dt;
+
+        // 4. 应用到物体
+        boatGroup.position.x = state.boatX;
+        personGroup.position.x = state.personLocalX;
+        
+        // 5. 行走动画 (基于模拟时间，而非 Date.now())
+        state.simTime += dt;
+        personGroup.rotation.z = Math.sin(state.simTime * 10) * 0.1; 
+        personGroup.position.y = 1 + Math.abs(Math.sin(state.simTime * 15)) * 0.1;
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        const dt = 0.016; 
+
+        // 修复：只有在运行状态下才更新物理和图表
+        if (isRunning) {
+            updatePhysics(dt);
+            
+            // 降低图表刷新频率
+            frameCount++;
+            if (frameCount % 4 === 0) {
+                updateChart(state.v_person, state.v_boat);
+            }
+        }
+
+        // 始终允许调整视角
+        if (controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // ================= 5. UI 交互 =================
+    function onWindowResize() {
+        camera.aspect = document.getElementById('scene-container').clientWidth / document.getElementById('scene-container').clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(document.getElementById('scene-container').clientWidth, document.getElementById('scene-container').clientHeight);
+    }
+
+    document.getElementById('input-M').addEventListener('input', (e) => {
+        params.M = parseFloat(e.target.value);
+        document.getElementById('val-M').innerText = params.M + " kg";
+    });
+    document.getElementById('input-m').addEventListener('input', (e) => {
+        params.m = parseFloat(e.target.value);
+        document.getElementById('val-m').innerText = params.m + " kg";
+    });
+    document.getElementById('input-vrel').addEventListener('input', (e) => {
+        params.v_rel = parseFloat(e.target.value);
+        document.getElementById('val-vrel').innerText = params.v_rel.toFixed(1) + " m/s";
+    });
+
+    // 按钮逻辑优化
+    document.getElementById('btn-start').onclick = () => { isRunning = true; };
+    document.getElementById('btn-pause').onclick = () => { isRunning = false; }; // 仅切换标志位，不重置数据
+    
+    document.getElementById('btn-reset').onclick = () => {
+        isRunning = false;
+        state.boatX = 0;
+        state.personLocalX = -params.boatLen / 2 + 1;
+        state.walkDir = 1;
+        state.v_boat = 0;
+        state.v_person = 0;
+        state.simTime = 0;
+        
+        boatGroup.position.x = 0;
+        personGroup.position.x = state.personLocalX;
+        personGroup.rotation.z = 0;
+        
+        // 重置图表
+        vChart.data.datasets[0].data = Array(50).fill(0);
+        vChart.data.datasets[1].data = Array(50).fill(0);
+        vChart.update();
+        
+        renderer.render(scene, camera);
+    };
+
+    // 拖动逻辑
+    const chartCard = document.getElementById('chart-card');
+    const chartHeader = document.getElementById('chart-header');
+    let isDragging = false;
+    let offset = { x: 0, y: 0 };
+
+    chartHeader.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        offset.x = e.clientX - chartCard.offsetLeft;
+        offset.y = e.clientY - chartCard.offsetTop;
+        chartCard.style.opacity = '0.9';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+        let left = e.clientX - offset.x;
+        let top = e.clientY - offset.y;
+        if(left < 0) left = 0;
+        if(top < 0) top = 0;
+        chartCard.style.left = left + 'px';
+        chartCard.style.top = top + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        chartCard.style.opacity = '1';
+    });
+
+    initThree();
+    initChart();
+    animate();
+
+</script>
+</body>
+</html>

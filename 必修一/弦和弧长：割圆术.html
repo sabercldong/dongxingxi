@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>刘徽割圆术：自定义精细演示</title>
+    <style>
+        * { box-sizing: border-box; }
+        body, html {
+            margin: 0; padding: 0;
+            width: 100%; height: 100%;
+            overflow: hidden;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            background-color: #f8f9fa;
+        }
+
+        .main-container { display: flex; width: 100vw; height: 100vh; }
+
+        /* 左侧：绘图区 */
+        #canvas-container {
+            flex: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #ffffff;
+            position: relative;
+        }
+
+        /* 右侧：文字说明区 */
+        .info-panel {
+            width: 400px;
+            padding: 30px;
+            background-color: #ffffff;
+            border-left: 2px solid #eee;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        h2 { color: #2c3e50; border-bottom: 4px solid #e74c3c; padding-bottom: 10px; margin: 0; }
+        
+        .control-group {
+            background: #f1f3f5;
+            padding: 20px;
+            border-radius: 12px;
+        }
+
+        label { display: block; margin-bottom: 10px; font-weight: bold; color: #495057; }
+        
+        .input-row { display: flex; gap: 10px; }
+
+        input[type="number"] {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+
+        button {
+            padding: 10px 20px;
+            background-color: #e74c3c;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        button:hover { background-color: #c0392b; }
+
+        .data-card {
+            background: #2c3e50;
+            color: #ffffff;
+            padding: 25px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+
+        .pi-label { font-size: 0.9em; color: #adb5bd; margin-bottom: 5px; }
+        .pi-value { font-family: "Consolas", monospace; font-size: 1.8em; color: #2ecc71; font-weight: bold; }
+
+        .observation-notes {
+            line-height: 1.8;
+            color: #495057;
+            font-size: 15px;
+            border-top: 1px solid #eee;
+            padding-top: 20px;
+        }
+
+        .highlight-box {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            margin-right: 6px;
+            vertical-align: middle;
+            border-radius: 2px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="main-container">
+    <div id="canvas-container">
+        <canvas id="liuhuiCanvas"></canvas>
+    </div>
+
+    <div class="info-panel">
+        <h2>割圆术演示</h2>
+        
+        <div class="control-group">
+            <label for="sideInput">手动输入边数 n：</label>
+            <div class="input-row">
+                <input type="number" id="sideInput" value="6" min="3" max="100000">
+                <button onclick="applySides()">应用</button>
+            </div>
+        </div>
+
+        <div class="data-card">
+            <div>当前边数：<span id="displayN" style="color:#f1c40f; font-weight:bold">6</span></div>
+            <div style="margin-top:15px;" class="pi-label">多边形面积 (近似 π)：</div>
+            <div id="displayArea" class="pi-value">1.50000000</div>
+        </div>
+
+        <div class="observation-notes">
+            <strong>观察重点：</strong><br>
+            • 随着 <b>n</b> 增大，红色边缘会不断向黑色边缘靠拢。<br>
+            • <span class="highlight-box" style="background:#000"></span> <b>黑色实线：</b> 外部基准圆 (半径为 1)。<br>
+            • <span class="highlight-box" style="background:#e74c3c"></span> <b>红色线条：</b> 内接正 n 边形边界。<br>
+            <br>
+            <strong>原理说明：</strong><br>
+            刘徽指出：割之弥细，所失弥少。当 <b>n</b> 足够大时，多边形面积无限接近圆面积。尝试输入 <b>3072</b> 或 <b>10000</b> 查看精细结果。
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('liuhuiCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    const sideInput = document.getElementById('sideInput');
+
+    let currentN = 6;
+    let centerX, centerY, radius;
+
+    function resize() {
+        // 让画布充满容器
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        centerX = canvas.width / 2;
+        centerY = canvas.height / 2;
+        // 适当调整半径，留出边距
+        radius = Math.min(canvas.width, canvas.height) * 0.42;
+        draw();
+    }
+
+    function applySides() {
+        let val = parseInt(sideInput.value);
+        if (isNaN(val) || val < 3) val = 3;
+        if (val > 100000) val = 100000;
+        currentN = val;
+        sideInput.value = val;
+        draw();
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. 绘制外部基准圆 (黑色粗线)
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+
+        // 2. 绘制内接正多边形 (红色线条)
+        ctx.beginPath();
+        for (let i = 0; i <= currentN; i++) {
+            const angle = (i * 2 * Math.PI) / currentN - Math.PI / 2;
+            const x = centerX + radius * Math.cos(angle);
+            const y = centerY + radius * Math.sin(angle);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        
+        ctx.strokeStyle = '#e74c3c';
+        // 边数极多时稍微减细线条，防止视觉过重
+        ctx.lineWidth = currentN > 2000 ? 1 : 2; 
+        
+        // 填充半透明红色
+        ctx.fillStyle = 'rgba(231, 76, 60, 0.1)';
+        ctx.fill();
+        ctx.stroke();
+
+        // 3. 数值计算 (多边形面积 = n/2 * sin(2π/n))
+        const area = (currentN / 2) * Math.sin((2 * Math.PI) / currentN);
+        document.getElementById('displayN').innerText = currentN;
+        document.getElementById('displayArea').innerText = area.toFixed(8);
+    }
+
+    // 回车键支持
+    sideInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') applySides();
+    });
+
+    window.addEventListener('resize', resize);
+    resize();
+</script>
+
+</body>
+</html>

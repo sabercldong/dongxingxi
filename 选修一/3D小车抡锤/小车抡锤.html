@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>人车抡锤动量守恒模拟</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; background-color: #1e1e1e; color: #fff; }
+        
+        /* 布局容器 */
+        #container { display: flex; width: 100vw; height: 100vh; }
+        
+        /* 3D 视图区域 */
+        #scene-container { flex-grow: 1; position: relative; overflow: hidden; background: linear-gradient(to bottom, #2c3e50, #000000); }
+        
+        /* 右侧功能区 */
+        #sidebar {
+            width: 320px;
+            background: #252526;
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; border-bottom: 2px solid #007acc; padding-bottom: 10px; font-size: 18px; }
+        h3 { font-size: 14px; color: #aaa; margin: 10px 0 5px 0; border-bottom: 1px solid #444; }
+
+        /* 控件样式 */
+        .control-group { margin-bottom: 12px; background: #333; padding: 10px; border-radius: 4px; }
+        label { display: flex; justify-content: space-between; font-size: 13px; color: #ddd; margin-bottom: 5px; }
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: #007acc; }
+        .value-display { color: #4caf50; font-weight: bold; font-family: monospace; }
+
+        /* 按钮组 */
+        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            color: white;
+            transition: 0.2s;
+            font-size: 14px;
+        }
+        .btn-start { background-color: #2e7d32; }
+        .btn-pause { background-color: #f57f17; }
+        .btn-reset { background-color: #c62828; }
+        button:hover { opacity: 0.8; filter: brightness(1.1); }
+        button:active { transform: scale(0.98); }
+
+        /* 悬浮可拖动图表容器 (左上角) */
+        #chart-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            height: 240px;
+            background: rgba(30, 30, 30, 0.95);
+            border: 1px solid #555;
+            border-radius: 8px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.6);
+            z-index: 100;
+            cursor: move; /* 指示可拖动 */
+            display: flex;
+            flex-direction: column;
+        }
+        #chart-header {
+            padding: 8px 12px;
+            background: #007acc;
+            border-radius: 8px 8px 0 0;
+            font-size: 12px;
+            color: white;
+            font-weight: bold;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+        }
+        #chart-content { padding: 5px; flex-grow: 1; position: relative; }
+        
+        .physics-note { font-size: 12px; color: #ccc; margin-top: 20px; line-height: 1.6; background: #333; padding: 10px; border-radius: 4px;}
+        .highlight { color: #4caf50; }
+
+    </style>
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script> <script src="chart.min.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="scene-container"></div>
+
+    <div id="sidebar">
+        <h2>🔧 控制面板</h2>
+        
+        <h3>系统参数</h3>
+        <div class="control-group">
+            <label>小车+人 质量 (M) <span id="val-M" class="value-display">50 kg</span></label>
+            <input type="range" id="input-M" min="10" max="200" step="1" value="50">
+        </div>
+
+        <div class="control-group">
+            <label>摆锤质量 (m) <span id="val-m" class="value-display">10 kg</span></label>
+            <input type="range" id="input-m" min="1" max="50" step="1" value="10">
+        </div>
+
+        <div class="control-group">
+            <label>摆臂长度 (L) <span id="val-L" class="value-display">1.5 m</span></label>
+            <input type="range" id="input-L" min="0.5" max="3" step="0.1" value="1.5">
+        </div>
+
+        <div class="control-group">
+            <label>抡锤速度 (ω) <span id="val-speed" class="value-display">2.0 rad/s</span></label>
+            <input type="range" id="input-speed" min="0.1" max="10" step="0.1" value="2.0">
+        </div>
+
+        <h3>操作</h3>
+        <div class="btn-group">
+            <button class="btn-start" id="btn-start">▶ 开始</button>
+            <button class="btn-pause" id="btn-pause">⏸ 暂停</button>
+            <button class="btn-reset" id="btn-reset">↺ 还原</button>
+        </div>
+
+        <div class="physics-note">
+            <strong>物理原理：</strong><br>
+            水平方向动量守恒 (P<sub>x</sub> = 0)。<br>
+            当人向右抡锤时，锤子产生向右的动量分量，为了保持总动量为零，小车和人必须产生向左的速度。<br>
+            <hr style="border: 0; border-top: 1px solid #555; margin: 8px 0;">
+            <strong>公式：</strong><br>
+            V<sub>cart</sub> = - (m · L · ω · cosθ) / (M + m)
+        </div>
+    </div>
+</div>
+
+<div id="chart-card">
+    <div id="chart-header">
+        <span>📊 实时速度监测 (可拖动)</span>
+        <span>Vx - t</span>
+    </div>
+    <div id="chart-content">
+        <canvas id="velocityChart"></canvas>
+    </div>
+</div>
+
+<script>
+    // ================= 1. 全局变量与配置 =================
+    let scene, camera, renderer, controls;
+    let cartGroup, personGroup, hammerPivot, hammerMesh; // 3D 对象
+    let animationId;
+    let isRunning = false;
+    
+    // 物理状态
+    let time = 0;
+    let params = {
+        M: 50,      // 车+人质量
+        m: 10,      // 锤质量
+        L: 1.5,     // 臂长
+        omega: 2.0  // 角速度
+    };
+    
+    let state = {
+        cartX: 0,
+        hammerAngle: 0 // 0 是垂直向下
+    };
+
+    // Chart对象
+    let vChart;
+    let chartData = [];
+    const MAX_DATA_POINTS = 100;
+
+    // ================= 2. 初始化 Three.js 场景 =================
+    function initThree() {
+        const container = document.getElementById('scene-container');
+
+        // 场景
+        scene = new THREE.Scene();
+        scene.fog = new THREE.Fog(0x1e1e1e, 10, 60);
+
+        // 网格地面
+        const gridHelper = new THREE.GridHelper(100, 100, 0x555555, 0x333333);
+        scene.add(gridHelper);
+
+        // 坐标轴辅助
+        const axesHelper = new THREE.AxesHelper(2);
+        scene.add(axesHelper);
+
+        // 相机
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(0, 6, 18);
+
+        // 渲染器
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // 灯光
+        const ambLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambLight);
+        
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        // --- 构建物体 ---
+        createObjects();
+
+        // 控制器
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        } else {
+            console.warn('未检测到 OrbitControls，请检查文件名');
+        }
+        
+        if (controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+        }
+
+        // 窗口调整
+        window.addEventListener('resize', onWindowResize);
+    }
+
+    function createObjects() {
+        // 1. 小车组 (Cart Group) - 包含车体、人、锤子的基座
+        cartGroup = new THREE.Group();
+        scene.add(cartGroup);
+
+        // 车体
+        const cartGeo = new THREE.BoxGeometry(4, 0.5, 2);
+        const cartMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
+        const cart = new THREE.Mesh(cartGeo, cartMat);
+        cart.position.y = 0.5; // 轮子半径假设0.25，加上板厚一半
+        cart.castShadow = true;
+        cart.receiveShadow = true;
+        cartGroup.add(cart);
+
+        // 轮子 (简单的圆柱)
+        const wheelGeo = new THREE.CylinderGeometry(0.3, 0.3, 2.2, 16);
+        const wheelMat = new THREE.MeshPhongMaterial({ color: 0x111111 });
+        
+        const w1 = new THREE.Mesh(wheelGeo, wheelMat);
+        w1.rotation.x = Math.PI / 2;
+        w1.position.set(-1.2, 0.3, 0);
+        cartGroup.add(w1);
+
+        const w2 = w1.clone();
+        w2.position.set(1.2, 0.3, 0);
+        cartGroup.add(w2);
+
+        // 人 (简化版：身体 + 头)
+        const bodyGeo = new THREE.BoxGeometry(0.8, 1.5, 0.5);
+        const bodyMat = new THREE.MeshPhongMaterial({ color: 0x007acc });
+        const body = new THREE.Mesh(bodyGeo, bodyMat);
+        body.position.set(0, 1.5, 0); // 站在车上
+        body.castShadow = true;
+        cartGroup.add(body);
+
+        const headGeo = new THREE.SphereGeometry(0.3, 16, 16);
+        const headMat = new THREE.MeshPhongMaterial({ color: 0xffccaa });
+        const head = new THREE.Mesh(headGeo, headMat);
+        head.position.set(0, 2.4, 0);
+        cartGroup.add(head);
+
+        // 2. 锤子系统 (Pivot在肩膀处)
+        hammerPivot = new THREE.Group();
+        hammerPivot.position.set(0, 2.0, 0.4); // 位于人身体前方/右侧
+        cartGroup.add(hammerPivot);
+
+        // 锤柄
+        const handleGeo = new THREE.CylinderGeometry(0.05, 0.05, params.L, 8);
+        handleGeo.translate(0, params.L / 2, 0); // 将原点移到一端
+        const handleMat = new THREE.MeshPhongMaterial({ color: 0x8d6e63 });
+        const handle = new THREE.Mesh(handleGeo, handleMat);
+        hammerPivot.add(handle);
+
+        // 锤头
+        const hammerHeadGeo = new THREE.BoxGeometry(0.4, 0.6, 0.4);
+        const hammerHeadMat = new THREE.MeshPhongMaterial({ color: 0x555555 });
+        const hammerHead = new THREE.Mesh(hammerHeadGeo, hammerHeadMat);
+        hammerHead.position.y = params.L; // 在柄的末端
+        hammerPivot.add(hammerHead);
+        
+        hammerMesh = hammerPivot; // 引用整个旋转结构
+    }
+
+    // ================= 3. 图表初始化 (Chart.js) =================
+    function initChart() {
+        const ctx = document.getElementById('velocityChart').getContext('2d');
+        
+        // 初始填充空数据
+        const initialLabels = Array(50).fill('');
+        const initialData = Array(50).fill(0);
+
+        vChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: initialLabels,
+                datasets: [{
+                    label: '小车速度 (m/s)',
+                    data: initialData,
+                    borderColor: '#00e676',
+                    backgroundColor: 'rgba(0, 230, 118, 0.1)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.4, // 平滑曲线
+                    fill: true
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false, // 禁用动画以提高性能
+                scales: {
+                    x: { display: false },
+                    y: { 
+                        grid: { color: '#444' },
+                        ticks: { color: '#ccc' },
+                        suggestedMin: -2,
+                        suggestedMax: 2
+                    }
+                },
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+
+    // ================= 4. 物理计算核心 =================
+    function updatePhysics(dt) {
+        if (!isRunning) return;
+
+        // 1. 更新锤子角度 (匀速圆周运动)
+        state.hammerAngle += params.omega * dt;
+        
+        // 2. 动量守恒计算小车速度
+        // V_cart = - (m * L * omega * cos(theta)) / (M + m)
+        const cosTheta = Math.cos(state.hammerAngle);
+        const v_cart = -(params.m * params.L * params.omega * cosTheta) / (params.M + params.m);
+
+        // 3. 更新位置
+        state.cartX += v_cart * dt;
+
+        // 4. 更新 3D 物体
+        cartGroup.position.x = state.cartX;
+        hammerPivot.rotation.z = state.hammerAngle; // 绕 Z 轴旋转
+
+        // 5. 更新图表数据
+        updateChart(v_cart);
+    }
+
+    let frameCount = 0;
+    function updateChart(velocity) {
+        frameCount++;
+        if (frameCount % 3 !== 0) return; // 每3帧更新一次图表，节省性能
+
+        const dataset = vChart.data.datasets[0].data;
+        dataset.shift(); // 移除最左边
+        dataset.push(velocity); // 加入新数据
+        vChart.update();
+    }
+
+    // ================= 5. 渲染循环 =================
+    function animate() {
+        requestAnimationFrame(animate);
+        
+        const dt = 0.016; // 假设 60fps
+        updatePhysics(dt);
+
+        if (controls) controls.update();
+        
+        renderer.render(scene, camera);
+    }
+
+    // ================= 6. UI 交互逻辑 =================
+    function onWindowResize() {
+        camera.aspect = document.getElementById('scene-container').clientWidth / document.getElementById('scene-container').clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(document.getElementById('scene-container').clientWidth, document.getElementById('scene-container').clientHeight);
+    }
+
+    // 参数绑定
+    document.getElementById('input-M').addEventListener('input', (e) => {
+        params.M = parseFloat(e.target.value);
+        document.getElementById('val-M').innerText = params.M + " kg";
+    });
+    document.getElementById('input-m').addEventListener('input', (e) => {
+        params.m = parseFloat(e.target.value);
+        document.getElementById('val-m').innerText = params.m + " kg";
+    });
+    document.getElementById('input-L').addEventListener('input', (e) => {
+        params.L = parseFloat(e.target.value);
+        document.getElementById('val-L').innerText = params.L + " m";
+        // 重建锤子长度 visual
+        scene.remove(cartGroup);
+        createObjects(); // 简单粗暴重建
+        cartGroup.position.x = state.cartX; // 保持当前位置
+    });
+    document.getElementById('input-speed').addEventListener('input', (e) => {
+        params.omega = parseFloat(e.target.value);
+        document.getElementById('val-speed').innerText = params.omega.toFixed(1) + " rad/s";
+    });
+
+    // 按钮控制
+    document.getElementById('btn-start').onclick = () => { isRunning = true; };
+    document.getElementById('btn-pause').onclick = () => { isRunning = false; };
+    document.getElementById('btn-reset').onclick = () => {
+        isRunning = false;
+        state.cartX = 0;
+        state.hammerAngle = 0;
+        cartGroup.position.x = 0;
+        hammerPivot.rotation.z = 0;
+        
+        // 重置图表
+        vChart.data.datasets[0].data = Array(50).fill(0);
+        vChart.update();
+        
+        // 强制刷新一次画面
+        renderer.render(scene, camera);
+    };
+
+    // ================= 7. 拖动窗口逻辑 =================
+    const chartCard = document.getElementById('chart-card');
+    const chartHeader = document.getElementById('chart-header'); // 只允许拖动头部
+    let isDragging = false;
+    let offset = { x: 0, y: 0 };
+
+    chartHeader.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        offset.x = e.clientX - chartCard.offsetLeft;
+        offset.y = e.clientY - chartCard.offsetTop;
+        chartCard.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+        let left = e.clientX - offset.x;
+        let top = e.clientY - offset.y;
+        
+        // 边界限制
+        if (left < 0) left = 0;
+        if (top < 0) top = 0;
+
+        chartCard.style.left = left + 'px';
+        chartCard.style.top = top + 'px';
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        chartCard.style.cursor = 'move';
+    });
+
+    // ================= 启动 =================
+    initThree();
+    initChart();
+    animate();
+
+</script>
+</body>
+</html>

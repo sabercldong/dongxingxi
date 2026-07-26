@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>复合场粒子运动 (符号完美修复版)</title>
+    <style>
+        /* --- 1. 布局框架 (Flexbox) --- */
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* --- 2. 左侧：演示画布区 --- */
+        .simulation-area {
+            flex: 1;
+            height: 100%;
+            background-color: #1e1e1e;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: inset -5px 0 15px rgba(0,0,0,0.5);
+        }
+
+        h2 {
+            position: absolute;
+            top: 20px;
+            left: 30px;
+            margin: 0;
+            color: #03a9f4;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        canvas {
+            background-color: #252525;
+            border-radius: 4px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            max-width: 96%;
+            max-height: 90%;
+            cursor: crosshair;
+        }
+
+        .field-label {
+            position: absolute;
+            top: 25px;
+            right: 30px;
+            background: rgba(0,0,0,0.6);
+            padding: 8px 12px;
+            border-radius: 4px;
+            color: #aaa;
+            font-size: 0.85em;
+            pointer-events: none;
+            border: 1px solid #444;
+        }
+
+        /* --- 3. 右侧：功能控制区 --- */
+        .controls-sidebar {
+            width: 340px;
+            min-width: 340px;
+            height: 100%;
+            background-color: #2d2d2d;
+            border-left: 1px solid #444;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto; 
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* 滚动条样式 */
+        .controls-sidebar::-webkit-scrollbar { width: 8px; }
+        .controls-sidebar::-webkit-scrollbar-track { background: #222; }
+        .controls-sidebar::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+
+        .control-group {
+            background: #363636;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #444;
+        }
+
+        .group-title {
+            font-size: 0.9em;
+            color: #888;
+            margin-bottom: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            border-bottom: 1px solid #555;
+            padding-bottom: 5px;
+        }
+
+        label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center; /* 垂直居中对齐 */
+            margin-bottom: 5px;
+            font-size: 0.9em;
+            color: #ccc;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: #03a9f4;
+            margin-bottom: 10px;
+        }
+
+        .val-display { font-family: monospace; color: #03a9f4; font-weight: bold; font-size: 1.1em; }
+
+        .btn-row { display: flex; gap: 10px; margin-bottom: 10px; }
+        
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: 0.2s;
+            line-height: 1.4; /* 增加行高防止下标重叠 */
+        }
+        .btn-preset { background: #424242; color: #ddd; font-size: 0.85em; }
+        .btn-preset:hover { background: #505050; }
+        
+        .btn-launch { background: #03a9f4; color: white; width: 100%; font-size: 1.1em; }
+        .btn-launch:hover { background: #0288d1; }
+        
+        .btn-clear { background: transparent; border: 1px solid #d32f2f; color: #ef5350; width: 100%; margin-top: 5px; }
+        .btn-clear:hover { background: rgba(211, 47, 47, 0.1); }
+
+        .explanation {
+            font-size: 0.85em;
+            color: #999;
+            line-height: 1.6;
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 6px;
+        }
+        
+        /* 全局下标样式优化 */
+        sub { 
+            font-size: 0.7em; 
+            vertical-align: sub;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="simulation-area">
+        <h2>复合场粒子运动</h2>
+        <canvas id="canvas" width="800" height="600"></canvas>
+        <div class="field-label">
+            <div>B (磁场): 垂直向里 ×</div>
+            <div>g (重力): 竖直向下 ↓</div>
+        </div>
+    </div>
+
+    <div class="controls-sidebar">
+        
+        <div class="control-group">
+            <div class="group-title">快捷预设</div>
+            <div class="btn-row">
+                <button class="btn-preset" onclick="applyPreset('cycloid')">标准摆线<br>(v<sub>0</sub> = 0)</button>
+                <button class="btn-preset" onclick="applyPreset('drift_only')">直线漂移<br>(v<sub>0</sub> = v<sub>drift</sub>)</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div class="group-title">发射参数</div>
+            <label>
+                <span>初速度 v<sub>0</sub> <span style="font-size:0.8em; color:#888; margin-left:4px;">(水平)</span></span>
+                <span id="val_v0" class="val-display">0</span>
+            </label>
+            <input type="range" id="in_v0" min="0" max="300" value="0">
+            
+            <button class="btn-launch" id="btnLaunch">发射粒子</button>
+            <button class="btn-clear" id="btnClear">清空画布</button>
+        </div>
+
+        <div class="control-group">
+            <div class="group-title">场强设置</div>
+            <label>
+                <span>磁场强度 B</span>
+                <span id="val_B" class="val-display">8.0</span>
+            </label>
+            <input type="range" id="in_B" min="2" max="20" value="8.0" step="0.5">
+
+            <label>
+                <span>重力/电场力 g</span>
+                <span id="val_g" class="val-display">5.0</span>
+            </label>
+            <input type="range" id="in_g" min="0" max="20" value="5.0" step="0.5">
+
+            <label>
+                <span>荷质比 q/m</span>
+                <span id="val_qm" class="val-display">1.0</span>
+            </label>
+            <input type="range" id="in_qm" min="0.5" max="2" value="1.0" step="0.1">
+        </div>
+
+        <div class="control-group">
+            <div class="group-title">原理说明 (配速法)</div>
+            <div class="explanation">
+                速度分解为：<br>
+                1. <strong>漂移速度 v<sub>d</sub></strong>: 洛伦兹力平衡重力 (直线)。<br>
+                2. <strong>圆周速度</strong>: 只有洛伦兹力提供向心力 (圆)。<br>
+                <br>
+                公式: v<sub>d</sub> = mg / qB
+            </div>
+        </div>
+        
+        <div style="height: 50px;"></div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const inputs = {
+        v0: document.getElementById('in_v0'),
+        B: document.getElementById('in_B'),
+        g: document.getElementById('in_g'),
+        qm: document.getElementById('in_qm')
+    };
+    const displays = {
+        v0: document.getElementById('val_v0'),
+        B: document.getElementById('val_B'),
+        g: document.getElementById('val_g'),
+        qm: document.getElementById('val_qm')
+    };
+
+    const PX_PER_UNIT = 60; 
+
+    function updateDisplays() {
+        for (let key in inputs) {
+            displays[key].textContent = inputs[key].value;
+        }
+        drawScene(); 
+    }
+    Object.values(inputs).forEach(el => el.addEventListener('input', updateDisplays));
+
+    function applyPreset(type) {
+        inputs.B.value = 8.0;
+        inputs.g.value = 5.0;
+        inputs.qm.value = 1.0;
+
+        if (type === 'cycloid') {
+            inputs.v0.value = 0;
+        } else if (type === 'drift_only') {
+            const g = parseFloat(inputs.g.value);
+            const B = parseFloat(inputs.B.value);
+            const qm = parseFloat(inputs.qm.value);
+            
+            const vd_phys = g / (qm * B); 
+            const vd_px = vd_phys * PX_PER_UNIT; 
+            
+            inputs.v0.value = Math.round(vd_px);
+        }
+        updateDisplays();
+        launchParticle();
+    }
+
+    let particles = [];
+    let startTime = null;
+    const START_X = 50;
+    const START_Y = 200;
+
+    class Particle {
+        constructor() {
+            const v0_px = parseFloat(inputs.v0.value); 
+            
+            this.v0x = v0_px;
+            this.v0y = 0;
+            
+            const B = parseFloat(inputs.B.value);
+            const g = parseFloat(inputs.g.value);
+            const qm = parseFloat(inputs.qm.value);
+
+            const vd_phys = g / (qm * B);
+            this.vd_px = vd_phys * PX_PER_UNIT;
+
+            this.omega = qm * B;
+
+            this.vcx0 = this.v0x - this.vd_px;
+            this.vcy0 = this.v0y; 
+
+            this.launchTime = (performance.now() - startTime) / 1000;
+            this.startX = START_X;
+            this.startY = START_Y;
+            this.trail = [];
+            this.color = `hsl(${Math.random()*360}, 100%, 65%)`;
+        }
+
+        getPosition(currentTime) {
+            const t = currentTime - this.launchTime;
+            if (t < 0) return { x: this.startX, y: this.startY };
+
+            const w = this.omega;
+            const sin = Math.sin(w * t);
+            const cos = Math.cos(w * t);
+            
+            const dx_circle = (1/w) * (this.vcx0 * sin + this.vcy0 * (1 - cos));
+            const dy_circle = (1/w) * (this.vcy0 * sin - this.vcx0 * (1 - cos));
+
+            const x = this.startX + this.vd_px * t + dx_circle;
+            const y = this.startY + dy_circle;
+
+            return { x, y };
+        }
+    }
+
+    function launchParticle() {
+        if (particles.length === 0) startTime = performance.now();
+        particles.push(new Particle());
+    }
+
+    document.getElementById('btnLaunch').addEventListener('click', launchParticle);
+    document.getElementById('btnClear').addEventListener('click', () => {
+        particles = [];
+        startTime = null; 
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawScene();
+    });
+
+    function drawScene(timestamp) {
+        ctx.fillStyle = "#1e1e1e";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = "#333";
+        ctx.font = "16px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        for (let x = 40; x < canvas.width; x += 60) {
+            for (let y = 40; y < canvas.height; y += 60) {
+                ctx.fillText("×", x, y);
+            }
+        }
+        
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(START_X, START_Y, 4, 0, Math.PI*2);
+        ctx.fill();
+
+        if (!startTime && timestamp && particles.length > 0) startTime = timestamp;
+        const currentTime = startTime ? (timestamp - startTime) / 1000 : 0;
+
+        particles.forEach(p => {
+            const pos = p.getPosition(currentTime);
+            
+            if (p.trail.length === 0 || 
+                Math.hypot(pos.x - p.trail[p.trail.length-1].x, pos.y - p.trail[p.trail.length-1].y) > 2) {
+                p.trail.push(pos);
+            }
+
+            if (p.trail.length > 1) {
+                ctx.beginPath();
+                ctx.strokeStyle = p.color;
+                ctx.lineWidth = 2;
+                ctx.moveTo(p.trail[0].x, p.trail[0].y);
+                for (let i = 1; i < p.trail.length; i++) {
+                    ctx.lineTo(p.trail[i].x, p.trail[i].y);
+                }
+                ctx.stroke();
+            }
+
+            ctx.beginPath();
+            ctx.fillStyle = "#fff";
+            ctx.arc(pos.x, pos.y, 5, 0, Math.PI*2);
+            ctx.fill();
+        });
+
+        requestAnimationFrame(drawScene);
+    }
+    
+    applyPreset('cycloid');
+    
+</script>
+</body>
+</html>

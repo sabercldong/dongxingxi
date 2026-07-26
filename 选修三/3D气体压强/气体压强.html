@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>气体压强原理3D仿真</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; }
+        
+        /* 3D 画布 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧功能区 */
+        #gui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 280px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 15px;
+            border-radius: 8px;
+            backdrop-filter: blur(5px);
+            border: 1px solid #444;
+            user-select: none;
+        }
+
+        .control-group { margin-bottom: 15px; }
+        .control-group label { display: block; margin-bottom: 5px; font-size: 14px; color: #aaa; }
+        .control-group input[type=range] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #4facfe; font-weight: bold; }
+
+        .btn-row { display: flex; justify-content: space-between; gap: 10px; margin-top: 20px; }
+        button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        #btn-start { background-color: #28a745; color: white; }
+        #btn-pause { background-color: #ffc107; color: black; }
+        #btn-reset { background-color: #dc3545; color: white; }
+        button:hover { opacity: 0.9; transform: scale(1.02); }
+        button:disabled { background-color: #555; cursor: not-allowed; opacity: 0.6; }
+
+        /* 左上角图表区 (可拖动) */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        #chart-header {
+            padding: 8px 12px;
+            background: #eee;
+            cursor: move;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ccc;
+        }
+        #chart-header span { font-size: 14px; font-weight: bold; color: #333; }
+        #btn-toggle-chart {
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-size: 18px;
+            font-weight: bold;
+            color: #666;
+        }
+
+        #chart-content { padding: 10px; transition: height 0.3s; }
+        .hidden-content { height: 0 !important; padding: 0 !important; }
+
+    </style>
+    
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+    <script src="./chart.min.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>📊 实时气体压强 (Impulse)</span>
+            <button id="btn-toggle-chart">−</button>
+        </div>
+        <div id="chart-content">
+            <canvas id="pressureChart"></canvas>
+            <div style="font-size:12px; color:#666; margin-top:5px; text-align:center;">
+                压强 P ∝ (撞击次数 × 撞击速度) / 时间
+            </div>
+        </div>
+    </div>
+
+    <div id="gui-panel">
+        <h3 style="margin-top:0; border-bottom:1px solid #555; padding-bottom:10px;">控制面板</h3>
+        
+        <div class="control-group">
+            <label>温度 (分子运动速度) <span id="val-speed" class="value-display">1.0x</span></label>
+            <input type="range" id="slider-speed" min="0.1" max="5.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label>气体分子数量 <span id="val-count" class="value-display">100</span></label>
+            <input type="range" id="slider-count" min="10" max="500" step="10" value="100">
+        </div>
+
+        <div class="btn-row">
+            <button id="btn-start" style="display:none;">继续</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">还原</button>
+        </div>
+        
+        <div style="margin-top:20px; font-size:12px; color:#bbb; line-height:1.5;">
+            <strong>原理演示：</strong><br>
+            气体压强是大量分子无规则运动撞击容器壁产生的。
+            <ul style="padding-left:20px; margin:5px 0;">
+                <li>温度升高 ➔ 分子速度加快 ➔ 撞击更猛烈 ➔ 压强增大</li>
+                <li>数量增加 ➔ 撞击频率增加 ➔ 压强增大</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. 初始化 Three.js 场景 ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(20, 20, 30);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        // --- 2. 控制器 (OrbitControls) ---
+        // 兼容性处理：检查 OrbitControls 是否挂载在 THREE 上，或者是否是全局变量
+        let controls;
+        if (THREE.OrbitControls) {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        } else {
+            alert("错误：未找到 OrbitControls。请确保 OrbitControls.js 文件存在且版本正确。");
+        }
+        if(controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+        }
+
+        // --- 3. 场景物体 ---
+        // 灯光
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+        const pointLight = new THREE.PointLight(0xffffff, 1, 100);
+        pointLight.position.set(10, 10, 10);
+        scene.add(pointLight);
+
+        // 容器 (线框盒子)
+        const boxSize = 10;
+        const boxGeometry = new THREE.BoxGeometry(boxSize, boxSize, boxSize);
+        const boxMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, wireframe: true, transparent: true, opacity: 0.3 });
+        const boxMesh = new THREE.Mesh(boxGeometry, boxMaterial);
+        scene.add(boxMesh);
+
+        // 粒子系统
+        let particles = [];
+        const particleGeometry = new THREE.SphereGeometry(0.15, 8, 8);
+        const particleMaterial = new THREE.MeshPhongMaterial({ color: 0x00aaff });
+        const particleGroup = new THREE.Group();
+        scene.add(particleGroup);
+
+        // 状态变量
+        let isPaused = false;
+        let speedMultiplier = 1.0;
+        let targetParticleCount = 100;
+        let currentPressure = 0;
+        let accumulatedImpulse = 0; // 累计冲量
+        let frameCount = 0;
+
+        // --- 4. 物理逻辑函数 ---
+        function createParticle() {
+            const mesh = new THREE.Mesh(particleGeometry, particleMaterial);
+            
+            // 随机位置 (在盒子内部)
+            const halfSize = boxSize / 2 - 0.5;
+            mesh.position.set(
+                (Math.random() - 0.5) * 2 * halfSize,
+                (Math.random() - 0.5) * 2 * halfSize,
+                (Math.random() - 0.5) * 2 * halfSize
+            );
+
+            // 随机速度向量
+            const v = new THREE.Vector3(
+                Math.random() - 0.5,
+                Math.random() - 0.5,
+                Math.random() - 0.5
+            ).normalize().multiplyScalar(0.2); // 基础速度
+
+            return { mesh, velocity: v };
+        }
+
+        function updateParticlesCount() {
+            // 增加粒子
+            while (particles.length < targetParticleCount) {
+                const p = createParticle();
+                particles.push(p);
+                particleGroup.add(p.mesh);
+            }
+            // 减少粒子
+            while (particles.length > targetParticleCount) {
+                const p = particles.pop();
+                particleGroup.remove(p.mesh);
+                // 释放内存建议
+                // p.mesh.geometry.dispose(); // 由于复用 geometry，这里不需要
+            }
+        }
+
+        // 初始化粒子
+        updateParticlesCount();
+
+        // 物理循环
+        function updatePhysics() {
+            if (isPaused) return;
+
+            const halfSize = boxSize / 2;
+            const radius = 0.15;
+            
+            particles.forEach(p => {
+                // 应用速度 (受温度/倍率影响)
+                const currentVelocity = p.velocity.clone().multiplyScalar(speedMultiplier);
+                p.mesh.position.add(currentVelocity);
+
+                // 碰撞检测与反弹 (计算压强)
+                ['x', 'y', 'z'].forEach(axis => {
+                    if (p.mesh.position[axis] > halfSize - radius) {
+                        p.mesh.position[axis] = halfSize - radius;
+                        p.velocity[axis] *= -1;
+                        // 撞击！冲量 = 2 * mv (假设质量为1)
+                        accumulatedImpulse += Math.abs(currentVelocity[axis] * 2);
+                        // 视觉反馈：撞击时变红一瞬间
+                        p.mesh.material.color.setHex(0xff5555); 
+                    } else if (p.mesh.position[axis] < -halfSize + radius) {
+                        p.mesh.position[axis] = -halfSize + radius;
+                        p.velocity[axis] *= -1;
+                        accumulatedImpulse += Math.abs(currentVelocity[axis] * 2);
+                        p.mesh.material.color.setHex(0xff5555);
+                    } else {
+                        // 恢复颜色
+                         p.mesh.material.color.lerp(new THREE.Color(0x00aaff), 0.1);
+                    }
+                });
+            });
+        }
+
+        // --- 5. 图表逻辑 (Chart.js) ---
+        const ctx = document.getElementById('pressureChart').getContext('2d');
+        const pressureChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(20).fill(''), // 占位
+                datasets: [{
+                    label: '压强 (Pa)',
+                    data: Array(20).fill(0),
+                    borderColor: 'rgba(255, 99, 132, 1)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                animation: { duration: 0 }, // 关闭动画以提高性能
+                scales: {
+                    y: { beginAtZero: true, suggestedMax: 10 },
+                    x: { display: false }
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        function updateChart() {
+            if (isPaused) return;
+
+            // 每 60 帧 (约1秒) 更新一次图表数据
+            frameCount++;
+            if (frameCount % 10 === 0) { // 每10帧采样一次
+                // 计算平均压强 (Impulse / Time)
+                // 这里的 Time 是帧间隔
+                let instantPressure = accumulatedImpulse / 10; 
+                accumulatedImpulse = 0; // 重置累计器
+
+                // 更新图表数据
+                const data = pressureChart.data.datasets[0].data;
+                data.shift();
+                data.push(instantPressure);
+                pressureChart.update();
+            }
+        }
+
+        // --- 6. UI 交互逻辑 ---
+        
+        // 拖动图表
+        const chartWrapper = document.getElementById('chart-wrapper');
+        const chartHeader = document.getElementById('chart-header');
+        let isDragging = false;
+        let dragOffsetX, dragOffsetY;
+
+        chartHeader.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            dragOffsetX = e.clientX - chartWrapper.offsetLeft;
+            dragOffsetY = e.clientY - chartWrapper.offsetTop;
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isDragging) {
+                chartWrapper.style.left = (e.clientX - dragOffsetX) + 'px';
+                chartWrapper.style.top = (e.clientY - dragOffsetY) + 'px';
+            }
+        });
+
+        document.addEventListener('mouseup', () => { isDragging = false; });
+
+        // 隐藏/显示图表
+        const btnToggleChart = document.getElementById('btn-toggle-chart');
+        const chartContent = document.getElementById('chart-content');
+        btnToggleChart.addEventListener('click', () => {
+            chartContent.classList.toggle('hidden-content');
+            btnToggleChart.textContent = chartContent.classList.contains('hidden-content') ? '＋' : '−';
+        });
+
+        // 按钮控制
+        const btnPause = document.getElementById('btn-pause');
+        const btnStart = document.getElementById('btn-start');
+        const btnReset = document.getElementById('btn-reset');
+
+        btnPause.addEventListener('click', () => {
+            isPaused = true;
+            btnPause.style.display = 'none';
+            btnStart.style.display = 'inline-block';
+        });
+
+        btnStart.addEventListener('click', () => {
+            isPaused = false;
+            btnStart.style.display = 'none';
+            btnPause.style.display = 'inline-block';
+        });
+
+        btnReset.addEventListener('click', () => {
+            // 重置参数
+            document.getElementById('slider-speed').value = 1.0;
+            document.getElementById('slider-count').value = 100;
+            speedMultiplier = 1.0;
+            targetParticleCount = 100;
+            document.getElementById('val-speed').textContent = '1.0x';
+            document.getElementById('val-count').textContent = '100';
+            
+            // 重置粒子位置
+            particleGroup.clear();
+            particles = [];
+            updateParticlesCount();
+
+            // 重置图表
+            pressureChart.data.datasets[0].data = Array(20).fill(0);
+            pressureChart.update();
+            
+            accumulatedImpulse = 0;
+
+            if (isPaused) {
+                isPaused = false;
+                btnStart.style.display = 'none';
+                btnPause.style.display = 'inline-block';
+            }
+        });
+
+        // 滑块控制
+        const sliderSpeed = document.getElementById('slider-speed');
+        const valSpeed = document.getElementById('val-speed');
+        sliderSpeed.addEventListener('input', (e) => {
+            speedMultiplier = parseFloat(e.target.value);
+            valSpeed.textContent = speedMultiplier.toFixed(1) + 'x';
+        });
+
+        const sliderCount = document.getElementById('slider-count');
+        const valCount = document.getElementById('val-count');
+        sliderCount.addEventListener('input', (e) => {
+            targetParticleCount = parseInt(e.target.value);
+            valCount.textContent = targetParticleCount;
+            updateParticlesCount();
+        });
+
+        // --- 7. 主循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            updatePhysics();
+            updateChart();
+            
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 窗口大小自适应
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+
+    </script>
+</body>
+</html>

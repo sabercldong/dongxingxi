@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>第三宇宙速度演示 - 3D可视化</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050510; font-family: 'Segoe UI', sans-serif; }
+        
+        /* 画布 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 错误提示 */
+        #error-msg {
+            display: none; position: absolute; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff5555; background: rgba(255,255,255,0.9); padding: 20px;
+            border-radius: 8px; z-index: 1000; text-align: center;
+        }
+
+        /* 右侧面板 */
+        #ui-panel {
+            position: absolute; top: 0; right: 0; width: 280px; height: 100%;
+            background: rgba(20, 20, 35, 0.9); border-left: 1px solid #444;
+            padding: 20px; box-sizing: border-box; overflow-y: auto;
+            color: #fff; display: flex; flex-direction: column; gap: 15px;
+            z-index: 200;
+        }
+
+        /* 图表窗口 */
+        #chart-wrapper {
+            position: absolute; top: 20px; left: 20px; width: 350px; height: 240px;
+            background: rgba(0, 0, 0, 0.8); border: 1px solid #555; border-radius: 8px;
+            display: flex; flex-direction: column; z-index: 100;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        #chart-header {
+            height: 30px; background: #333; cursor: move; border-radius: 8px 8px 0 0;
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 0 10px; font-size: 12px; color: #ccc; user-select: none;
+        }
+        #chart-body { flex: 1; position: relative; padding: 5px; }
+        
+        /* 控件样式 */
+        h2 { margin: 0 0 10px 0; font-size: 18px; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        button { width: 100%; padding: 12px; margin-bottom: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; color: white; transition: 0.2s; }
+        button:active { transform: scale(0.98); }
+        .btn-start { background-color: #28a745; }
+        .btn-start:hover { background-color: #218838; }
+        .btn-pause { background-color: #ffc107; color: black; }
+        .btn-reset { background-color: #dc3545; }
+        .btn-chart { background-color: #17a2b8; }
+        
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .val-display { text-align: right; font-family: monospace; color: #4db8ff; font-size: 14px; }
+        .info-text { font-size: 12px; color: #999; line-height: 1.6; margin-top: auto; }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="error-msg"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>🚀 探测器离日距离 (AU)</span>
+            <span style="cursor:pointer; color:#ff5555" onclick="toggleChart(false)">✕</span>
+        </div>
+        <div id="chart-body"><canvas id="velocityChart"></canvas></div>
+    </div>
+
+    <div id="ui-panel">
+        <h2>🚀 发射控制台</h2>
+        
+        <div>
+            <button class="btn-start" id="btnStart" onclick="startSim()">▶ 开始发射</button>
+            <button class="btn-pause" onclick="pauseSim()">⏸ 暂停/继续</button>
+            <button class="btn-reset" onclick="resetSim()">↺ 还原重置</button>
+            <button class="btn-chart" onclick="toggleChart(true)">📊 显示图表</button>
+        </div>
+
+        <div>
+            <label style="font-size:13px; color:#ccc;">发射速度增量 (Δv)</label>
+            <input type="range" id="speedInput" min="12" max="25" step="0.5" value="16.7" oninput="updateLabel(this.value)">
+            <div class="val-display"><span id="speedVal">16.7</span> km/s</div>
+        </div>
+
+        <div class="info-text">
+            <p><strong>状态：</strong><span id="statusText" style="color:#fff">等待发射...</span></p>
+            <hr style="border-color:#444">
+            <p><strong>第三宇宙速度 (v₃)</strong>：约 16.7 km/s。达到此速度后，探测器将摆脱太阳引力，沿双曲线轨道飞出太阳系。</p>
+            <p style="color:yellow">● 太阳 (固定)</p>
+            <p style="color:#00aaff">● 地球 (公转中)</p>
+            <p style="color:#ff3333">● 探测器 (发射体)</p>
+        </div>
+    </div>
+
+    <script>
+        // --- 系统变量 ---
+        let scene, camera, renderer, controls;
+        let sun, earth, probe, probePath;
+        let animationId;
+        
+        // --- 物理状态 ---
+        let simState = {
+            running: false,
+            paused: false,
+            launched: false,
+            t: 0
+        };
+
+        // 模拟常数
+        const SIM_SPEED_MULT = 1; // 模拟速度倍率
+        const DT = 0.05;          // 时间步长
+        const GM = 12.5;          // 太阳引力参数 (适配 v=0.5, r=50)
+        
+        // 物体数据
+        let earthData = { angle: 0, r: 50, speed: 0.5 };
+        let probeData = { x: 50, z: 0, vx: 0, vz: 0 };
+        
+        // 图表数据
+        let myChart;
+        let chartDataBuffer = [];
+
+        // --- 1. 程序入口 (确保加载完成) ---
+        window.onload = function() {
+            if (typeof THREE === 'undefined') {
+                document.getElementById('error-msg').innerHTML = "错误：three.min.js 未加载。<br>请确保文件在同一目录。";
+                document.getElementById('error-msg').style.display = 'block';
+                return;
+            }
+            init3D();
+            initChart();
+            setupDrag();
+            animate();
+        };
+
+        // --- 2. 3D 场景初始化 ---
+        function init3D() {
+            const container = document.getElementById('canvas-container');
+            
+            // 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050510);
+            
+            // 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 2000);
+            camera.position.set(0, 100, 120);
+            camera.lookAt(0, 0, 0);
+
+            // 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            container.appendChild(renderer.domElement);
+
+            // 灯光
+            scene.add(new THREE.AmbientLight(0x404040));
+            const sunLight = new THREE.PointLight(0xffffff, 2, 500);
+            scene.add(sunLight);
+
+            // --- 创建物体 ---
+            
+            // 1. 太阳
+            sun = new THREE.Mesh(
+                new THREE.SphereGeometry(6, 32, 32), 
+                new THREE.MeshBasicMaterial({ color: 0xffcc00 })
+            );
+            scene.add(sun);
+
+            // 2. 地球
+            earth = new THREE.Mesh(
+                new THREE.SphereGeometry(2.5, 32, 32),
+                new THREE.MeshPhongMaterial({ color: 0x00aaff, emissive: 0x001133 })
+            );
+            scene.add(earth);
+
+            // 3. 探测器
+            probe = new THREE.Mesh(
+                new THREE.SphereGeometry(1.2, 16, 16),
+                new THREE.MeshPhongMaterial({ color: 0xff3333 })
+            );
+            scene.add(probe);
+
+            // 4. 地球轨道线
+            const orbitShape = new THREE.EllipseCurve(0, 0, 50, 50, 0, 2*Math.PI);
+            const orbitPts = orbitShape.getPoints(100);
+            const orbitLine = new THREE.Line(
+                new THREE.BufferGeometry().setFromPoints(orbitPts),
+                new THREE.LineBasicMaterial({ color: 0x333333 })
+            );
+            orbitLine.rotation.x = -Math.PI/2;
+            scene.add(orbitLine);
+
+            // 5. 探测器轨迹线
+            const trailGeo = new THREE.BufferGeometry();
+            // 预分配 5000 个点的空间
+            const positions = new Float32Array(5000 * 3);
+            trailGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            trailGeo.setDrawRange(0, 0);
+            probePath = new THREE.Line(
+                trailGeo,
+                new THREE.LineBasicMaterial({ color: 0xffaaaa, opacity: 0.6, transparent: true })
+            );
+            scene.add(probePath);
+
+            // 控制器兼容处理
+            try {
+                if(window.OrbitControls) controls = new window.OrbitControls(camera, renderer.domElement);
+                else if(THREE.OrbitControls) controls = new THREE.OrbitControls(camera, renderer.domElement);
+                if(controls) controls.enableDamping = true;
+            } catch(e) { console.log("OrbitControls load warning"); }
+
+            // 初始重置
+            resetSim();
+            window.addEventListener('resize', onResize);
+        }
+
+        // --- 3. 核心物理逻辑 ---
+        function updatePhysics() {
+            // A. 地球公转 (始终进行)
+            earthData.angle += (earthData.speed / earthData.r) * DT;
+            const ex = Math.cos(earthData.angle) * earthData.r;
+            const ez = Math.sin(earthData.angle) * earthData.r;
+            
+            earth.position.set(ex, 0, ez);
+
+            // B. 探测器逻辑
+            if (!simState.launched) {
+                // 1. 未发射：锁定在地球位置
+                probe.position.copy(earth.position);
+                // 实时同步坐标，但不计算引力
+                probeData.x = ex;
+                probeData.z = ez;
+            } else {
+                // 2. 已发射：万有引力计算 (F = GM/r^2)
+                const rx = probeData.x;
+                const rz = probeData.z;
+                const rSq = rx*rx + rz*rz;
+                const r = Math.sqrt(rSq);
+                
+                // 加速度 a = -GM / r^3 * vec(r)
+                const aScaler = -GM / (rSq * r);
+                const ax = aScaler * rx;
+                const az = aScaler * rz;
+
+                // 欧拉积分
+                probeData.vx += ax * DT;
+                probeData.vz += az * DT;
+                probeData.x += probeData.vx * DT;
+                probeData.z += probeData.vz * DT;
+
+                // 更新3D视图
+                probe.position.set(probeData.x, 0, probeData.z);
+
+                // 更新轨迹
+                updateTrail(probeData.x, probeData.z);
+                
+                // 更新图表
+                updateChart(r);
+            }
+        }
+
+        // --- 4. 交互控制 ---
+
+        function startSim() {
+            if (simState.launched) {
+                // 如果已经发射，点击变成"继续"（如果暂停了）
+                if (simState.paused) pauseSim();
+                return;
+            }
+
+            simState.running = true;
+            simState.paused = false;
+            simState.launched = true; // 标记发射
+
+            // === 关键修复：发射瞬间计算速度 ===
+            
+            // 1. 获取输入 (km/s)
+            const inputV = parseFloat(document.getElementById('speedInput').value);
+            
+            // 2. 计算缩放比例
+            // 模拟中地球速度 = 0.5
+            // 真实地球速度 ≈ 29.78 km/s
+            // 比例 k = 0.5 / 29.78
+            const k = 0.5 / 29.78;
+            
+            // 3. 计算模拟增量 (Delta V_sim)
+            const deltaV_sim = inputV * k;
+
+            // 4. 获取当前地球切线方向 (发射方向)
+            // 地球位置 (cos, sin) -> 速度方向 (-sin, cos)
+            const dirX = -Math.sin(earthData.angle);
+            const dirZ = Math.cos(earthData.angle);
+
+            // 5. 赋予探测器初速度 = 地球速度 + 发射增量
+            // 地球本身速度就是 0.5，方向是 (dirX, dirZ)
+            // 所以总速度 = (0.5 + deltaV_sim) * direction
+            const totalSpeed = earthData.speed + deltaV_sim;
+
+            probeData.vx = dirX * totalSpeed;
+            probeData.vz = dirZ * totalSpeed;
+            
+            // 6. 确保坐标同步
+            probeData.x = earth.position.x;
+            probeData.z = earth.position.z;
+
+            // UI 更新
+            document.getElementById('statusText').innerText = "已发射 - 飞行中";
+            document.getElementById('statusText').style.color = "#28a745";
+            document.getElementById('btnStart').innerText = "飞行中...";
+            document.getElementById('btnStart').style.opacity = "0.5";
+        }
+
+        function pauseSim() {
+            if (!simState.running) return;
+            simState.paused = !simState.paused;
+            document.getElementById('statusText').innerText = simState.paused ? "已暂停" : "飞行中";
+        }
+
+        function resetSim() {
+            simState = { running: false, paused: false, launched: false, t: 0 };
+            
+            // 重置地球位置
+            earthData.angle = 0;
+            
+            // 重置轨迹
+            trailCount = 0;
+            probePath.geometry.setDrawRange(0, 0);
+
+            // 重置图表
+            chartDataBuffer = [];
+            if(myChart) {
+                myChart.data.labels = [];
+                myChart.data.datasets[0].data = [];
+                myChart.update();
+            }
+
+            // UI 重置
+            document.getElementById('statusText').innerText = "等待发射...";
+            document.getElementById('statusText').style.color = "#fff";
+            document.getElementById('btnStart').innerText = "▶ 开始发射";
+            document.getElementById('btnStart').style.opacity = "1";
+            
+            // 强制渲染一帧以复位
+            updatePhysics();
+            renderer.render(scene, camera);
+        }
+
+        // --- 辅助功能 ---
+        
+        let trailCount = 0;
+        function updateTrail(x, z) {
+            if (trailCount >= 5000) return; // 达到上限停止绘制
+            if (trailCount % 3 !== 0) { trailCount++; return; } // 降采样优化性能
+
+            const arr = probePath.geometry.attributes.position.array;
+            const idx = (trailCount / 3) * 3; // 简化索引逻辑
+            arr[idx] = x;
+            arr[idx+1] = 0;
+            arr[idx+2] = z;
+            
+            probePath.geometry.setDrawRange(0, (trailCount / 3));
+            probePath.geometry.attributes.position.needsUpdate = true;
+            trailCount++;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if (simState.running && !simState.paused) {
+                updatePhysics();
+            } else if (!simState.running) {
+                // 未开始时，依然让地球转动以便观察
+                updatePhysics();
+            }
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function updateLabel(v) {
+            document.getElementById('speedVal').innerText = v;
+        }
+
+        // --- 图表模块 (安全加载) ---
+        function initChart() {
+            if (typeof Chart === 'undefined') return;
+            const ctx = document.getElementById('velocityChart').getContext('2d');
+            myChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: '距离 (Distance)',
+                        data: [],
+                        borderColor: '#ff5555',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    scales: {
+                        x: { display: false },
+                        y: { 
+                            grid: { color: '#333' },
+                            ticks: { color: '#888' }
+                        }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        let chartUpdateCtr = 0;
+        function updateChart(dist) {
+            if (!myChart) return;
+            chartUpdateCtr++;
+            if (chartUpdateCtr % 20 !== 0) return; // 每20帧更新一次
+
+            const val = dist.toFixed(1);
+            chartDataBuffer.push(val);
+            if (chartDataBuffer.length > 60) chartDataBuffer.shift();
+
+            // 构造空标签保持格式
+            const labels = new Array(chartDataBuffer.length).fill('');
+            
+            myChart.data.labels = labels;
+            myChart.data.datasets[0].data = chartDataBuffer;
+            myChart.update();
+        }
+
+        function toggleChart(show) {
+            document.getElementById('chart-wrapper').style.display = show ? 'flex' : 'none';
+        }
+
+        function setupDrag() {
+            const el = document.getElementById("chart-wrapper");
+            const head = document.getElementById("chart-header");
+            let p1=0, p2=0, p3=0, p4=0;
+            head.onmousedown = (e) => {
+                e.preventDefault(); p3 = e.clientX; p4 = e.clientY;
+                document.onmouseup = () => { document.onmouseup = null; document.onmousemove = null; };
+                document.onmousemove = (e) => {
+                    e.preventDefault();
+                    p1 = p3 - e.clientX; p2 = p4 - e.clientY;
+                    p3 = e.clientX; p4 = e.clientY;
+                    el.style.top = (el.offsetTop - p2) + "px";
+                    el.style.left = (el.offsetLeft - p1) + "px";
+                };
+            };
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高中物理：劈尖干涉（等厚干涉）演示</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e1e;
+            color: #eee;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* 左侧画布区域 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: default;
+        }
+
+        canvas {
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+            background-color: #121212;
+            border-radius: 4px;
+        }
+
+        /* 右侧控制区 */
+        #controls {
+            width: 340px;
+            background-color: #252526;
+            padding: 20px;
+            border-left: 1px solid #3e3e42;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        h2 {
+            font-size: 1.2rem;
+            border-bottom: 2px solid #007acc;
+            padding-bottom: 10px;
+            margin-bottom: 5px;
+            color: #fff;
+        }
+
+        .subtitle {
+            font-size: 0.85rem;
+            color: #aaa;
+            margin-bottom: 10px;
+        }
+
+        .control-group {
+            background: #2d2d30;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #3e3e42;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            color: #ccc;
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+
+        .slider-value {
+            font-weight: bold;
+            color: #007acc;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        /* 结果展示区 */
+        #info-panel {
+            margin-top: auto;
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #555;
+            font-size: 0.9rem;
+        }
+
+        .formula-box {
+            font-family: 'Courier New', Courier, monospace;
+            background: #000;
+            padding: 8px;
+            border-radius: 4px;
+            margin: 8px 0;
+            color: #8f8;
+            border-left: 3px solid #007acc;
+        }
+
+        .hint {
+            color: #ff9800;
+            font-size: 0.85rem;
+            margin-top: 5px;
+        }
+        
+        /* 鼠标悬停提示 */
+        .tooltip {
+            position: absolute;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 4px;
+            pointer-events: none;
+            font-size: 12px;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+        <div id="tooltip" class="tooltip"></div>
+    </div>
+
+    <div id="controls">
+        <h2>劈尖干涉 (等厚干涉)</h2>
+        <div class="subtitle">Air Wedge Interference</div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <label>入射光波长 (λ)</label>
+                <span id="val-lambda" class="slider-value">600 nm</span>
+            </div>
+            <input type="range" id="input-lambda" min="400" max="750" value="600" step="1">
+            <div style="font-size: 0.8rem; color:#888; margin-top:5px;">决定条纹颜色和间距</div>
+        </div>
+
+        <div class="control-group">
+            <div class="slider-header">
+                <label>劈尖最大开口 (D)</label>
+                <span id="val-gap" class="slider-value">5.0 μm</span>
+            </div>
+            <input type="range" id="input-gap" min="1.0" max="15.0" value="5.0" step="0.1">
+            <div class="hint">也可以直接拖动图中红点调节</div>
+        </div>
+        
+        <div class="control-group">
+            <div class="slider-header">
+                <label>介质折射率 (n)</label>
+                <span id="val-n" class="slider-value">1.00</span>
+            </div>
+            <input type="range" id="input-n" min="1.0" max="2.0" value="1.00" step="0.01">
+        </div>
+
+        <div id="info-panel">
+            <h3>物理原理</h3>
+            <p>光程差公式：</p>
+            <div class="formula-box">Δ = 2nd + λ/2</div>
+            <p>其中 λ/2 为半波损失(空气-玻璃界面)。</p>
+            <p><strong>干涉条件：</strong></p>
+            <ul style="padding-left: 20px; line-height: 1.6;">
+                <li>暗纹 (相消): Δ = kλ <br><span style="color:#aaa; font-size:0.8em">即 2nd = (k - 0.5)λ</span></li>
+                <li>亮纹 (相长): Δ = (k+0.5)λ <br><span style="color:#aaa; font-size:0.8em">即 2nd = kλ</span></li>
+            </ul>
+            <p class="hint" style="margin-top:10px;">观察：顶部接触点 (d=0) 总是暗纹。</p>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    const tooltip = document.getElementById('tooltip');
+
+    // UI 引用
+    const inputs = {
+        lambda: document.getElementById('input-lambda'),
+        gap: document.getElementById('input-gap'),
+        n: document.getElementById('input-n')
+    };
+
+    const displays = {
+        lambda: document.getElementById('val-lambda'),
+        gap: document.getElementById('val-gap'),
+        n: document.getElementById('val-n')
+    };
+
+    // 物理参数
+    let params = {
+        lambda: 600,   // nm
+        maxGap: 5000,  // nm (5 um)
+        n: 1.0,
+        wedgeLen: 300  // px (视觉长度)
+    };
+
+    // 交互状态
+    let isDragging = false;
+    let dragTarget = null; // 'bottom'
+    
+    // 布局常量
+    const centerX = 200; // 劈尖左侧X
+    const startY = 100;  // 劈尖顶部Y
+    const wedgeHeight = 400; // 劈尖视觉高度
+    
+    // 监听窗口大小
+    function resizeCanvas() {
+        canvas.width = document.getElementById('canvas-container').clientWidth;
+        canvas.height = document.getElementById('canvas-container').clientHeight;
+        draw();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // 输入监听
+    inputs.lambda.addEventListener('input', (e) => {
+        params.lambda = parseInt(e.target.value);
+        displays.lambda.innerText = params.lambda + " nm";
+        draw();
+    });
+
+    inputs.gap.addEventListener('input', (e) => {
+        // 输入的是um，转为nm
+        params.maxGap = parseFloat(e.target.value) * 1000;
+        displays.gap.innerText = parseFloat(e.target.value).toFixed(1) + " μm";
+        draw();
+    });
+
+    inputs.n.addEventListener('input', (e) => {
+        params.n = parseFloat(e.target.value);
+        displays.n.innerText = params.n.toFixed(2);
+        draw();
+    });
+
+    // 颜色转换工具
+    function wavelengthToColor(wavelength) {
+        let r, g, b;
+        if (wavelength >= 380 && wavelength < 440) { r = -(wavelength - 440) / (440 - 380); g = 0; b = 1; }
+        else if (wavelength >= 440 && wavelength < 490) { r = 0; g = (wavelength - 440) / (490 - 440); b = 1; }
+        else if (wavelength >= 490 && wavelength < 510) { r = 0; g = 1; b = -(wavelength - 510) / (510 - 490); }
+        else if (wavelength >= 510 && wavelength < 580) { r = (wavelength - 510) / (580 - 510); g = 1; b = 0; }
+        else if (wavelength >= 580 && wavelength < 645) { r = 1; g = -(wavelength - 645) / (645 - 580); b = 0; }
+        else if (wavelength >= 645 && wavelength <= 750) { r = 1; g = 0; b = 0; }
+        else { r = 0; g = 0; b = 0; }
+        return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`;
+    }
+
+    // 绘图主函数
+    function draw() {
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const cx = w / 3; // 劈尖放置在左侧1/3处
+        const cy = h / 2;
+        const topY = cy - wedgeHeight / 2;
+        const bottomY = cy + wedgeHeight / 2;
+        
+        // 视觉上的开口宽度 (像素)，为了演示效果放大显示
+        // 逻辑上的 params.maxGap 对应 视觉上的 maxPixelGap
+        const maxPixelGap = 150; 
+        // 当前视觉宽度
+        const currentPixelGap = (params.maxGap / 15000) * maxPixelGap; 
+
+        // 1. 绘制劈尖几何 (截面图)
+        // 玻璃板1 (左侧垂直线)
+        ctx.strokeStyle = '#888';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(cx, topY - 20);
+        ctx.lineTo(cx, bottomY + 20);
+        ctx.stroke();
+
+        // 玻璃板2 (右侧斜线)
+        ctx.beginPath();
+        ctx.moveTo(cx, topY); // 接触点
+        ctx.lineTo(cx + currentPixelGap, bottomY);
+        ctx.stroke();
+
+        // 填充劈尖介质颜色
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.2)'; // 类似于图中浅蓝色
+        ctx.beginPath();
+        ctx.moveTo(cx, topY);
+        ctx.lineTo(cx, bottomY);
+        ctx.lineTo(cx + currentPixelGap, bottomY);
+        ctx.closePath();
+        ctx.fill();
+
+        // 绘制控制点 (拖拽点) - 底部右侧
+        ctx.beginPath();
+        ctx.arc(cx + currentPixelGap, bottomY, 8, 0, Math.PI * 2);
+        ctx.fillStyle = 'red';
+        ctx.fill();
+        ctx.strokeStyle = 'white';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        // 拖动提示文字
+        ctx.fillStyle = '#ff5555';
+        ctx.font = '12px sans-serif';
+        ctx.fillText("拖动", cx + currentPixelGap + 15, bottomY + 5);
+
+        // 2. 绘制干涉条纹 (右侧大图)
+        // 在画布右侧绘制一个矩形区域显示看到的干涉条纹
+        const patternX = cx + 200;
+        const patternW = 100;
+        const patternH = wedgeHeight;
+        const patternY = topY;
+
+        // 条纹背景
+        ctx.fillStyle = '#000';
+        ctx.fillRect(patternX, patternY, patternW, patternH);
+        
+        // 标签
+        ctx.fillStyle = '#ccc';
+        ctx.font = '14px sans-serif';
+        ctx.fillText("干涉条纹视图 (正视)", patternX, patternY - 15);
+        ctx.fillText("厚度 d=0", patternX - 60, patternY + 10);
+        ctx.fillText(`d=${(params.maxGap/1000).toFixed(1)}μm`, patternX - 80, patternY + patternH);
+
+        // 绘制辅助虚线连接几何图和条纹图
+        ctx.setLineDash([5, 5]);
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 1;
+        // 顶部连线
+        ctx.beginPath(); ctx.moveTo(cx, topY); ctx.lineTo(patternX, topY); ctx.stroke();
+        // 底部连线
+        ctx.beginPath(); ctx.moveTo(cx + currentPixelGap, bottomY); ctx.lineTo(patternX, bottomY); ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 计算并绘制每一行的亮度
+        const color = wavelengthToColor(params.lambda);
+        
+        for (let y = 0; y < patternH; y++) {
+            // 当前高度比例 (0 在顶部, 1 在底部)
+            const ratio = y / patternH;
+            
+            // 对应的物理厚度
+            const d = ratio * params.maxGap; // nm
+            
+            // 光程差 Δ = 2nd
+            // 半波损失：空气膜上下表面反射，一次有一次无，总相位差增加 π (相当于 Δ增加 λ/2)
+            // 相位差 phi = (2π/λ) * 2nd + π
+            const phase = (2 * Math.PI / params.lambda) * (2 * params.n * d) + Math.PI;
+            
+            // 干涉强度 I = I0 * cos^2(phi/2)
+            const intensity = Math.cos(phase / 2) ** 2;
+            
+            // 绘制线条
+            ctx.globalAlpha = intensity;
+            ctx.fillStyle = color;
+            ctx.fillRect(patternX, patternY + y, patternW, 1);
+        }
+        ctx.globalAlpha = 1.0;
+
+        // 边框
+        ctx.strokeStyle = '#fff';
+        ctx.strokeRect(patternX, patternY, patternW, patternH);
+
+        // 3. 绘制光路示意 (选中某一个位置)
+        // 取中间位置演示
+        const rayY = cy;
+        const rayRatio = 0.5;
+        const rayD = params.maxGap * rayRatio;
+        const rayX = cx + currentPixelGap * rayRatio; // 斜面上的点X坐标
+
+        // 入射光
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx - 100, rayY); // 从左侧射入
+        ctx.lineTo(cx, rayY); // 到达第一表面
+        
+        // 内部光线 (为了简单，不画折射角度，近似垂直入射)
+        ctx.lineTo(rayX, rayY); // 到达第二表面
+        
+        // 反射光
+        ctx.lineTo(cx - 100, rayY - 5); // 稍微错开一点显示反射
+        ctx.stroke();
+
+        // 绘制箭头
+        drawArrow(ctx, cx - 60, rayY, 10, color); // 入射
+        drawArrow(ctx, cx - 60, rayY - 5, -10, color); // 反射
+        
+        // 标记 d
+        ctx.fillStyle = '#fff';
+        ctx.font = '12px Courier';
+        // ctx.fillText(`d=${rayD.toFixed(0)}nm`, cx + 10, rayY - 10);
+    }
+
+    function drawArrow(ctx, x, y, len, color) {
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - len, y - 3);
+        ctx.lineTo(x - len, y + 3);
+        ctx.fill();
+    }
+
+    // --- 交互逻辑 ---
+
+    // 坐标转换
+    function getMousePos(evt) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: evt.clientX - rect.left,
+            y: evt.clientY - rect.top
+        };
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        const pos = getMousePos(e);
+        const w = canvas.width;
+        const h = canvas.height;
+        const cx = w / 3;
+        const cy = h / 2;
+        const bottomY = cy + wedgeHeight / 2;
+        
+        const maxPixelGap = 150; 
+        const currentPixelGap = (params.maxGap / 15000) * maxPixelGap;
+        const targetX = cx + currentPixelGap;
+        const targetY = bottomY;
+
+        // 检查点击是否在红点附近
+        const dist = Math.sqrt((pos.x - targetX)**2 + (pos.y - targetY)**2);
+        if (dist < 20) {
+            isDragging = true;
+            canvas.style.cursor = 'ew-resize';
+        }
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        const pos = getMousePos(e);
+        
+        // 鼠标悬停变手型
+        const w = canvas.width;
+        const h = canvas.height;
+        const cx = w / 3;
+        const cy = h / 2;
+        const bottomY = cy + wedgeHeight / 2;
+        const maxPixelGap = 150; 
+        const currentPixelGap = (params.maxGap / 15000) * maxPixelGap;
+        const dist = Math.sqrt((pos.x - (cx + currentPixelGap))**2 + (pos.y - bottomY)**2);
+        
+        if (!isDragging) {
+            canvas.style.cursor = dist < 20 ? 'pointer' : 'default';
+        }
+
+        if (isDragging) {
+            // 根据鼠标X位置反推 maxGap
+            let newPixelGap = pos.x - cx;
+            // 限制范围
+            if (newPixelGap < 10) newPixelGap = 10; // 最小厚度
+            if (newPixelGap > 300) newPixelGap = 300; // 最大视觉宽度
+
+            // 转换回物理单位
+            // scale: 150px = 15000nm (原来的15um max range logic)
+            // currentPixelGap = (params.maxGap / 15000) * 150;
+            // => params.maxGap = (currentPixelGap / 150) * 15000 = currentPixelGap * 100
+            
+            let newGap = newPixelGap * 100; // nm
+            
+            // 限制物理范围 (与Input对应)
+            if (newGap > 15000) newGap = 15000;
+            if (newGap < 1000) newGap = 1000;
+
+            params.maxGap = newGap;
+            
+            // 同步UI
+            inputs.gap.value = (newGap / 1000).toFixed(1);
+            displays.gap.innerText = (newGap / 1000).toFixed(1) + " μm";
+            
+            draw();
+        }
+    });
+
+    canvas.addEventListener('mouseup', () => {
+        isDragging = false;
+        canvas.style.cursor = 'default';
+    });
+    
+    canvas.addEventListener('mouseleave', () => {
+        isDragging = false;
+    });
+
+    // 启动
+    resizeCanvas();
+    draw();
+
+</script>
+</body>
+</html>

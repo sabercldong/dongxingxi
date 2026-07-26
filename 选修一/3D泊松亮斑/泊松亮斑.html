@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>泊松亮斑 (Poisson Spot) 3D 演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #000; color: white; }
+        
+        /* 布局容器 */
+        #container { position: relative; width: 100vw; height: 100vh; display: flex; }
+        
+        /* 3D 画布 */
+        #canvas-wrapper { flex-grow: 1; position: relative; overflow: hidden; }
+        canvas { display: block; width: 100%; height: 100%; }
+
+        /* 右侧功能区 */
+        #sidebar {
+            width: 260px;
+            background: rgba(30, 30, 30, 0.9);
+            border-left: 1px solid #444;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        h3 { margin: 0 0 10px 0; color: #4db8ff; border-bottom: 1px solid #555; padding-bottom: 5px; }
+        
+        /* 控件样式 */
+        .control-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-size: 0.9em; color: #ccc; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        
+        .btn-group { display: flex; gap: 5px; }
+        button {
+            flex: 1;
+            padding: 8px;
+            background: #333;
+            color: white;
+            border: 1px solid #555;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #444; }
+        button.active { background: #0066cc; border-color: #0066cc; }
+        
+        /* 左上角可拖动图表 */
+        #chart-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            height: 250px;
+            background: rgba(0, 0, 0, 0.85);
+            border: 1px solid #555;
+            border-radius: 8px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+        }
+        #chart-header {
+            padding: 8px 10px;
+            background: #222;
+            cursor: move; /* 拖动手势 */
+            border-bottom: 1px solid #444;
+            border-radius: 8px 8px 0 0;
+            font-size: 0.85em;
+            color: #aaa;
+            user-select: none;
+        }
+        #chart-body { flex-grow: 1; position: relative; padding: 5px; }
+
+        /* 说明文字 */
+        .info { font-size: 0.8em; color: #888; margin-top: auto; line-height: 1.4; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-wrapper"></div>
+
+    <div id="sidebar">
+        <h3>控制面板</h3>
+        
+        <div class="control-group">
+            <label>动画控制</label>
+            <div class="btn-group">
+                <button id="btn-start">开始</button>
+                <button id="btn-pause" class="active">暂停</button>
+                <button id="btn-reset">还原</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>屏幕距离 (z)</label>
+            <input type="range" id="slider-dist" min="5" max="30" step="0.1" value="15">
+        </div>
+
+        <div class="control-group">
+            <label>障碍物大小 (a)</label>
+            <input type="range" id="slider-radius" min="0.5" max="2.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="info">
+            <p><strong>泊松亮斑演示：</strong><br>
+            观察光线绕过不透明圆盘后，在阴影中心出现的亮斑（衍射现象）。<br>
+            拖动左上角图表可移动。</p>
+        </div>
+    </div>
+</div>
+
+<div id="chart-card">
+    <div id="chart-header">光强分布 (按住拖动)</div>
+    <div id="chart-body">
+        <canvas id="intensityChart"></canvas>
+    </div>
+</div>
+
+<script src="three.min.js"></script>
+<script src="OrbitControls.js"></script>
+<script src="chart.min.js"></script>
+
+<script>
+    // ================= 全局变量 =================
+    let scene, camera, renderer, controls;
+    let laserBeam, obstacle, screenPlane;
+    let spotUniforms;
+    let isPlaying = false;
+    let animationId;
+    let chartInstance;
+    
+    // 参数状态
+    const params = {
+        distance: 15, // 屏幕距离
+        radius: 1.0,  // 障碍物半径
+        time: 0
+    };
+
+    // ================= 初始化程序 =================
+    function init() {
+        initThree();
+        initObjects();
+        initChart();
+        initUI();
+        initDrag();
+        animate();
+    }
+
+    // 1. Three.js 场景初始化
+    function initThree() {
+        const container = document.getElementById('canvas-wrapper');
+        
+        scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x000000, 0.02); // 增加一点雾气感
+
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(20, 10, 20);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        // 尝试初始化 OrbitControls (兼容处理)
+        if (THREE.OrbitControls) {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else {
+            console.warn("OrbitControls not found in THREE namespace. Checking global scope...");
+            // 如果用户的文件定义在全局 (旧版写法)
+            try {
+                controls = new OrbitControls(camera, renderer.domElement);
+            } catch(e) {
+                alert("未检测到 OrbitControls，请确保 OrbitControls.js 文件存在且版本正确。");
+            }
+        }
+        if(controls) {
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+        }
+
+        // 环境光
+        const ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+
+        // 窗口大小调整
+        window.addEventListener('resize', onWindowResize, false);
+    }
+
+    // 2. 创建 3D 物体 (泊松亮斑设置)
+    function initObjects() {
+        // A. 激光源 (示意图)
+        const geometryLaser = new THREE.CylinderGeometry(0.1, 0.1, 2, 16);
+        geometryLaser.rotateZ(-Math.PI / 2);
+        const materialLaser = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const laserSource = new THREE.Mesh(geometryLaser, materialLaser);
+        laserSource.position.set(-10, 0, 0);
+        scene.add(laserSource);
+
+        // 激光束 (半透明红线)
+        const beamGeo = new THREE.CylinderGeometry(0.05, 1.0, 25, 32, 1, true); // 锥形光束
+        beamGeo.rotateZ(-Math.PI / 2);
+        beamGeo.translate(2.5, 0, 0);
+        const beamMat = new THREE.MeshBasicMaterial({ 
+            color: 0xff0000, 
+            transparent: true, 
+            opacity: 0.1, 
+            side: THREE.DoubleSide,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+        });
+        laserBeam = new THREE.Mesh(beamGeo, beamMat);
+        scene.add(laserBeam);
+
+        // B. 障碍物 (不透明圆盘)
+        const obstacleGeo = new THREE.CircleGeometry(params.radius, 64);
+        const obstacleMat = new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide });
+        obstacle = new THREE.Mesh(obstacleGeo, obstacleMat);
+        obstacle.position.set(0, 0, 0);
+        obstacle.rotation.y = -Math.PI / 2; // 面向光
+        scene.add(obstacle);
+
+        // C. 接收屏 (使用自定义 Shader 绘制泊松亮斑)
+        // 使用 ShaderMaterial 来模拟物理衍射图案
+        const screenGeo = new THREE.PlaneGeometry(10, 10);
+        
+        spotUniforms = {
+            uRadius: { value: params.radius },
+            uDistance: { value: params.distance },
+            uColor: { value: new THREE.Color(0xff0000) },
+            uResolution: { value: new THREE.Vector2(10, 10) } // 物理尺寸
+        };
+
+        const screenMat = new THREE.ShaderMaterial({
+            uniforms: spotUniforms,
+            side: THREE.DoubleSide,
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `,
+            fragmentShader: `
+                uniform float uRadius;
+                uniform float uDistance;
+                uniform vec3 uColor;
+                varying vec2 vUv;
+
+                // 简单的贝塞尔函数近似 (用于模拟波的干涉)
+                float j0(float x) {
+                    return cos(x) / sqrt(x + 1.0); // 非常粗略的视觉近似
+                }
+
+                void main() {
+                    // 将 UV 坐标 (0~1) 转换为物理坐标 (-5~5)
+                    vec2 pos = (vUv - 0.5) * 10.0;
+                    float r = length(pos);
+                    
+                    // 衍射参数 (Fresnel number related)
+                    // 泊松亮斑的核心：中心 (r=0) 总是亮的
+                    // 随着 r 增加，频率由障碍物半径和距离决定
+                    
+                    float k = 20.0 * uRadius / (uDistance * 0.1 + 0.1); 
+                    
+                    float intensity = 0.0;
+                    
+                    if (r < uRadius * 0.1) {
+                        // 几何阴影内的中心泊松亮斑
+                        // 使用高斯衰减让中心最亮
+                        intensity = exp(-r*r * 20.0);
+                    } else if (r < uRadius) {
+                         // 阴影区域内的其他部分 (通常是暗的，除了中心)
+                         // 但为了视觉效果，我们让中心亮斑稍微扩散一点，然后变暗
+                         intensity = 0.05 * (sin(r * k) + 1.0);
+                         // 强制中心亮斑淡出
+                         float spot = exp(-r*r * 50.0); 
+                         intensity += spot;
+                    } else {
+                        // 几何阴影外部 (常规衍射条纹)
+                        float val = j0((r - uRadius) * k);
+                        intensity = val * val + 0.2; // 基础亮度
+                    }
+                    
+                    // 加上中心超亮的核心
+                    float core = exp(-length(pos) * length(pos) * 100.0);
+
+                    gl_FragColor = vec4(uColor * (intensity + core), 1.0);
+                }
+            `
+        });
+
+        screenPlane = new THREE.Mesh(screenGeo, screenMat);
+        screenPlane.position.set(params.distance, 0, 0);
+        screenPlane.rotation.y = -Math.PI / 2;
+        scene.add(screenPlane);
+    }
+
+    // 3. Chart.js 图表初始化
+    function initChart() {
+        const ctx = document.getElementById('intensityChart').getContext('2d');
+        
+        // 生成初始数据
+        const dataPoints = generateChartData();
+
+        chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: dataPoints.labels,
+                datasets: [{
+                    label: '光强分布 (Intensity)',
+                    data: dataPoints.data,
+                    borderColor: '#ff3333',
+                    backgroundColor: 'rgba(255, 51, 51, 0.2)',
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: false, // 禁用图表自身动画以提高性能
+                scales: {
+                    x: { display: false },
+                    y: { 
+                        beginAtZero: true, 
+                        grid: { color: '#333' },
+                        ticks: { color: '#888' }
+                    }
+                },
+                plugins: {
+                    legend: { labels: { color: '#ccc' } }
+                }
+            }
+        });
+    }
+
+    // 辅助：生成图表数据 (模拟泊松亮斑切面)
+    function generateChartData() {
+        const labels = [];
+        const data = [];
+        const steps = 100;
+        const range = 4.0; // 物理范围 -2 到 2
+        
+        for (let i = 0; i <= steps; i++) {
+            const r = (i / steps) * range - (range / 2); // -2 到 2
+            const absR = Math.abs(r);
+            
+            // 模拟公式
+            let intensity = 0;
+            const k = 20.0 * params.radius / (params.distance * 0.1 + 0.1);
+            
+            // 极其简化的数学模拟，为了图表好看
+            if (absR < 0.1) {
+                // 中心亮斑
+                intensity = 1.0; 
+            } else if (absR < params.radius) {
+                // 阴影区 (暗)
+                intensity = 0.05;
+            } else {
+                // 亮区 (波动)
+                intensity = 0.5 + 0.4 * Math.cos((absR - params.radius) * k);
+            }
+            
+            // 平滑中心尖峰
+            if (absR < 0.2) {
+                intensity = Math.max(intensity, Math.exp(-absR*absR * 50.0));
+            }
+
+            labels.push(r.toFixed(2));
+            data.push(intensity);
+        }
+        return { labels, data };
+    }
+
+    // 4. UI 交互逻辑
+    function initUI() {
+        // 按钮
+        document.getElementById('btn-start').onclick = () => {
+            isPlaying = true;
+            toggleBtn('btn-start');
+        };
+        document.getElementById('btn-pause').onclick = () => {
+            isPlaying = false;
+            toggleBtn('btn-pause');
+        };
+        document.getElementById('btn-reset').onclick = () => {
+            isPlaying = false;
+            toggleBtn('btn-reset');
+            resetParams();
+        };
+
+        // 滑块
+        const distSlider = document.getElementById('slider-dist');
+        distSlider.addEventListener('input', (e) => {
+            params.distance = parseFloat(e.target.value);
+            updateScene();
+        });
+
+        const radiusSlider = document.getElementById('slider-radius');
+        radiusSlider.addEventListener('input', (e) => {
+            params.radius = parseFloat(e.target.value);
+            // 更新障碍物几何体
+            scene.remove(obstacle);
+            const newGeo = new THREE.CircleGeometry(params.radius, 64);
+            const newMat = new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide });
+            obstacle = new THREE.Mesh(newGeo, newMat);
+            obstacle.rotation.y = -Math.PI / 2;
+            scene.add(obstacle);
+            
+            updateScene();
+        });
+    }
+
+    function toggleBtn(activeId) {
+        ['btn-start', 'btn-pause', 'btn-reset'].forEach(id => {
+            const el = document.getElementById(id);
+            if (id === activeId) el.classList.add('active');
+            else el.classList.remove('active');
+        });
+    }
+
+    function resetParams() {
+        params.distance = 15;
+        params.radius = 1.0;
+        document.getElementById('slider-dist').value = 15;
+        document.getElementById('slider-radius').value = 1.0;
+        
+        // 重置障碍物
+        scene.remove(obstacle);
+        const newGeo = new THREE.CircleGeometry(1.0, 64);
+        const newMat = new THREE.MeshBasicMaterial({ color: 0x333333, side: THREE.DoubleSide });
+        obstacle = new THREE.Mesh(newGeo, newMat);
+        obstacle.rotation.y = -Math.PI / 2;
+        scene.add(obstacle);
+        
+        // 重置相机
+        camera.position.set(20, 10, 20);
+        controls.target.set(0,0,0);
+        
+        updateScene();
+    }
+
+    // 5. 拖动功能逻辑 (原生 JS 实现)
+    function initDrag() {
+        const card = document.getElementById('chart-card');
+        const header = document.getElementById('chart-header');
+        
+        let isDragging = false;
+        let offsetX, offsetY;
+
+        header.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            offsetX = e.clientX - card.getBoundingClientRect().left;
+            offsetY = e.clientY - card.getBoundingClientRect().top;
+            card.style.cursor = 'grabbing';
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            let x = e.clientX - offsetX;
+            let y = e.clientY - offsetY;
+            
+            // 边界检查
+            const container = document.getElementById('container');
+            const maxX = container.clientWidth - card.clientWidth;
+            const maxY = container.clientHeight - card.clientHeight;
+            
+            x = Math.max(0, Math.min(x, maxX));
+            y = Math.max(0, Math.min(y, maxY));
+
+            card.style.left = x + 'px';
+            card.style.top = y + 'px';
+        });
+
+        document.addEventListener('mouseup', () => {
+            isDragging = false;
+            card.style.cursor = 'default';
+        });
+    }
+
+    // 更新场景和图表
+    function updateScene() {
+        // 更新屏幕位置
+        screenPlane.position.x = params.distance;
+        
+        // 更新 Shader Uniforms
+        spotUniforms.uDistance.value = params.distance;
+        spotUniforms.uRadius.value = params.radius;
+
+        // 更新激光束长度
+        // 这里简化处理，不动态改变 geometry，只改变视觉感受
+        
+        // 更新图表
+        const newData = generateChartData();
+        chartInstance.data.labels = newData.labels;
+        chartInstance.data.datasets[0].data = newData.data;
+        chartInstance.update();
+    }
+
+    function onWindowResize() {
+        const container = document.getElementById('canvas-wrapper');
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    // 动画循环
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if (isPlaying) {
+            // 演示动画：自动缓慢移动屏幕距离，展示动态衍射变化
+            let newVal = parseFloat(document.getElementById('slider-dist').value) + 0.05;
+            if (newVal > 30) newVal = 5;
+            document.getElementById('slider-dist').value = newVal;
+            params.distance = newVal;
+            updateScene();
+        }
+
+        if (controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // 启动
+    init();
+
+</script>
+</body>
+</html>

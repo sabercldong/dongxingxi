@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>3D 电路微观物理仿真 (本地版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; display: flex; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; height: 100vh; }
+        
+        /* 左侧 3D 画布 */
+        #canvas-container {
+            flex-grow: 1;
+            background-color: #000;
+            position: relative;
+        }
+
+        /* 右侧功能区 */
+        #gui-panel {
+            width: 300px;
+            background-color: #1a1a1a;
+            color: #fff;
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.5);
+            overflow-y: auto; /* 允许滚动 */
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; font-size: 1.2rem; border-bottom: 1px solid #444; padding-bottom: 10px; }
+        h3 { font-size: 1rem; color: #aaa; margin-bottom: 5px; }
+
+        .control-group {
+            background: #2a2a2a;
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+
+        #btn-start { background-color: #28a745; color: white; }
+        #btn-pause { background-color: #ffc107; color: black; }
+        #btn-reset { background-color: #dc3545; color: white; }
+        button:hover { opacity: 0.8; }
+
+        .status-text {
+            font-size: 0.9rem;
+            color: #00bcd4;
+            margin-top: 5px;
+            min-height: 40px;
+        }
+
+        .info { font-size: 0.85rem; color: #888; line-height: 1.4; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="gui-panel">
+        <h2>控制面板</h2>
+        
+        <div class="control-group">
+            <h3>播放控制</h3>
+            <button id="btn-start">闭合开关 (开始)</button>
+            <button id="btn-pause">暂停演示</button>
+            <button id="btn-reset">断开/还原</button>
+        </div>
+
+        <div class="control-group">
+            <h3>当前状态</h3>
+            <div id="status-display" class="status-text">电路断开，等待操作...</div>
+        </div>
+
+        <div class="control-group">
+            <h3>原理解析</h3>
+            <p class="info">
+                1. <strong>闭合开关</strong>: 瞬间建立电场。<br>
+                2. <strong>电场(红色箭头)</strong>: 推动电子。<br>
+                3. <strong>电子(蓝色粒子)</strong>: 定向移动形成电流。
+            </p>
+        </div>
+
+        <div class="control-group">
+            <h3>参数调整</h3>
+            <label>电压强度</label>
+            <input type="range" min="1" max="100" value="50" style="width:100%">
+        </div>
+    </div>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+
+    <script>
+        // 防止代码运行太快找不到 THREE 对象
+        window.onload = function() {
+            init();
+        };
+
+        function init() {
+            // --- 1. 初始化场景 ---
+            const container = document.getElementById('canvas-container');
+            
+            // 检查 Three.js 是否加载成功
+            if (typeof THREE === 'undefined') {
+                alert("错误：无法读取 three.min.js，请确保文件在同一目录下且文件名正确！");
+                return;
+            }
+
+            const scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+
+            const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 15, 20);
+
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            // --- 2. 控制器 (OrbitControls) ---
+            // 检查 OrbitControls 是否加载成功
+            if (!THREE.OrbitControls) {
+                // 有些版本的 OrbitControls 不会自动挂载到 THREE 下，这里做个兼容处理或报错提示
+                console.warn("OrbitControls 可能未正确挂载，尝试直接实例化...");
+            }
+            
+            // 如果你的 OrbitControls 版本较旧，它会自动挂载到 THREE.OrbitControls
+            // 如果是最新的 ESM 版本直接用 script 引入可能会报错，但看你文件大小应该是旧版/标准版
+            let controls;
+            try {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+            } catch (e) {
+                alert("OrbitControls 加载失败。请按 F12 查看控制台报错。可能原因：版本不兼容。");
+            }
+
+            // --- 3. 创建物体 ---
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            const pointLight = new THREE.PointLight(0xffffff, 1);
+            pointLight.position.set(10, 20, 10);
+            scene.add(pointLight);
+
+            // 导线
+            const wireRadius = 6;
+            const tubeRadius = 0.5;
+            const wireGeometry = new THREE.TorusGeometry(wireRadius, tubeRadius, 16, 100);
+            const wireMaterial = new THREE.MeshPhysicalMaterial({
+                color: 0x444444, transparent: true, opacity: 0.3,
+                roughness: 0.1, metalness: 0.5, side: THREE.DoubleSide
+            });
+            const wire = new THREE.Mesh(wireGeometry, wireMaterial);
+            wire.rotation.x = Math.PI / 2;
+            scene.add(wire);
+
+            // 电子
+            const electronCount = 60;
+            const electrons = [];
+            const electronGeometry = new THREE.SphereGeometry(0.15, 8, 8);
+            const electronMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff });
+
+            for (let i = 0; i < electronCount; i++) {
+                const electron = new THREE.Mesh(electronGeometry, electronMaterial);
+                const angle = (i / electronCount) * Math.PI * 2;
+                electron.position.x = Math.cos(angle) * wireRadius;
+                electron.position.z = Math.sin(angle) * wireRadius;
+                electron.position.y = (Math.random() - 0.5) * tubeRadius * 0.8;
+                electron.userData = { angle: angle };
+                scene.add(electron);
+                electrons.push(electron);
+            }
+
+            // 电场
+            const fieldArrows = [];
+            const arrowCount = 20;
+            for(let i=0; i<arrowCount; i++) {
+                const dir = new THREE.Vector3(1, 0, 0);
+                const origin = new THREE.Vector3(0, 0, 0);
+                const arrowHelper = new THREE.ArrowHelper(dir, origin, 1.5, 0xff0000, 0.5, 0.3);
+                arrowHelper.visible = false;
+                const angle = (i / arrowCount) * Math.PI * 2;
+                arrowHelper.position.set(Math.cos(angle) * wireRadius, 0, Math.sin(angle) * wireRadius);
+                const tangentDir = new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle)).normalize();
+                arrowHelper.setDirection(tangentDir);
+                scene.add(arrowHelper);
+                fieldArrows.push(arrowHelper);
+            }
+
+            // 电源
+            const battery = new THREE.Mesh(
+                new THREE.BoxGeometry(2, 1.5, 1),
+                new THREE.MeshStandardMaterial({ color: 0xffaa00 })
+            );
+            battery.position.set(wireRadius, 0, 0);
+            scene.add(battery);
+
+            // --- 4. 逻辑控制 ---
+            let simulationState = 'RESET';
+            let fieldPropagation = 0;
+            const statusDisplay = document.getElementById('status-display');
+
+            function animate() {
+                requestAnimationFrame(animate);
+                if(controls) controls.update();
+
+                if (simulationState === 'RUNNING') {
+                    if (fieldPropagation < 1) {
+                        fieldPropagation += 0.02;
+                        const visibleCount = Math.floor(fieldArrows.length * fieldPropagation);
+                        fieldArrows.forEach((arrow, index) => {
+                            if (index < visibleCount) arrow.visible = true;
+                        });
+                        statusDisplay.innerText = "阶段1: 电路闭合，电场沿导线迅速建立...";
+                    } else {
+                        statusDisplay.innerText = "阶段2: 电场力推动电子定向移动，形成恒定电流。";
+                        const speed = 0.01;
+                        electrons.forEach(ele => {
+                            ele.userData.angle -= speed;
+                            ele.position.x = Math.cos(ele.userData.angle) * wireRadius;
+                            ele.position.z = Math.sin(ele.userData.angle) * wireRadius;
+                        });
+                    }
+                }
+                renderer.render(scene, camera);
+            }
+            animate();
+
+            // 按钮事件
+            document.getElementById('btn-start').addEventListener('click', () => {
+                if (simulationState !== 'RUNNING') simulationState = 'RUNNING';
+            });
+            document.getElementById('btn-pause').addEventListener('click', () => {
+                simulationState = 'PAUSED';
+                statusDisplay.innerText = "演示暂停";
+            });
+            document.getElementById('btn-reset').addEventListener('click', () => {
+                simulationState = 'RESET';
+                fieldPropagation = 0;
+                fieldArrows.forEach(arrow => arrow.visible = false);
+                statusDisplay.innerText = "电路已断开";
+            });
+
+            window.addEventListener('resize', () => {
+                camera.aspect = (container.clientWidth) / container.clientHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(container.clientWidth, container.clientHeight);
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>3D 偏振光演示系统 (起偏与检偏)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; color: white; }
+        
+        /* 布局容器 */
+        #container { display: flex; height: 100vh; width: 100vw; }
+        
+        /* 左侧/中间 3D 视口 */
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        /* 右侧功能区 */
+        #controls-panel {
+            width: 300px;
+            background: #252526;
+            border-left: 1px solid #3e3e42;
+            padding: 20px;
+            overflow-y: auto; /* 滚轮支持 */
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        /* 控件样式 */
+        h2, h3 { margin-top: 0; color: #4ec9b0; }
+        .control-group { background: #333; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
+        label { display: block; margin-bottom: 5px; font-size: 0.9em; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        .btn-group { display: flex; gap: 10px; margin-bottom: 10px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        #btn-play { background-color: #4CAF50; color: white; }
+        #btn-pause { background-color: #f44336; color: white; }
+        #btn-reset { background-color: #2196F3; color: white; }
+        button:hover { opacity: 0.8; }
+
+        /* 左上角可拖动图表容器 */
+        #chart-draggable {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            background: rgba(30, 30, 30, 0.9);
+            border: 1px solid #555;
+            border-radius: 8px;
+            z-index: 100;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+        #chart-header {
+            padding: 10px;
+            background: #333;
+            cursor: move; /* 拖动手势 */
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            font-weight: bold;
+            font-size: 0.9em;
+            display: flex;
+            justify-content: space-between;
+        }
+        #chart-body { padding: 10px; background: white; border-bottom-left-radius: 8px; border-bottom-right-radius: 8px;}
+        
+        /* 数据显示 */
+        .value-display { float: right; color: #4ec9b0; }
+    </style>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+    <script src="./chart.min.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container">
+        <div id="chart-draggable">
+            <div id="chart-header">
+                <span>马吕斯定律 (I = I₀cos²θ)</span>
+                <span>⤭</span>
+            </div>
+            <div id="chart-body">
+                <canvas id="myChart" width="330" height="200"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls-panel">
+        <h2>偏振演示控制台</h2>
+        
+        <div class="control-group">
+            <h3>运行控制</h3>
+            <div class="btn-group">
+                <button id="btn-play">开始</button>
+                <button id="btn-pause">暂停</button>
+                <button id="btn-reset">还原</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>检偏器 (Analyzer)</h3>
+            <label>旋转角度 (θ): <span id="angle-val" class="value-display">0°</span></label>
+            <input type="range" id="slider-angle" min="0" max="360" value="0" step="1">
+            <p style="font-size: 0.8em; color: #aaa; margin-top:5px;">
+                当检偏器与起偏器垂直(90°)时，光强最弱。
+            </p>
+        </div>
+
+        <div class="control-group">
+            <h3>参数显示</h3>
+            <label>当前光强 (Intensity): <span id="intensity-val" class="value-display">1.00</span></label>
+            <div style="width: 100%; height: 10px; background: #444; margin-top: 5px; border-radius: 5px; overflow: hidden;">
+                <div id="intensity-bar" style="width: 100%; height: 100%; background: #4ec9b0; transition: width 0.1s;"></div>
+            </div>
+        </div>
+        
+        <div class="control-group">
+            <h3>说明</h3>
+            <ul style="font-size: 0.85em; padding-left: 20px; color: #ccc;">
+                <li>左侧：自然光(演示为正交波)</li>
+                <li>中间：起偏器 (垂直)</li>
+                <li>右侧：检偏器 (可旋转)</li>
+                <li>拖动鼠标左键旋转视角</li>
+                <li>滚轮缩放，右键平移</li>
+            </ul>
+        </div>
+    </div>
+</div>
+
+<script>
+    // ================= 1. 初始化 Three.js 场景 =================
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    // 添加一点环境雾，增加空间感
+    scene.fog = new THREE.FogExp2(0x1a1a1a, 0.02);
+
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    camera.position.set(15, 10, 25);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    container.appendChild(renderer.domElement);
+
+    // 灯光
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const pointLight = new THREE.PointLight(0xffffff, 1);
+    pointLight.position.set(10, 20, 10);
+    scene.add(pointLight);
+
+    // 坐标轴辅助 (红X 绿Y 蓝Z)
+    // 我们的光轴沿 X 轴传播
+    const axesHelper = new THREE.AxesHelper(5);
+    scene.add(axesHelper);
+
+    // ================= 2. 控制器 (OrbitControls) =================
+    // 注意：假设 OrbitControls 已挂载到 THREE 或全局，如果没有挂载，这行可能需要根据具体库版本调整
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+
+    // ================= 3. 物理模型构建 =================
+
+    // 全局变量
+    let isPlaying = true;
+    let time = 0;
+    let analyzerAngle = 0; // 弧度
+    const waveSpeed = 0.1;
+    const waveFreq = 0.5;
+    const numPoints = 200;
+    
+    // 3.1 创建偏振片 (Polarizer & Analyzer)
+    function createPolarizer(name, xPos, color) {
+        const group = new THREE.Group();
+        
+        // 边框
+        const geometry = new THREE.BoxGeometry(0.2, 6, 6);
+        const material = new THREE.MeshPhongMaterial({ 
+            color: color, 
+            transparent: true, 
+            opacity: 0.3,
+            side: THREE.DoubleSide
+        });
+        const mesh = new THREE.Mesh(geometry, material);
+        group.add(mesh);
+
+        // 边框线
+        const edges = new THREE.EdgesGeometry(geometry);
+        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0xffffff }));
+        group.add(line);
+
+        // 栅格线 (表示透光轴) - 默认垂直
+        const gridGroup = new THREE.Group();
+        for(let i = -2.5; i <= 2.5; i+=0.5) {
+            const lineGeo = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0.11, -2.8, i),
+                new THREE.Vector3(0.11, 2.8, i)
+            ]);
+            const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff, opacity: 0.8 });
+            gridGroup.add(new THREE.Line(lineGeo, lineMat));
+        }
+        group.add(gridGroup);
+        
+        group.position.x = xPos;
+        scene.add(group);
+        return { group, gridGroup };
+    }
+
+    // 起偏器 (固定在 x = -5)
+    const polarizer = createPolarizer("Polarizer", -5, 0x00ffff);
+    
+    // 检偏器 (可动，在 x = 5)
+    const analyzer = createPolarizer("Analyzer", 5, 0xff00ff);
+
+    // 3.2 光波 (Waves)
+    // 我们需要三段光波：
+    // 1. 入射光 (Incoming): 演示为自然光 (这里用垂直+水平波叠加模拟) -> (-15 到 -5)
+    // 2. 中间光 (Middle): 经过起偏器后的线偏振光 (垂直) -> (-5 到 5)
+    // 3. 出射光 (Outgoing): 经过检偏器后的光 (强度变化) -> (5 到 15)
+
+    function createWaveLine(startX, endX, color) {
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(numPoints * 3);
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const material = new THREE.LineBasicMaterial({ color: color, linewidth: 2 });
+        const line = new THREE.Line(geometry, material);
+        
+        // 保存元数据以便动画更新
+        line.userData = { startX: startX, endX: endX };
+        scene.add(line);
+        return line;
+    }
+
+    // 波段1: 入射 (混合波)
+    const waveIncomingV = createWaveLine(-15, -5, 0xffff00); // 垂直分量
+    const waveIncomingH = createWaveLine(-15, -5, 0xffaa00); // 水平分量 (模拟无序)
+    
+    // 波段2: 中间 (仅垂直)
+    const waveMiddle = createWaveLine(-5, 5, 0x00ffff); // 青色
+
+    // 波段3: 出射 (随角度变化)
+    const waveOutgoing = createWaveLine(5, 15, 0xff00ff); // 紫色
+
+    // ================= 4. 逻辑更新与动画 =================
+
+    function updateWaves() {
+        if(!isPlaying) return;
+        time += waveSpeed;
+
+        updateSingleWave(waveIncomingV, 2, 0); // 垂直振幅2
+        updateSingleWave(waveIncomingH, 2, Math.PI / 2); // 水平振幅2 (相位差模拟不同方向)
+        
+        // 中间波：总是垂直，振幅固定
+        updateSingleWave(waveMiddle, 2, 0, 'vertical');
+
+        // 出射波：根据马吕斯定律
+        // 振幅 A = A0 * cos(theta)
+        // 注意：振动方向也随检偏器旋转
+        let theta = analyzerAngle; 
+        let amplitude = 2 * Math.cos(theta);
+        
+        updateSingleWave(waveOutgoing, amplitude, 0, 'rotated', theta);
+    }
+
+    function updateSingleWave(lineObj, amp, phaseOffset, mode = 'normal', rotation = 0) {
+        const positions = lineObj.geometry.attributes.position.array;
+        const startX = lineObj.userData.startX;
+        const totalLen = lineObj.userData.endX - startX;
+        const step = totalLen / numPoints;
+
+        for (let i = 0; i < numPoints; i++) {
+            const x = startX + i * step;
+            // 波函数：y = A * sin(kx - wt)
+            // 这里的相位是 x 坐标相关的
+            const waveVal = amp * Math.sin((x * waveFreq) - time + phaseOffset);
+
+            positions[i * 3] = x; // X 轴是传播方向
+
+            if (mode === 'normal') {
+                // 仅根据 phaseOffset 决定是在 Y 还是 Z 振动
+                // 简单的 hack: 如果 phaseOffset 是 0 则是 Y (垂直)，如果是 PI/2 则是 Z (水平)
+                if (phaseOffset === 0) {
+                    positions[i * 3 + 1] = waveVal; // Y
+                    positions[i * 3 + 2] = 0;
+                } else {
+                    positions[i * 3 + 1] = 0;
+                    positions[i * 3 + 2] = waveVal; // Z
+                }
+            } else if (mode === 'vertical') {
+                positions[i * 3 + 1] = waveVal;
+                positions[i * 3 + 2] = 0;
+            } else if (mode === 'rotated') {
+                // 在 Y-Z 平面上旋转
+                // 原始振动是在 Y 轴 (因为过了垂直起偏器)
+                // 但经过检偏器后，振动方向应该平行于检偏器的透光轴
+                // 透光轴角度是 rotation (theta)
+                
+                // 更正物理图像：
+                // 1. 光强(振幅平方)按 cos^2 theta 衰减
+                // 2. 出射光的振动方向是沿着检偏器的狭缝方向
+                
+                // 这里 waveVal 已经是衰减后的振幅大小
+                // 只需要将其投影到旋转后的轴上
+                positions[i * 3 + 1] = waveVal * Math.cos(rotation); // Y 分量
+                positions[i * 3 + 2] = waveVal * Math.sin(rotation); // Z 分量
+            }
+        }
+        lineObj.geometry.attributes.position.needsUpdate = true;
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        updateWaves();
+        renderer.render(scene, camera);
+    }
+
+    // ================= 5. 图表功能 (Chart.js) =================
+    
+    const ctx = document.getElementById('myChart').getContext('2d');
+    
+    // 生成马吕斯定律数据 (0 到 360度)
+    const labels = [];
+    const dataCosSq = [];
+    for(let i=0; i<=360; i+=5) {
+        labels.push(i);
+        const rad = i * Math.PI / 180;
+        dataCosSq.push(Math.pow(Math.cos(rad), 2));
+    }
+
+    const myChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: '光强 (I/I₀)',
+                data: dataCosSq,
+                borderColor: 'rgba(75, 192, 192, 1)',
+                borderWidth: 2,
+                pointRadius: 0, // 默认隐藏点，只显示当前点
+                fill: true,
+                backgroundColor: 'rgba(75, 192, 192, 0.2)'
+            }, {
+                label: '当前状态',
+                data: [], // 动态更新这个点
+                pointBackgroundColor: 'red',
+                pointRadius: 6,
+                borderColor: 'red',
+                showLine: false
+            }]
+        },
+        options: {
+            responsive: false,
+            animation: false,
+            scales: {
+                x: { display: true, title: {display: true, text: '角度 θ'} },
+                y: { display: true, min: 0, max: 1.2 }
+            }
+        }
+    });
+
+    function updateChart(angleDeg) {
+        // 计算当前光强
+        const rad = angleDeg * Math.PI / 180;
+        const intensity = Math.pow(Math.cos(rad), 2);
+        
+        // 更新图表中红点的位置
+        // 我们创建一个只包含当前点的数组，其他位置为 null
+        const currentPointData = new Array(labels.length).fill(null);
+        // 找到最近的索引
+        const index = Math.round(angleDeg / 5);
+        if(index < currentPointData.length) {
+            currentPointData[index] = intensity;
+        }
+        
+        myChart.data.datasets[1].data = currentPointData;
+        myChart.update();
+
+        // 更新 UI 文字
+        document.getElementById('intensity-val').innerText = intensity.toFixed(2);
+        document.getElementById('intensity-bar').style.width = (intensity * 100) + "%";
+    }
+
+    // ================= 6. 交互逻辑 =================
+
+    // 滑块控制检偏器
+    const slider = document.getElementById('slider-angle');
+    const angleDisplay = document.getElementById('angle-val');
+
+    slider.addEventListener('input', function() {
+        const val = parseFloat(this.value);
+        angleDisplay.innerText = val + "°";
+        
+        // 更新物理变量
+        analyzerAngle = val * Math.PI / 180;
+        
+        // 旋转 3D 模型 (检偏器)
+        // 注意：我们的栅格本来是垂直的 (Y轴)，绕 X 轴旋转
+        analyzer.group.rotation.x = analyzerAngle;
+        
+        // 更新图表
+        updateChart(val);
+    });
+
+    // 按钮控制
+    document.getElementById('btn-play').onclick = () => isPlaying = true;
+    document.getElementById('btn-pause').onclick = () => isPlaying = false;
+    document.getElementById('btn-reset').onclick = () => {
+        isPlaying = true;
+        slider.value = 0;
+        slider.dispatchEvent(new Event('input')); // 触发重置逻辑
+        controls.reset(); // 重置相机
+    };
+
+    // 窗口大小自适应
+    window.addEventListener('resize', () => {
+        camera.aspect = (window.innerWidth - 300) / window.innerHeight; // 减去侧边栏宽度
+        camera.updateProjectionMatrix();
+        renderer.setSize(document.getElementById('canvas-container').clientWidth, window.innerHeight);
+    });
+
+    // ================= 7. 拖拽图表逻辑 =================
+    const draggable = document.getElementById('chart-draggable');
+    const header = document.getElementById('chart-header');
+    
+    let isDragging = false;
+    let offsetX, offsetY;
+
+    header.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        offsetX = e.clientX - draggable.offsetLeft;
+        offsetY = e.clientY - draggable.offsetTop;
+        header.style.cursor = 'grabbing';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+            let x = e.clientX - offsetX;
+            let y = e.clientY - offsetY;
+            
+            // 边界检查
+            const maxX = window.innerWidth - draggable.offsetWidth;
+            const maxY = window.innerHeight - draggable.offsetHeight;
+            
+            if(x < 0) x = 0; if(x > maxX) x = maxX;
+            if(y < 0) y = 0; if(y > maxY) y = maxY;
+
+            draggable.style.left = x + 'px';
+            draggable.style.top = y + 'px';
+        }
+    });
+
+    document.addEventListener('mouseup', () => {
+        isDragging = false;
+        header.style.cursor = 'move';
+    });
+
+    // 初始化调用一次图表
+    updateChart(0);
+    // 启动动画
+    animate();
+
+</script>
+</body>
+</html>

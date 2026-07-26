@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>高中物理动态演示控制台</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --sidebar-color: #252526;
+            --hover-color: #37373d;
+            --active-color: #007acc;
+            --text-main: #cccccc;
+            --text-bright: #ffffff;
+            --sidebar-width: 280px;
+        }
+
+        body, html {
+            margin: 0; padding: 0; height: 100%;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+            overflow: hidden;
+        }
+
+        /* --- 修复版启动屏 --- */
+        #splash-screen {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: #1a1a1a;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            z-index: 10000;
+            transition: opacity 0.6s ease;
+        }
+
+        #splash-screen.hidden { opacity: 0; pointer-events: none; }
+
+        #splash-screen h1 {
+            font-size: 3rem;
+            color: var(--active-color);
+            margin: 0 0 20px 0;
+        }
+
+        #splash-screen p.subtitle {
+            font-size: 1.2rem;
+            color: #888;
+            margin: 0 0 50px 0;
+        }
+
+        .start-btn {
+            padding: 15px 60px;
+            font-size: 1.2rem;
+            color: white;
+            background: var(--active-color);
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            z-index: 10001; /* 确保按钮在最上层 */
+            transition: transform 0.2s;
+        }
+
+        .start-btn:active { transform: scale(0.95); }
+
+        /* 修复重叠：开发者信息固定在底部 */
+        .info-footer {
+            position: absolute;
+            bottom: 40px;
+            text-align: center;
+            color: #555;
+            font-size: 0.9rem;
+        }
+
+        /* --- 主界面布局 --- */
+        #main-container { display: flex; height: 100vh; width: 100vw; }
+
+        #sidebar {
+            width: var(--sidebar-width);
+            background-color: var(--sidebar-color);
+            display: flex; flex-direction: column;
+            border-right: 1px solid #333;
+            transition: margin-left 0.3s ease;
+            flex-shrink: 0;
+            z-index: 50;
+        }
+
+        body.sidebar-collapsed #sidebar { margin-left: calc(var(--sidebar-width) * -1); }
+
+        #toggle-btn {
+            position: fixed; left: 15px; top: 15px;
+            z-index: 100; background: var(--active-color); color: white;
+            border: none; border-radius: 4px; width: 35px; height: 35px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+        }
+
+        /* 当菜单展开时，按钮移动到菜单右侧边缘 */
+        body:not(.sidebar-collapsed) #toggle-btn { left: calc(var(--sidebar-width) + 15px); }
+
+        .title-bar { padding: 20px; background: #2d2d2d; text-align: center; border-bottom: 2px solid var(--active-color); }
+
+        .menu { flex-grow: 1; overflow-y: auto; padding: 10px 0; }
+
+        /* 修复点击逻辑：详情折叠框 */
+        details { margin-bottom: 5px; width: 100%; }
+        
+        summary {
+            padding: 12px 20px;
+            cursor: pointer;
+            color: #aaa;
+            font-weight: bold;
+            display: flex; align-items: center;
+            user-select: none; /* 防止频繁点击选中文字 */
+            outline: none;
+        }
+        
+        summary:hover { background-color: var(--hover-color); color: white; }
+
+        /* 文件夹图标 */
+        summary::before {
+            content: "📂"; 
+            margin-right: 10px;
+            font-size: 1rem;
+        }
+
+        .nav-item {
+            padding: 10px 20px 10px 50px;
+            cursor: pointer;
+            display: block;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            text-decoration: none;
+        }
+        .nav-item:hover { background-color: var(--hover-color); color: white; }
+        .nav-item.active { background-color: var(--active-color); color: white; }
+
+        #content { flex-grow: 1; background: #f0f0f0; position: relative; }
+        iframe { width: 100%; height: 100%; border: none; }
+    </style>
+</head>
+<body class="sidebar-collapsed"> <div id="splash-screen">
+    <h1>高中物理动态演示系统</h1>
+    <p class="subtitle">可视化探索物理之美</p>
+    
+    <button class="start-btn" onclick="enterSystem()">进入系统</button>
+
+    <div class="info-footer">
+        <div>开发者：董兴习（合肥一六八中学）</div>
+        <div>许琴（华东师范大学）</div>
+    </div>
+</div>
+
+<button id="toggle-btn" onclick="toggleSidebar()">☰</button>
+
+<div id="main-container">
+    <div id="sidebar">
+        <div class="title-bar"><h2>物理控制台</h2></div>
+        <div class="menu">
+            <details>
+                <summary>必修一</summary>
+                <div class="nav-item" onclick="loadPage(this, '必修一/轮子上的点：滚轮线.html')">轮子上的点：滚轮线</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/切线和割线的区别和联系.html')">切线和割线的区别和联系</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/弦和弧长：割圆术.html')">弦和弧长：割圆术</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/打点计时器.html')">打点计时器</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/追击相遇问题.html')">追击相遇问题</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/匀速车上人跳起.html')">匀速车上人跳起</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/图像法推导匀变速直线运动的x-t公式.html')">图像法推导匀变速直线运动的x-t公式</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/等时圆.html')">等时圆</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/打印机模型.html')">打印机模型</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/力分解的多样性.html')">力分解的多样性</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/两力合力范围.html')">两力合力范围</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/晾衣架模型.html')">晾衣架模型</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/摩擦角.html')">摩擦角</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/3D立体受力/立体受力.html')">立体受力</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/3D两杆间瓦片/两杆间瓦片.html')">两杆间瓦片</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/3D相似三角形法/相似三角形法.html')">相似三角形法</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/3D旋转圆法/旋转圆法.html')">旋转圆法</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/非惯性系.html')">非惯性系</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/牛顿第二定律实验.html')">牛顿第二定律实验</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/小球弹簧模型.html')">小球弹簧模型</div>
+                <div class="nav-item" onclick="loadPage(this, '必修一/雨滴下落模型.html')">雨滴下落模型</div>
+
+                </details>
+
+
+
+            <details>
+		<summary>必修二</summary>
+		<div class="nav-item" onclick="loadPage(this, '必修二/3D车轮倒转/车轮倒转.html')">车轮倒转</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D打网球/打网球.html')">打网球</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D拉船模型/拉船模型.html')">拉船模型</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/绳拉船模型.html')">绳拉船模型</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D类平抛/类平抛.html')">类平抛</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D理发店彩带/理发店彩带.html')">理发店彩带</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D平抛对称/平抛对称.html')">平抛对称</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D伞甩雨滴/伞甩雨滴.html')">伞甩雨滴</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D水流星/水流星.html')">水流星</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D小球在竖直圆轨道中运动/小球在竖直圆轨道中运动.html')">小球在竖直圆轨道中运动</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D斜抛运动的包络线/斜抛运动包络线.html')">斜抛运动包络线</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D圆筒中平抛/圆筒中平抛.html')">圆筒中平抛</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D圆周运动临界模型/圆周运动临界模型.html')">圆周运动临界模型</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D圆锥摆运动/圆锥摆运动.html')">圆锥摆运动</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D子弹打圆筒/子弹打圆筒.html')">子弹打圆筒</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D地球大炮/地球大炮.html')">地球大炮</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D第三宇宙速度/第三宇宙速度.html')">第三宇宙速度</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D第一、第二宇宙速度/第一、第二宇宙速度.html')">第一、第二宇宙速度</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D开普勒第二定律/开普勒第二定律.html')">开普勒第二定律</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D开普勒第一定律/开普勒第一定律.html')">开普勒第一定律</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D三星系统/三星系统.html')">三星系统</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D双星系统/双星系统.html')">双星系统</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D太阳系/太阳系.html')">太阳系</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D卫星变轨/卫星变轨.html')">卫星变轨</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D卫星信号/卫星信号.html')">卫星信号</div>
+                <div class="nav-item" onclick="loadPage(this, '必修二/3D重力和引力的关系/重力和引力的关系.html')">重力和引力的关系</div>
+  
+
+		</details>
+
+
+
+            <details>
+		<summary>必修三</summary>
+		<div class="nav-item" onclick="loadPage(this, '必修三/3D磁聚焦/磁聚焦.html')">磁聚焦</div>
+                <div class="nav-item" onclick="loadPage(this, '必修三/3D磁发散/磁发散.html')">磁发散</div>
+		<div class="nav-item" onclick="loadPage(this, '必修三/3D带电粒子在加速、偏转电场中的运动/带电粒子在加速、偏转电场中的运动.html')">带电粒子在加速、偏转电场中的运动</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D等效重力场/等效重力场.html')">等效重力场</div>
+	       <div class="nav-item" onclick="loadPage(this, '必修三/3D交变电场/交变电场.html')">交变电场</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D均匀带电圆环/均匀带电圆环.html')">均匀带电圆环</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D两个点电荷的电场/两个点电荷的电场.html')">两个点电荷的电场</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D安培分子电流假说/安培分子电流假说.html')">安培分子电流假说</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D磁通量/磁通量.html')">磁通量</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D电流产生的磁场/电流产生的磁场.html')">电流产生的磁场</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D粒子直线加速/粒子直线加速.html')">粒子直线加速</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D电流微观表达式/电流微观表达式.html')">电流微观表达式</div>
+               <div class="nav-item" onclick="loadPage(this, '必修三/3D恒定电流的产生/恒定电流的产生.html')">恒定电流的产生</div>
+
+
+
+               </details>
+
+
+
+
+
+            <details>
+		<summary>选修一</summary>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D弹簧反冲/弹簧反冲.html')">弹簧反冲</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D人船模型/人船模型.html')">人船模型</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D小车单摆/小车单摆.html')">小车单摆</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D小车抡锤/小车抡锤.html')">小车抡锤</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D小球半圆槽/小球半圆槽.html')">小球半圆槽</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D小球和圆弧/小球和圆弧.html')">小球和圆弧</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3DDNA双螺旋结构衍射/DNA双螺旋结构衍射.html')">DNA双螺旋结构衍射</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D薄膜干涉检测平整度/薄膜干涉检测平整度.html')">薄膜干涉检测平整度</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D波的干涉/波的干涉.html')">波的干涉</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D单缝衍射/单缝衍射.html')">单缝衍射</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D弹簧纵波/弹簧纵波.html')">弹簧纵波</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D肥皂膜干涉/肥皂膜干涉.html')">肥皂膜干涉</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D牛顿环/牛顿环.html')">牛顿环</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D劈尖干涉/劈尖干涉.html')">劈尖干涉</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D偏振/偏振.html')">偏振</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D泊松亮斑/泊松亮斑.html')">泊松亮斑</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D起偏和检偏/起偏和检偏.html')">起偏和检偏</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D杨氏双缝干涉实验/杨氏双缝干涉实验.html')">杨氏双缝干涉实验</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D折射反射/折射反射.html')">折射反射</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/薄膜干涉.html')">薄膜干涉</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/单缝衍射实验.html')">单缝衍射实验</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/单缝衍射实验2.html')">单缝衍射实验2</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/弹簧纵波.html')">弹簧纵波</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/多普勒效应.html')">多普勒效应</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/3D多普勒效应/多普勒效应.html')">3D多普勒效应</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/共振.html')">共振</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/横波的产生.html')">横波的产生</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/火箭发射原理.html')">火箭发射原理</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/声波模拟.html')">声波模拟</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/绳波.html')">绳波</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/杨氏双缝干涉实验.html')">杨氏双缝干涉实验</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/杨氏双缝干涉实验2.html')">杨氏双缝干涉实验2</div>
+                <div class="nav-item" onclick="loadPage(this, '选修一/纵波.html')">纵波</div>
+
+	   </details>
+
+
+            <details open>
+                <summary>选修二</summary>
+                <div class="nav-item" onclick="loadPage(this, '选修二/磁流体发电机.html')">磁流体发电机</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/回旋加速器.html')">回旋加速器</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/霍尔元件.html')">霍尔元件</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/配速法.html')">配速法</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/旋转圆.html')">旋转圆</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/有边界旋转圆问题.html')">有边界旋转圆问题</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D带电粒子滚轮线运动/带电粒子滚轮线运动.html')">带电粒子滚轮线运动</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D带点粒子的等距螺旋运动/带点粒子的等距螺旋运动.html')">带点粒子的等距螺旋运动</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D正弦式交流发电机/正弦式交流发电机.html')">正弦式交流发电机</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D安培力/安培力.html')">安培力</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D地磁场/地磁场.html')">地磁场</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D电磁驱动/电磁驱动.html')">电磁驱动</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D电磁阻尼/电磁阻尼.html')">电磁阻尼</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D动生电动势/动生电动势.html')">动生电动势</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D法拉第圆盘发电机/法拉第圆盘发电机.html')">法拉第圆盘发电机</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D感生电场/感生电场.html')">感生电场</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D楞次定律/楞次定律.html')">楞次定律</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D洛伦兹力/洛伦兹力.html')">洛伦兹力</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D涡流/涡流.html')">涡流</div>
+                <div class="nav-item" onclick="loadPage(this, '选修二/3D自感互感/自感互感.html')">自感互感</div>
+
+
+
+
+
+
+
+            </details>
+
+
+
+
+            <details>
+		<summary>选修三</summary>
+		<div class="nav-item" onclick="loadPage(this, '选修三/3D表面张力/表面张力.html')">表面张力</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/3D表面张力/表面张力产生原因.html')">表面张力产生原因</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/3D布朗运动/布朗运动.html')">布朗运动</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/3D浸润不浸润/浸润不浸润.html')">浸润不浸润</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/3D气体压强/气体压强.html')">气体压强</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/3D速度分布律/速度分布律.html')">速度分布律</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/3D核反应堆核裂变/核反应堆核裂变.html')">核反应堆核裂变</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/3D原子弹核裂变/原子弹核裂变.html')">原子弹核裂变</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/波粒二象性.html')">波粒二象性</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/光电效应.html')">光电效应</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/核裂变.html')">核裂变</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/黑体辐射.html')">黑体辐射</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/康普顿效应.html')">康普顿效应</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/卢瑟福核式结构模型.html')">卢瑟福核式结构模型</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/氢原子光谱.html')">氢原子光谱</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/三种衰变.html')">三种衰变</div>
+                <div class="nav-item" onclick="loadPage(this, '选修三/原子核衰变.html')">原子核衰变</div>
+
+
+            </details>
+        </div>
+    </div>
+    <div id="content">
+        <iframe id="mainFrame" src="about:blank"></iframe>
+    </div>
+</div>
+
+<script>
+    function enterSystem() {
+        document.getElementById('splash-screen').classList.add('hidden');
+        // 进入系统后自动展开侧边栏
+        document.body.classList.remove('sidebar-collapsed');
+    }
+
+    function toggleSidebar() {
+        document.body.classList.toggle('sidebar-collapsed');
+    }
+
+    function loadPage(el, url) {
+        document.querySelectorAll('.nav-item').forEach(item => item.classList.remove('active'));
+        el.classList.add('active');
+        document.getElementById('mainFrame').src = url;
+    }
+</script>
+
+</body>
+</html>

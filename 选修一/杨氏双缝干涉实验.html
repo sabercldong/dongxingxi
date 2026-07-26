@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>杨氏双缝干涉实验动态演示</title>
+    <style>
+        :root {
+            --bg-color: #1a1a2e;
+            --text-color: #e0e0e0;
+            --accent-color: #4db6ac;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h2 {
+            margin-bottom: 10px;
+            color: var(--accent-color);
+        }
+
+        .main-container {
+            display: flex;
+            gap: 20px;
+            background-color: #242442;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .canvas-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        canvas {
+            background: #000;
+            border: 2px solid #333;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            cursor: crosshair;
+        }
+
+        .label {
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: var(--accent-color);
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            min-width: 220px;
+            padding: 15px;
+            background-color: #2a2a4a;
+            border-radius: 8px;
+        }
+
+        .control-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .control-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .hint {
+            font-size: 0.8em;
+            color: #aaa;
+            margin-top: 10px;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>杨氏双缝干涉实验 (Young's Double-Slit Interference)</h2>
+
+    <div class="main-container">
+        <div class="canvas-group">
+            <div class="label">实验俯视图 (波的叠加)</div>
+            <canvas id="setupCanvas" width="400" height="400"></canvas>
+        </div>
+
+        <div class="canvas-group">
+            <div class="label">屏幕干涉条纹 & 强度曲线</div>
+            <canvas id="screenCanvas" width="200" height="400"></canvas>
+        </div>
+
+        <div class="controls">
+            <div class="control-item">
+                <div class="control-header">
+                    <label for="wavelength">波长 (λ):</label>
+                    <span id="val_lambda">500 nm</span>
+                </div>
+                <input type="range" id="wavelength" min="400" max="700" value="500" step="5">
+                <div id="color-preview" style="height: 5px; margin-top: 5px; border-radius: 2px;"></div>
+            </div>
+
+            <div class="control-item">
+                <div class="control-header">
+                    <label for="slitDistance">双缝间距 (d):</label>
+                    <span id="val_d">中</span>
+                </div>
+                <input type="range" id="slitDistance" min="10" max="100" value="40">
+            </div>
+
+            <div class="control-item">
+                <div class="control-header">
+                    <label for="screenDistance">屏幕距离 (L):</label>
+                    <span id="val_L">远</span>
+                </div>
+                <input type="range" id="screenDistance" min="50" max="200" value="150">
+            </div>
+
+            <div class="hint">
+                <p>原理公式: y = (nλL) / d</p>
+                <p>观察：波长越大，间距d越小，距离L越远，条纹越宽。</p>
+            </div>
+        </div>
+    </div>
+
+<script>
+    // 获取DOM元素
+    const setupCanvas = document.getElementById('setupCanvas');
+    const ctxSetup = setupCanvas.getContext('2d');
+    const screenCanvas = document.getElementById('screenCanvas');
+    const ctxScreen = screenCanvas.getContext('2d');
+
+    // 控件
+    const sliderLambda = document.getElementById('wavelength');
+    const sliderD = document.getElementById('slitDistance');
+    const sliderL = document.getElementById('screenDistance');
+    
+    // 数值显示
+    const valLambda = document.getElementById('val_lambda');
+    const valD = document.getElementById('val_d');
+    const valL = document.getElementById('val_L');
+    const colorPreview = document.getElementById('color-preview');
+
+    // 物理参数 (模拟单位)
+    let params = {
+        lambda: 500, // 波长 nm
+        d: 40,       // 双缝间距 (模拟单位)
+        L: 150,      // 屏幕距离 (模拟单位)
+        time: 0,     // 用于动画的相位
+        waveSpeed: 0.2 // 波的传播速度
+    };
+
+    // 辅助函数：将波长转换为RGB颜色 (用于视觉效果)
+    function wavelengthToColor(wavelength) {
+        let R, G, B, alpha;
+        if (wavelength >= 400 && wavelength <= 440) {
+            R = -1 * (wavelength - 440) / (440 - 400); G = 0; B = 1;
+        } else if (wavelength > 440 && wavelength <= 490) {
+            R = 0; G = (wavelength - 440) / (490 - 440); B = 1;
+        } else if (wavelength > 490 && wavelength <= 510) {
+            R = 0; G = 1; B = -1 * (wavelength - 510) / (510 - 490);
+        } else if (wavelength > 510 && wavelength <= 580) {
+            R = (wavelength - 510) / (580 - 510); G = 1; B = 0;
+        } else if (wavelength > 580 && wavelength <= 645) {
+            R = 1; G = -1 * (wavelength - 645) / (645 - 580); B = 0;
+        } else if (wavelength > 645 && wavelength <= 700) {
+            R = 1; G = 0; B = 0;
+        } else {
+            R = 0; G = 0; B = 0;
+        }
+        // 强度校正
+        if (wavelength > 700) alpha = 0;
+        else if (wavelength < 420) alpha = 0.3 + 0.7 * (wavelength - 380) / (420 - 380);
+        else alpha = 1;
+
+        R = Math.round(R * 255 * alpha);
+        G = Math.round(G * 255 * alpha);
+        B = Math.round(B * 255 * alpha);
+        return `rgb(${R}, ${G}, ${B})`;
+    }
+
+    // 更新参数函数
+    function updateParams() {
+        params.lambda = parseInt(sliderLambda.value);
+        params.d = parseInt(sliderD.value);
+        params.L = parseInt(sliderL.value);
+
+        valLambda.textContent = params.lambda + " nm";
+        valD.textContent = params.d < 40 ? "近" : (params.d > 70 ? "远" : "中");
+        valL.textContent = params.L < 100 ? "近" : (params.L > 160 ? "远" : "中");
+        
+        colorPreview.style.backgroundColor = wavelengthToColor(params.lambda);
+    }
+
+    // 事件监听
+    sliderLambda.addEventListener('input', updateParams);
+    sliderD.addEventListener('input', updateParams);
+    sliderL.addEventListener('input', updateParams);
+
+
+    // --- 核心绘图逻辑 ---
+
+    // 1. 绘制俯视图 (波的叠加动画)
+    // 这是一个计算密集型的过程，我们对画布上的每个像素计算两个波源的相位和。
+    function drawSetup() {
+        const w = setupCanvas.width;
+        const h = setupCanvas.height;
+        const imgData = ctxSetup.createImageData(w, h);
+        const data = imgData.data;
+
+        // 狭缝位置定义
+        const slitX = 50; // 狭缝所在的 X 坐标
+        const slitY1 = h / 2 - params.d; // 上狭缝 Y
+        const slitY2 = h / 2 + params.d; // 下狭缝 Y
+        
+        // 波矢量 k = 2π / λ (这里需要调整比例尺以适应画布)
+        // 我们使用一个缩放因子将纳米波长映射到画布像素尺度
+        const scaleFactor = 0.05; 
+        const k = (2 * Math.PI) / (params.lambda * scaleFactor);
+
+        for (let x = 0; x < w; x++) {
+            for (let y = 0; y < h; y++) {
+                const idx = (x + y * w) * 4;
+
+                // 仅在狭缝右侧计算干涉
+                if (x >= slitX) {
+                    // 计算像素点到两个狭缝的距离
+                    const r1 = Math.sqrt((x - slitX)**2 + (y - slitY1)**2);
+                    const r2 = Math.sqrt((x - slitX)**2 + (y - slitY2)**2);
+
+                    // 计算两个波的瞬时振幅并叠加 (简化模型，忽略距离衰减以获得清晰视觉)
+                    // A = cos(kr1 - ωt) + cos(kr2 - ωt)
+                    const amp1 = Math.cos(k * r1 - params.time);
+                    const amp2 = Math.cos(k * r2 - params.time);
+                    let totalAmp = amp1 + amp2; // 范围 [-2, 2]
+
+                    // 将振幅映射到颜色亮度
+                    // 我们希望波峰(2)和波谷(-2)都显示为亮色，零点为暗色
+                    let intensity = Math.abs(totalAmp) / 2; // 范围 [0, 1]
+                    intensity = Math.pow(intensity, 0.7); //稍微调整伽马值增强对比度
+
+                    const color = wavelengthToColor(params.lambda);
+                    const rgb = color.match(/\d+/g).map(Number);
+
+                    data[idx + 0] = rgb[0] * intensity; // R
+                    data[idx + 1] = rgb[1] * intensity; // G
+                    data[idx + 2] = rgb[2] * intensity; // B
+                    data[idx + 3] = 255; // Alpha
+                } else {
+                    // 狭缝左侧：绘制平面波入射
+                    const phase = x * k - params.time;
+                    let intensity = (Math.cos(phase) + 1) / 2;
+                    const color = wavelengthToColor(params.lambda);
+                    const rgb = color.match(/\d+/g).map(Number);
+                    data[idx+0] = rgb[0] * intensity * 0.5;
+                    data[idx+1] = rgb[1] * intensity * 0.5;
+                    data[idx+2] = rgb[2] * intensity * 0.5;
+                    data[idx+3] = 255;
+                }
+            }
+        }
+        ctxSetup.putImageData(imgData, 0, 0);
+
+        // 绘制障碍物和狭缝
+        ctxSetup.fillStyle = '#1a1a2e';
+        ctxSetup.fillRect(slitX - 2, 0, 4, h); // 挡板
+        // 擦除狭缝位置以允许波通过
+        const slitWidth = 4;
+        ctxSetup.clearRect(slitX - 3, slitY1 - slitWidth/2, 6, slitWidth);
+        ctxSetup.clearRect(slitX - 3, slitY2 - slitWidth/2, 6, slitWidth);
+
+        // 绘制屏幕位置指示线
+        const screenX = slitX + params.L * 2; // 放大L以便在画布上显示
+        if (screenX < w) {
+            ctxSetup.beginPath();
+            ctxSetup.strokeStyle = '#aaa';
+            ctxSetup.setLineDash([5, 5]);
+            ctxSetup.moveTo(screenX, 0);
+            ctxSetup.lineTo(screenX, h);
+            ctxSetup.stroke();
+            ctxSetup.setLineDash([]);
+            ctxSetup.fillStyle = '#aaa';
+            ctxSetup.fillText("屏幕", screenX + 5, 20);
+        }
+    }
+
+
+    // 2. 绘制屏幕视图 (强度分布)
+    function drawScreen() {
+        const w = screenCanvas.width;
+        const h = screenCanvas.height;
+        ctxScreen.clearRect(0, 0, w, h);
+        
+        const centerY = h / 2;
+        const colorStr = wavelengthToColor(params.lambda);
+        const rgb = colorStr.match(/\d+/g).map(Number);
+
+        // 物理模型缩放系数
+        const scaleLambda = params.lambda * 1e-9; // 真实纳米
+        // 为了让模拟效果在画布上可见，我们需要“虚拟化”d和L的单位
+        // 假设 d=100 代表 0.1mm, L=200 代表 2m。这只是为了视觉比例。
+        const effectiveD = params.d * 1e-5; 
+        const effectiveL = params.L * 1e-2; 
+
+        ctxScreen.beginPath();
+        ctxScreen.strokeStyle = `rgba(255, 255, 255, 0.8)`;
+        ctxScreen.lineWidth = 2;
+
+        for (let y = 0; y < h; y++) {
+            // 计算屏幕上某点到中心的垂直距离 (模拟物理坐标 y)
+            // 将画布像素 y 映射到物理空间，中心为0
+            const physicalY = (y - centerY) * 1e-4; // 比例尺调整
+
+            // 计算光程差 Δr ≈ (d * y) / L
+            // 实际上使用角度更准确: Δr = d * sin(θ), tan(θ) = y/L
+            const tanTheta = physicalY / effectiveL;
+            const sinTheta = tanTheta / Math.sqrt(1 + tanTheta*tanTheta);
+            const pathDifference = effectiveD * sinTheta;
+
+            // 相位差 δ = (2π / λ) * Δr
+            const phaseDifference = (2 * Math.PI * pathDifference) / scaleLambda;
+
+            // 强度 I ∝ cos²(δ / 2)
+            // 我们将其归一化到 [0, 1]
+            const intensity = Math.pow(Math.cos(phaseDifference / 2), 2);
+            
+            // A. 绘制干涉条纹直观图 (背景)
+            const alpha = intensity * 255;
+            ctxScreen.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${intensity})`;
+            // 只绘制中间一部分作为条纹展示区
+            ctxScreen.fillRect(w/2 - 20, y, 40, 1);
+
+            // B. 绘制强度曲线 (前景图表)
+            // 将强度映射到 X 轴坐标
+            const graphX = (intensity * w * 0.8) + w * 0.1; // 留点边距
+            if (y === 0) {
+                ctxScreen.moveTo(graphX, y);
+            } else {
+                ctxScreen.lineTo(graphX, y);
+            }
+        }
+        ctxScreen.stroke();
+        
+        // 绘制中心轴线
+        ctxScreen.beginPath();
+        ctxScreen.strokeStyle = '#555';
+        ctxScreen.setLineDash([2, 2]);
+        ctxScreen.moveTo(0, centerY);
+        ctxScreen.lineTo(w, centerY);
+        ctxScreen.stroke();
+    }
+
+
+    // 动画循环
+    function animate() {
+        params.time += params.waveSpeed;
+        drawSetup();
+        drawScreen();
+        requestAnimationFrame(animate);
+    }
+
+    // 初始化
+    updateParams();
+    animate();
+
+</script>
+</body>
+</html>

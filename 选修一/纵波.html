@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>纵波演示 - 带暂停控制</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #121212;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden; /* 防止整个页面出现滚动条 */
+        }
+
+        /* 左侧：绘图区 */
+        .viewport {
+            flex: 1;
+            position: relative;
+            background: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        .hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px #000;
+        }
+
+        /* 右侧：控制区 */
+        .sidebar {
+            width: 320px;
+            background: #1e1e1e;
+            border-left: 1px solid #333;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            z-index: 10;
+            overflow-y: auto; /* 关键：允许侧边栏内容过多时滚动 */
+        }
+
+        h3 { margin: 0 0 5px 0; color: #fff; border-bottom: 2px solid #2196f3; padding-bottom: 10px; }
+
+        /* 按钮组 */
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+        
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+            color: white;
+        }
+
+        /* 暂停/播放按钮样式 */
+        #btn-pause { background: #ff9800; color: #000; }
+        #btn-pause:hover { background: #ffb74d; }
+        #btn-pause.paused { background: #00e676; } /* 暂停状态下变绿 */
+
+        /* 单步按钮 */
+        #btn-step { background: #555; display: none; } /* 默认隐藏 */
+        #btn-step:hover { background: #777; }
+
+        .control-group {
+            background: #2c2c2c;
+            padding: 15px;
+            border-radius: 6px;
+        }
+
+        .label-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.9rem;
+            color: #bbb;
+        }
+        .val { color: #4fc3f7; font-weight: bold; font-family: monospace; }
+        
+        input[type=range] { width: 100%; cursor: pointer; }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            font-size: 14px;
+            user-select: none;
+        }
+        input[type=checkbox] { transform: scale(1.3); cursor: pointer; }
+
+        .legend {
+            font-size: 12px;
+            color: #888;
+            background: #252525;
+            padding: 10px;
+            border-radius: 4px;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+
+<div class="viewport" id="canvas-container">
+    <canvas id="simCanvas"></canvas>
+    <div class="hud">
+        <h2 style="margin:0; color:#fff;">纵波演示</h2>
+        <div style="font-size:13px; color:#aaa; margin-top:5px;">
+            上图：粒子水平振动<br>
+            下图：位移-位置 (s-x) 图像
+        </div>
+    </div>
+</div>
+
+<div class="sidebar">
+    <h3>控制面板</h3>
+
+    <div class="btn-group">
+        <button id="btn-pause">⏸ 暂停</button>
+        <button id="btn-step" title="暂停后可用">▶ 单步</button>
+    </div>
+
+    <div class="control-group">
+        <div class="label-row">频率 (Hz) <span id="val-f" class="val">1.0</span></div>
+        <input type="range" id="sl-f" min="0.5" max="2.0" step="0.1" value="1.0">
+    </div>
+
+    <div class="control-group">
+        <div class="label-row">波长 (px) <span id="val-l" class="val">150</span></div>
+        <input type="range" id="sl-l" min="80" max="300" step="10" value="150">
+    </div>
+
+    <div class="control-group">
+        <div class="label-row">振幅 (Amp) <span id="val-a" class="val">25</span></div>
+        <input type="range" id="sl-a" min="0" max="40" step="1" value="25">
+    </div>
+
+    <div class="control-group">
+        <label class="checkbox-row">
+            <input type="checkbox" id="chk-grid" checked>
+            显示平衡位置网格
+        </label>
+        <label class="checkbox-row" style="margin-top:12px;">
+            <input type="checkbox" id="chk-connect" checked>
+            显示对应连线 (推荐)
+        </label>
+        <label class="checkbox-row" style="margin-top:12px;">
+            <input type="checkbox" id="chk-density">
+            高亮疏密区 (密=黄 / 疏=绿)
+        </label>
+    </div>
+
+    <div class="legend">
+        <strong>对应关系说明：</strong><br>
+        <span style="color:#ffd700">● 密部 (Compression)</span><br>
+        粒子最挤，对应波形图下坡零点。<br>
+        <span style="color:#00e676">● 疏部 (Rarefaction)</span><br>
+        粒子最松，对应波形图上坡零点。<br>
+    </div>
+</div>
+
+<script>
+    const cvs = document.getElementById('simCanvas');
+    const ctx = cvs.getContext('2d');
+    const container = document.getElementById('canvas-container');
+
+    const CONF = {
+        nParticles: 60,
+        spacing: 20, 
+    };
+
+    let sys = {
+        t: 0,
+        running: true,
+        freq: 1.0,
+        wavelength: 150,
+        amp: 25,
+        showGrid: true,
+        showConnect: true,
+        showDensity: false
+    };
+
+    // UI Elements
+    const ui = {
+        f: document.getElementById('sl-f'),
+        l: document.getElementById('sl-l'),
+        a: document.getElementById('sl-a'),
+        valF: document.getElementById('val-f'),
+        valL: document.getElementById('val-l'),
+        valA: document.getElementById('val-a'),
+        btnPause: document.getElementById('btn-pause'),
+        btnStep: document.getElementById('btn-step'),
+        chkGrid: document.getElementById('chk-grid'),
+        chkConnect: document.getElementById('chk-connect'),
+        chkDensity: document.getElementById('chk-density')
+    };
+
+    // Update UI Labels
+    ui.f.oninput = function() { sys.freq = parseFloat(this.value); ui.valF.innerText = sys.freq.toFixed(1); };
+    ui.l.oninput = function() { sys.wavelength = parseInt(this.value); ui.valL.innerText = sys.wavelength; };
+    ui.a.oninput = function() { sys.amp = parseInt(this.value); ui.valA.innerText = sys.amp; };
+    
+    ui.chkGrid.onchange = function() { sys.showGrid = this.checked; if(!sys.running) draw(); };
+    ui.chkConnect.onchange = function() { sys.showConnect = this.checked; if(!sys.running) draw(); };
+    ui.chkDensity.onchange = function() { sys.showDensity = this.checked; if(!sys.running) draw(); };
+
+    // Pause Logic
+    ui.btnPause.onclick = function() {
+        sys.running = !sys.running;
+        updatePauseButtonState();
+    };
+
+    // Step Logic
+    ui.btnStep.onclick = function() {
+        if (!sys.running) {
+            sys.t += 0.05; // 步进一小段
+            draw();
+        }
+    };
+
+    function updatePauseButtonState() {
+        if (sys.running) {
+            ui.btnPause.innerHTML = "⏸ 暂停";
+            ui.btnPause.classList.remove('paused');
+            ui.btnStep.style.display = "none";
+            loop(); // 重新启动循环
+        } else {
+            ui.btnPause.innerHTML = "▶ 继续";
+            ui.btnPause.classList.add('paused');
+            ui.btnStep.style.display = "block"; // 显示单步按钮
+        }
+    }
+
+    function resize() {
+        cvs.width = container.clientWidth;
+        cvs.height = container.clientHeight;
+        CONF.nParticles = Math.ceil(cvs.width / CONF.spacing) + 2;
+        if(!sys.running) draw();
+    }
+    window.addEventListener('resize', resize);
+
+    function draw() {
+        const w = cvs.width;
+        const h = cvs.height;
+        const centerY_Sim = h * 0.35;
+        const centerY_Graph = h * 0.75;
+
+        // 背景
+        ctx.fillStyle = '#121212';
+        ctx.fillRect(0,0,w,h);
+
+        // 参数
+        const k = (2 * Math.PI) / sys.wavelength;
+        const omega = 2 * Math.PI * sys.freq;
+
+        // 1. 绘制网格线
+        if (sys.showGrid) {
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 1;
+            for(let i=0; i<CONF.nParticles; i++) {
+                let x0 = i * CONF.spacing;
+                ctx.beginPath(); ctx.moveTo(x0, 0); ctx.lineTo(x0, h); ctx.stroke();
+            }
+        }
+
+        // 2. 坐标轴
+        ctx.strokeStyle = '#444';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, centerY_Graph); ctx.lineTo(w, centerY_Graph); ctx.stroke();
+
+        // 3. 绘制粒子和波形点
+        for (let i = -2; i < CONF.nParticles + 2; i++) {
+            let x0 = i * CONF.spacing;
+            let disp = sys.amp * Math.sin(k * x0 - omega * sys.t);
+            let x_particle = x0 + disp;
+            
+            // 下方波形图：y轴显示位移
+            let y_graph = centerY_Graph - disp;
+
+            // 疏密计算 (用于高亮)
+            // 导数 cos(kx-wt)
+            let slope = Math.cos(k * x0 - omega * sys.t);
+            
+            if (sys.showDensity) {
+                let rw = CONF.spacing;
+                if (slope < -0.5) { // 密
+                    ctx.fillStyle = 'rgba(255, 215, 0, 0.15)';
+                    ctx.fillRect(x0 - rw/2, 0, rw, h);
+                } else if (slope > 0.5) { // 疏
+                    ctx.fillStyle = 'rgba(0, 230, 118, 0.1)';
+                    ctx.fillRect(x0 - rw/2, 0, rw, h);
+                }
+            }
+
+            // 特殊粒子标记
+            let isTracer = (i === 10);
+
+            // 绘制粒子
+            ctx.fillStyle = isTracer ? '#ff5252' : '#2196f3';
+            for(let r=-1; r<=1; r++) {
+                ctx.beginPath();
+                ctx.arc(x_particle, centerY_Sim + r*15, isTracer?5:3, 0, Math.PI*2);
+                ctx.fill();
+            }
+
+            // 绘制连线
+            if (sys.showConnect) {
+                // 仅显示部分连线，避免混乱
+                if (isTracer || (sys.wavelength > 100 && i % 4 === 0) || (sys.wavelength <= 100 && i % 6 === 0)) {
+                    ctx.strokeStyle = isTracer ? '#ff5252' : '#444';
+                    ctx.setLineDash([4, 4]);
+                    ctx.lineWidth = 1;
+                    
+                    // 垂直连线：从波形点连到平衡位置
+                    ctx.beginPath();
+                    ctx.moveTo(x0, y_graph); // 波形图上的点 (x=平衡位置, y=位移)
+                    ctx.lineTo(x0, centerY_Sim + 20); // 连到粒子平衡位置下方
+                    ctx.stroke();
+                    
+                    // 水平指示线：显示位移量
+                    ctx.setLineDash([]);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+                    ctx.beginPath();
+                    ctx.moveTo(x0, centerY_Sim + 25);
+                    ctx.lineTo(x_particle, centerY_Sim + 25);
+                    ctx.stroke();
+                }
+            }
+
+            // 绘制波形图上的点
+            ctx.fillStyle = isTracer ? '#ff5252' : '#666';
+            ctx.beginPath();
+            ctx.arc(x0, y_graph, 2, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+        // 4. 连续正弦曲线
+        ctx.beginPath();
+        ctx.strokeStyle = '#4fc3f7';
+        ctx.lineWidth = 2;
+        for (let x = 0; x < w; x+=4) {
+            let d = sys.amp * Math.sin(k * x - omega * sys.t);
+            let y = centerY_Graph - d;
+            if (x===0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+    }
+
+    function loop() {
+        if (!sys.running) return;
+        sys.t += 0.02; // 时间步长
+        draw();
+        requestAnimationFrame(loop);
+    }
+
+    // 初始化
+    resize();
+    loop();
+
+</script>
+</body>
+</html>

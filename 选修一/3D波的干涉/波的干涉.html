@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>3D 波的干涉 - 路径行波演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: "Microsoft YaHei", sans-serif; display: flex; height: 100vh; }
+        
+        /* 视口容器 */
+        #scene-container {
+            flex: 1;
+            background: #000;
+            position: relative;
+            cursor: grab;
+        }
+        #scene-container:active { cursor: grabbing; }
+
+        /* 操作提示 */
+        #overlay-tip {
+            position: absolute;
+            top: 20px; left: 20px;
+            color: rgba(255,255,255,0.9);
+            pointer-events: none;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            border-left: 5px solid #5c6bc0;
+            line-height: 1.6;
+        }
+
+        /* 右侧控制区 */
+        #controls {
+            width: 340px;
+            background: #f0f0f0;
+            border-left: 1px solid #ccc;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.2);
+            z-index: 10;
+        }
+
+        h3 { margin: 0 0 10px 0; font-size: 16px; border-bottom: 2px solid #ccc; padding-bottom: 8px; color: #333; }
+        
+        .control-group { background: white; padding: 10px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 8px; color: #555; align-items: center; }
+        input[type=range] { flex: 1; margin-left: 10px; cursor: pointer; }
+        span.val { width: 35px; text-align: right; font-weight: bold; color: #333; }
+
+        .checkbox-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; }
+        
+        /* 图例 */
+        .legend-box {
+            background: #fff; border: 1px solid #eee; padding: 12px; border-radius: 6px;
+            font-size: 12px; line-height: 2;
+        }
+        .dot { width: 10px; height: 10px; display: inline-block; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+        .line-legend { width: 20px; height: 3px; display: inline-block; margin-right: 6px; vertical-align: middle; }
+
+        button {
+            width: 100%; padding: 12px; background: #5c6bc0; color: white; border: none;
+            border-radius: 6px; cursor: pointer; font-weight: bold; transition: 0.2s;
+        }
+        button:hover { background: #3f51b5; }
+    </style>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="scene-container">
+        <div id="overlay-tip">
+            🖱️ <b>左键拖拽</b>：旋转 3D 视角<br>
+            🖱️ <b>右键拖拽</b>：平移视角<br>
+            👆 <b>Shift + 鼠标移动</b>：拖动紫色探测点 P<br>
+            🌊 <b>观察</b>：连线上的正弦波即为波的传递过程
+        </div>
+    </div>
+
+    <div id="controls">
+        <h3>波源设置</h3>
+        <div class="control-group">
+            <label style="color:#d32f2f; font-weight:bold;">波源 1 (红色)</label>
+            <label>频率: <input type="range" id="f1" min="0.1" max="1.0" step="0.1" value="0.5"><span id="v-f1" class="val">0.5</span></label>
+            <label>振幅: <input type="range" id="a1" min="0" max="4" step="0.1" value="2.0"><span id="v-a1" class="val">2.0</span></label>
+        </div>
+        <div class="control-group">
+            <label style="color:#1976d2; font-weight:bold;">波源 2 (蓝色)</label>
+            <label>频率: <input type="range" id="f2" min="0.1" max="1.0" step="0.1" value="0.5"><span id="v-f2" class="val">0.5</span></label>
+            <label>振幅: <input type="range" id="a2" min="0" max="4" step="0.1" value="2.0"><span id="v-a2" class="val">2.0</span></label>
+        </div>
+        <div class="control-group">
+            <label>波源间距 <input type="range" id="dist" min="5" max="40" step="1" value="15"><span id="v-dist" class="val">15</span></label>
+        </div>
+
+        <h3>显示控制</h3>
+        <div class="checkbox-grid control-group">
+            <label><input type="checkbox" id="show-mesh" checked> 水面波纹</label>
+            <label><input type="checkbox" id="show-lines" checked> 路径行波</label>
+            <label><input type="checkbox" id="show-particles" checked> 质点/波源</label>
+        </div>
+
+        <div class="legend-box">
+            <div style="font-weight:bold; border-bottom:1px solid #eee; margin-bottom:5px;">P点振动分析</div>
+            <span class="line-legend" style="background:#ff3333"></span>源1 传递的波 (红线)<br>
+            <span class="line-legend" style="background:#3333ff"></span>源2 传递的波 (蓝线)<br>
+            <span class="dot" style="background:#aa00aa"></span>实际合成位置 (紫球)
+        </div>
+
+        <button id="reset-cam">重置视角</button>
+    </div>
+
+    <script>
+        // --- 全局变量 ---
+        let scene, camera, renderer, controls;
+        let planeMesh, s1Mesh, s2Mesh, pMesh;
+        let waveLine1, waveLine2; // 替换原来的简单 Line
+        let arrow1, arrow2; 
+        let raycaster, mouse;
+        let time = 0;
+
+        // 物理参数
+        const params = {
+            speed: 5.0,     // 波速 (visual units / sec)
+            f1: 0.5, a1: 2.0,
+            f2: 0.5, a2: 2.0,
+            sep: 15,
+            pPos: new THREE.Vector3(10, 0, 5) // P点初始位置
+        };
+
+        const canvasContainer = document.getElementById('scene-container');
+
+        // --- 初始化系统 ---
+        function init() {
+            // 1. 场景搭建
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505); // 极夜黑背景
+            scene.fog = new THREE.Fog(0x050505, 30, 150);
+
+            camera = new THREE.PerspectiveCamera(45, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 1000);
+            camera.position.set(35, 30, 35);
+            camera.lookAt(0, 0, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+            renderer.shadowMap.enabled = true;
+            canvasContainer.appendChild(renderer.domElement);
+
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            // 2. 灯光
+            scene.add(new THREE.AmbientLight(0x404040, 1.5));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(20, 50, 20);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.set(2048, 2048);
+            scene.add(dirLight);
+
+            // 3. 创建场景物体
+            createObjects();
+
+            // 4. 事件监听
+            window.addEventListener('resize', onWindowResize);
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+            document.addEventListener('mousemove', onMouseMove);
+
+            animate();
+        }
+
+        function createObjects() {
+            // A. 水面波纹 (Plane)
+            const geometry = new THREE.PlaneGeometry(80, 80, 150, 150);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: 0x1e3a8a,      // 深海蓝
+                emissive: 0x000000,
+                specular: 0x444444,
+                shininess: 60,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.6          // 半透明方便看下面的网格
+            });
+            planeMesh = new THREE.Mesh(geometry, material);
+            planeMesh.rotation.x = -Math.PI / 2; 
+            planeMesh.receiveShadow = true;
+            scene.add(planeMesh);
+
+            // B. 底部网格 (参考系)
+            const grid = new THREE.GridHelper(80, 20, 0x444444, 0x222222);
+            grid.position.y = -5;
+            scene.add(grid);
+
+            // C. 波源 (S1, S2)
+            const sGeo = new THREE.SphereGeometry(0.8, 32, 32);
+            s1Mesh = new THREE.Mesh(sGeo, new THREE.MeshPhongMaterial({ color: 0xff3333, emissive: 0x440000 }));
+            s2Mesh = new THREE.Mesh(sGeo, new THREE.MeshPhongMaterial({ color: 0x3333ff, emissive: 0x000044 }));
+            s1Mesh.castShadow = true; s2Mesh.castShadow = true;
+            scene.add(s1Mesh); scene.add(s2Mesh);
+
+            // D. 探测点 (P)
+            pMesh = new THREE.Mesh(new THREE.SphereGeometry(1.2, 32, 32), new THREE.MeshPhongMaterial({ color: 0xaa00aa, emissive: 0x220022 }));
+            pMesh.castShadow = true;
+            scene.add(pMesh);
+
+            // E. 【关键】动态波形连线 (Custom Lines)
+            // 这里的 geometry 会在每一帧被更新，形成正弦波动画
+            const segmentCount = 100; // 连线的分段数，越多越平滑
+            const lineGeo1 = new THREE.BufferGeometry();
+            const positions1 = new Float32Array(segmentCount * 3);
+            lineGeo1.setAttribute('position', new THREE.BufferAttribute(positions1, 3));
+            waveLine1 = new THREE.Line(lineGeo1, new THREE.LineBasicMaterial({ color: 0xff3333, linewidth: 3 })); // 红色行波
+            
+            const lineGeo2 = new THREE.BufferGeometry();
+            const positions2 = new Float32Array(segmentCount * 3);
+            lineGeo2.setAttribute('position', new THREE.BufferAttribute(positions2, 3));
+            waveLine2 = new THREE.Line(lineGeo2, new THREE.LineBasicMaterial({ color: 0x3333ff, linewidth: 3 })); // 蓝色行波
+            
+            scene.add(waveLine1);
+            scene.add(waveLine2);
+
+            // F. 矢量柱状指示器
+            const barGeo = new THREE.CylinderGeometry(0.2, 0.2, 1, 8);
+            barGeo.translate(0, 0.5, 0); // 原点移到底部
+            arrow1 = new THREE.Mesh(barGeo, new THREE.MeshLambertMaterial({color: 0xff3333}));
+            arrow2 = new THREE.Mesh(barGeo, new THREE.MeshLambertMaterial({color: 0x3333ff}));
+            scene.add(arrow1); scene.add(arrow2);
+        }
+
+        // --- 物理计算与动画核心 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            time += 0.015; // 时间流逝
+            
+            updatePhysics();
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        function updatePhysics() {
+            const halfSep = params.sep / 2;
+            const omega1 = params.speed * params.f1;
+            const omega2 = params.speed * params.f2;
+
+            // 1. 更新波源位置 (S1, S2 振动)
+            s1Mesh.position.set(-halfSep, params.a1 * Math.sin(-time * omega1 * 4), 0);
+            s2Mesh.position.set(halfSep, params.a2 * Math.sin(-time * omega2 * 4), 0);
+
+            // 2. 更新水面网格 (场计算)
+            if (planeMesh.visible) {
+                const pos = planeMesh.geometry.attributes.position.array;
+                const vCount = pos.length / 3;
+                for (let i = 0; i < vCount; i++) {
+                    const x = pos[i*3];
+                    const z = pos[i*3+1]; // 旋转后的 z
+                    
+                    const d1 = Math.hypot(x - s1Mesh.position.x, z - s1Mesh.position.z);
+                    const d2 = Math.hypot(x - s2Mesh.position.x, z - s2Mesh.position.z);
+                    
+                    // 衰减系数
+                    const dec1 = 1 / (1 + d1 * 0.1);
+                    const dec2 = 1 / (1 + d2 * 0.1);
+                    
+                    const y = (params.a1 * Math.sin(d1 - time * omega1 * 4) * dec1) +
+                              (params.a2 * Math.sin(d2 - time * omega2 * 4) * dec2);
+                    
+                    pos[i*3+2] = y;
+                }
+                planeMesh.geometry.attributes.position.needsUpdate = true;
+                planeMesh.geometry.computeVertexNormals();
+            }
+
+            // 3. 【核心】更新连线上的正弦行波
+            // 目标：在 S1->P 的直线上，画出 y = A sin(k*d - wt)
+            updateWaveLine(waveLine1, s1Mesh.position, params.pPos, params.a1, omega1, 0xff3333);
+            updateWaveLine(waveLine2, s2Mesh.position, params.pPos, params.a2, omega2, 0x3333ff);
+
+            // 4. 更新探测点 P
+            // 计算 P 点的理论位移 (不带衰减，展示纯干涉)
+            const px = params.pPos.x;
+            const pz = params.pPos.z;
+            const pd1 = Math.hypot(px - s1Mesh.position.x, pz - s1Mesh.position.z);
+            const pd2 = Math.hypot(px - s2Mesh.position.x, pz - s2Mesh.position.z);
+
+            const val1 = params.a1 * Math.sin(pd1 - time * omega1 * 4);
+            const val2 = params.a2 * Math.sin(pd2 - time * omega2 * 4);
+            
+            pMesh.position.set(px, val1 + val2, pz);
+
+            // 5. 更新矢量柱 (跟随 P 点)
+            arrow1.position.set(px - 1, 0, pz);
+            arrow1.scale.y = Math.abs(val1) || 0.01;
+            arrow1.rotation.x = val1 < 0 ? Math.PI : 0; // 向下翻转
+
+            arrow2.position.set(px + 1, 0, pz);
+            arrow2.scale.y = Math.abs(val2) || 0.01;
+            arrow2.rotation.x = val2 < 0 ? Math.PI : 0;
+        }
+
+        // 绘制一条从 start 到 end 的正弦波
+        function updateWaveLine(lineObj, startPos, endPos, amp, omega, color) {
+            const positions = lineObj.geometry.attributes.position.array;
+            const segments = positions.length / 3;
+            
+            // 总直线距离
+            const totalDist = Math.hypot(endPos.x - startPos.x, endPos.z - startPos.z);
+            
+            for (let i = 0; i < segments; i++) {
+                const t = i / (segments - 1); // 0 到 1 的插值系数
+                
+                // 1. 计算直线上的基础位置 (xz平面)
+                const bx = startPos.x + (endPos.x - startPos.x) * t;
+                const bz = startPos.z + (endPos.z - startPos.z) * t;
+                
+                // 2. 计算当前点距离源的距离 r
+                const r = totalDist * t;
+                
+                // 3. 计算波动高度 y = A sin(r - wt)
+                // 注意：这里没有衰减，为了清楚展示波的形状
+                const by = amp * Math.sin(r - time * omega * 4);
+                
+                positions[i*3] = bx;
+                positions[i*3+1] = by; // Y轴高度
+                positions[i*3+2] = bz;
+            }
+            lineObj.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // --- 交互与事件 ---
+        function onMouseMove(event) {
+            if (!event.shiftKey) return;
+            
+            const rect = canvasContainer.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            // 与 y=0 平面求交
+            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+            const target = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, target);
+            
+            if (target) {
+                params.pPos.set(target.x, 0, target.z);
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = canvasContainer.clientWidth / canvasContainer.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        }
+
+        // UI 绑定
+        const bindInput = (id, key) => {
+            const el = document.getElementById(id);
+            const disp = document.getElementById('v-'+id);
+            el.addEventListener('input', (e) => {
+                const v = parseFloat(e.target.value);
+                params[key] = v;
+                disp.innerText = v;
+            });
+        };
+        bindInput('f1', 'f1'); bindInput('a1', 'a1');
+        bindInput('f2', 'f2'); bindInput('a2', 'a2');
+        bindInput('dist', 'sep');
+
+        // 开关
+        document.getElementById('show-mesh').onchange = (e) => planeMesh.visible = e.target.checked;
+        document.getElementById('show-lines').onchange = (e) => {
+            waveLine1.visible = e.target.checked; 
+            waveLine2.visible = e.target.checked;
+        };
+        document.getElementById('show-particles').onchange = (e) => {
+            s1Mesh.visible = s2Mesh.visible = pMesh.visible = arrow1.visible = arrow2.visible = e.target.checked;
+        };
+        document.getElementById('reset-cam').onclick = () => {
+            controls.reset(); 
+            camera.position.set(35, 30, 35);
+        };
+
+        // 启动
+        init();
+    </script>
+</body>
+</html>

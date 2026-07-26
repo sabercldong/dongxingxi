@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>弹簧纵波模拟 (Spring Longitudinal Wave)</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-color: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent-color: #4fc3f7; /* 浅蓝色，类似图中弹簧 */
+            --highlight-red: #ff5252;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧画布区域 */
+        .simulation-area {
+            flex-grow: 1;
+            position: relative;
+            background: linear-gradient(to bottom, #252525, #1a1a1a);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        /* 地面反射效果 */
+        .reflection-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 40%;
+            background: linear-gradient(to bottom, transparent, rgba(255,255,255,0.05));
+            pointer-events: none;
+        }
+
+        canvas {
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+            background-color: transparent;
+        }
+
+        /* 右侧控制面板 */
+        .control-panel {
+            width: 300px;
+            min-width: 280px;
+            background-color: var(--panel-color);
+            padding: 25px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+        }
+
+        h2 {
+            margin: 0 0 10px 0;
+            font-size: 1.4rem;
+            color: var(--accent-color);
+            border-bottom: 2px solid #444;
+            padding-bottom: 10px;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+            color: #ccc;
+        }
+
+        span.value-display {
+            color: var(--accent-color);
+            font-weight: bold;
+            font-family: monospace;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            accent-color: var(--accent-color);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        #btnPause { background-color: var(--accent-color); color: #111; }
+        #btnReset { background-color: #555; color: white; }
+        button:hover { opacity: 0.9; }
+
+        .info-box {
+            margin-top: auto;
+            font-size: 0.85rem;
+            color: #aaa;
+            line-height: 1.6;
+            background: rgba(0,0,0,0.2);
+            padding: 15px;
+            border-radius: 8px;
+        }
+
+        .legend-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="simulation-area" id="simArea">
+        <canvas id="springCanvas"></canvas>
+        <div class="reflection-overlay"></div>
+    </div>
+
+    <div class="control-panel">
+        <h2>弹簧纵波演示</h2>
+
+        <div class="control-group">
+            <label>振幅 (Amplitude) <span id="valAmp" class="value-display">40</span></label>
+            <input type="range" id="inpAmp" min="10" max="80" value="40">
+        </div>
+
+        <div class="control-group">
+            <label>频率 (Frequency) <span id="valFreq" class="value-display">1.0</span></label>
+            <input type="range" id="inpFreq" min="0.1" max="3.0" step="0.1" value="1.0">
+        </div>
+
+        <div class="control-group">
+            <label>疏密程度 (Coils) <span id="valCount" class="value-display">80</span></label>
+            <input type="range" id="inpCount" min="40" max="150" step="10" value="80">
+        </div>
+
+        <div class="control-group">
+            <label>波长 (Wavelength) <span id="valWave" class="value-display">300</span></label>
+            <input type="range" id="inpWave" min="150" max="600" step="50" value="300">
+        </div>
+
+        <div class="btn-group">
+            <button id="btnPause">暂停 / 继续</button>
+            <button id="btnReset">重置</button>
+        </div>
+
+        <div class="info-box">
+            <p><strong>观察指南：</strong></p>
+            <p>1. <strong>密部与疏部</strong>：注意观察弹簧圈紧挨着的地方（密部）和稀疏的地方（疏部）是如何向右移动的。</p>
+            <p>2. <span class="legend-dot" style="background:#ff5252"></span><strong>红色标记圈</strong>：它代表单个质点。请注意，它只是左右晃动，并没有随波跑到右边去。</p>
+            <p>3. <strong>纵波特征</strong>：振动方向（左右）与传播方向（向右）在同一直线上。</p>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('springCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('simArea');
+
+    // 运行状态
+    let isRunning = true;
+    let time = 0;
+    
+    // 参数配置
+    const params = {
+        amplitude: 40,      // 振幅 (px)
+        frequency: 1.0,     // 频率 (Hz)
+        coilCount: 80,      // 弹簧圈数
+        wavelength: 300,    // 波长 (px)
+        coilRadius: 40,     // 弹簧圈半径 (高度的一半)
+        wireWidth: 2        // 弹簧丝粗细
+    };
+
+    // UI 绑定
+    const ui = {
+        amp: document.getElementById('inpAmp'),
+        freq: document.getElementById('inpFreq'),
+        count: document.getElementById('inpCount'),
+        wave: document.getElementById('inpWave'),
+        valAmp: document.getElementById('valAmp'),
+        valFreq: document.getElementById('valFreq'),
+        valCount: document.getElementById('valCount'),
+        valWave: document.getElementById('valWave'),
+        btnPause: document.getElementById('btnPause'),
+        btnReset: document.getElementById('btnReset')
+    };
+
+    function resize() {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 更新参数
+    function updateParams() {
+        params.amplitude = parseInt(ui.amp.value);
+        params.frequency = parseFloat(ui.freq.value);
+        params.coilCount = parseInt(ui.count.value);
+        params.wavelength = parseInt(ui.wave.value);
+
+        ui.valAmp.textContent = params.amplitude;
+        ui.valFreq.textContent = params.frequency;
+        ui.valCount.textContent = params.coilCount;
+        ui.valWave.textContent = params.wavelength;
+    }
+
+    // 事件监听
+    ['amp', 'freq', 'count', 'wave'].forEach(id => {
+        ui[id].addEventListener('input', updateParams);
+    });
+
+    ui.btnPause.addEventListener('click', () => {
+        isRunning = !isRunning;
+    });
+
+    ui.btnReset.addEventListener('click', () => {
+        ui.amp.value = 40;
+        ui.freq.value = 1.0;
+        ui.count.value = 80;
+        ui.wave.value = 300;
+        time = 0;
+        updateParams();
+    });
+
+    // 核心绘图循环
+    function loop() {
+        // 清空背景
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        const centerY = canvas.height / 2;
+        
+        // 计算弹簧总长度和间距
+        // 我们留出左右边距，让弹簧居中一点
+        const springLength = canvas.width * 0.8; 
+        const startX = canvas.width * 0.1; 
+        const spacing = springLength / params.coilCount;
+
+        // 物理常数
+        const k = (2 * Math.PI) / params.wavelength; // 波数
+        const omega = 2 * Math.PI * params.frequency * 0.05; // 角频率 (0.05是时间缩放因子，控制动画速度)
+
+        // 限制振幅，防止穿模 (当振幅过大超过间距时，弹簧圈会交叉，物理上是不可能的)
+        // 临界条件: A * k < 1
+        const maxAmp = (params.wavelength / (2 * Math.PI)) * 0.8; 
+        const safeAmplitude = Math.min(params.amplitude, maxAmp);
+
+        // 1. 绘制推拉杆 (Piston)
+        // 它的位置取决于第一个线圈的位置
+        const pistonX = startX + safeAmplitude * Math.sin(-time * omega);
+        
+        ctx.fillStyle = '#666';
+        ctx.fillRect(0, centerY - 10, pistonX, 20); // 杆身
+        ctx.fillStyle = '#888';
+        ctx.fillRect(pistonX - 5, centerY - params.coilRadius - 10, 10, params.coilRadius * 2 + 20); // 推板
+
+        // 2. 绘制弹簧
+        // 模拟金属质感，我们用较亮的颜色
+        ctx.strokeStyle = '#4fc3f7'; 
+        ctx.lineWidth = params.wireWidth;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // 存储所有圈的坐标，以便绘制连线或圆环
+        const coils = [];
+
+        for (let i = 0; i <= params.coilCount; i++) {
+            // 平衡位置
+            const eqX = startX + i * spacing;
+            
+            // 纵波位移公式: x = x0 + A * sin(k * x0 - omega * t)
+            // 注意：这里是对平衡位置 x0 施加位移
+            // 减去 startX 是为了让波相位从弹簧左端开始算
+            const displacement = safeAmplitude * Math.sin(k * (eqX - startX) - time * omega);
+            
+            const x = eqX + displacement;
+            const y = centerY;
+            
+            coils.push({x, y, index: i});
+        }
+
+        // 绘制逻辑：画一系列椭圆/圆环来模拟螺旋弹簧的侧视图
+        for (let i = 0; i < coils.length; i++) {
+            const p = coils[i];
+            
+            ctx.beginPath();
+            
+            // 标记特殊点 (例如中间某一点)
+            const isHighlight = (i === Math.floor(params.coilCount / 2));
+            
+            if (isHighlight) {
+                ctx.strokeStyle = '#ff5252'; // 红色高亮
+                ctx.lineWidth = 4;
+            } else {
+                ctx.strokeStyle = '#a0e0ff'; // 普通金属色
+                // 根据疏密改变透明度或颜色深度，增强立体感
+                // 计算局部密度：距离越小，颜色越深
+                let dist = spacing;
+                if (i < coils.length - 1) dist = coils[i+1].x - p.x;
+                // 简单的光影模拟
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = `rgba(160, 224, 255, ${Math.min(1, 15/dist)})`;
+            }
+
+            // 绘制椭圆环 (模拟弹簧圈)
+            // ellipse(x, y, radiusX, radiusY, rotation, startAngle, endAngle)
+            // 为了看起来像侧视的螺旋，我们画垂直的细长椭圆
+            ctx.ellipse(p.x, p.y, 4, params.coilRadius, 0, 0, 2 * Math.PI);
+            ctx.stroke();
+
+            // 恢复样式
+            if (isHighlight) {
+                // 绘制该点的辅助虚线，方便观察其平衡位置
+                const eqX = startX + i * spacing;
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(255, 82, 82, 0.2)';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([5, 5]);
+                ctx.moveTo(eqX, centerY - params.coilRadius - 20);
+                ctx.lineTo(eqX, centerY + params.coilRadius + 20);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                
+                // 绘制质点中心实心点
+                ctx.beginPath();
+                ctx.fillStyle = '#ff5252';
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // 3. 绘制弹簧顶部和底部的连接线 (增强整体感)
+        // 这一步是可选的，加上去会让它看起来更像一个连续的物体
+        /*
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+        ctx.lineWidth = 1;
+        ctx.moveTo(coils[0].x, centerY - params.coilRadius);
+        for(let i=1; i<coils.length; i++) {
+            ctx.lineTo(coils[i].x, centerY - params.coilRadius);
+        }
+        ctx.stroke();
+        */
+
+        if (isRunning) {
+            time += 1;
+        }
+        requestAnimationFrame(loop);
+    }
+
+    // 启动
+    updateParams();
+    loop();
+
+</script>
+
+</body>
+</html>

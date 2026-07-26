@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>竖直圆轨道物理仿真 - 纯净版</title>
+    <style>
+        /* --- 全局样式 --- */
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; 
+            background-color: #0f0f12; 
+            color: #eee;
+            user-select: none; /* 防止拖拽文本 */
+        }
+        
+        /* --- 1. 3D 画布 --- */
+        #canvas-container { 
+            width: 100vw; 
+            height: 100vh; 
+            display: block; 
+            background: radial-gradient(circle at center, #1a1a20 0%, #000000 100%);
+        }
+
+        /* --- 2. 右侧控制面板 (毛玻璃风格) --- */
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 320px;
+            max-height: calc(100vh - 40px);
+            background: rgba(30, 32, 35, 0.75);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+            overflow-y: auto;
+            z-index: 10;
+            transition: transform 0.3s ease;
+        }
+
+        h2 { 
+            margin: 0 0 10px 0; 
+            font-size: 18px; 
+            font-weight: 600; 
+            color: #4db8ff; 
+            letter-spacing: 0.5px;
+            border-bottom: 2px solid rgba(77, 184, 255, 0.3);
+            padding-bottom: 10px;
+        }
+
+        /* 状态指示条 */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+        .st-ok { background: #00ff88; box-shadow: 0 0 8px #00ff88; }
+        .st-fall { background: #ff4d4d; box-shadow: 0 0 8px #ff4d4d; }
+
+        /* 滑块控件 */
+        .control-group { display: flex; flex-direction: column; gap: 8px; }
+        .label-row { display: flex; justify-content: space-between; font-size: 13px; color: #aaa; }
+        .val-display { color: #fff; font-weight: bold; font-family: monospace; }
+        
+        input[type="range"] {
+            -webkit-appearance: none; width: 100%; background: transparent;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%;
+            background: #4db8ff; cursor: pointer; margin-top: -6px; box-shadow: 0 0 5px rgba(0,0,0,0.5);
+        }
+        input[type="range"]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: #444; border-radius: 2px;
+        }
+
+        /* 按钮组 */
+        .btn-group { display: flex; gap: 10px; }
+        button {
+            flex: 1; padding: 10px 0; border: none; border-radius: 6px;
+            font-weight: 600; cursor: pointer; transition: all 0.2s; color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
+        button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        button:active { transform: translateY(0); }
+        
+        .btn-start { background: linear-gradient(135deg, #28a745, #1e7e34); }
+        .btn-pause { background: linear-gradient(135deg, #ffc107, #d39e00); color: #333; }
+        .btn-reset { background: linear-gradient(135deg, #dc3545, #bd2130); }
+
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="ui-panel">
+        <h2>物理参数控制</h2>
+        
+        <div class="status-bar">
+            <span>当前状态</span>
+            <span id="status-text" style="color:#00ff88">
+                <span class="status-dot st-ok"></span>贴合轨道
+            </span>
+        </div>
+
+        <div class="btn-group">
+            <button class="btn-start" onclick="startSim()">运行</button>
+            <button class="btn-pause" onclick="pauseSim()">暂停</button>
+            <button class="btn-reset" onclick="resetSim()">重置</button>
+        </div>
+
+        <div class="control-group">
+            <div class="label-row">
+                <label>初速度 v0 (m/s)</label>
+                <span id="val-v0" class="val-display">6.0</span>
+            </div>
+            <input type="range" id="input-v0" min="0" max="25" step="0.1" value="6.0" oninput="updateParams()">
+        </div>
+
+        <div class="control-group">
+            <div class="label-row">
+                <label>轨道半径 R (m)</label>
+                <span id="val-r" class="val-display">5.0</span>
+            </div>
+            <input type="range" id="input-r" min="3" max="10" step="0.5" value="5.0" oninput="updateParams()">
+        </div>
+
+        <div class="control-group">
+            <div class="label-row">
+                <label>重力 g (m/s²)</label>
+                <span id="val-g" class="val-display">9.8</span>
+            </div>
+            <input type="range" id="input-g" min="1" max="20" step="0.1" value="9.8" oninput="updateParams()">
+        </div>
+
+        <div class="control-group">
+            <div class="label-row">
+                <label>小球质量 m (kg)</label>
+                <span id="val-m" class="val-display">1.0</span>
+            </div>
+            <input type="range" id="input-m" min="0.5" max="5" step="0.1" value="1.0" oninput="updateParams()">
+        </div>
+
+        <hr style="border:0; border-top:1px solid rgba(255,255,255,0.1); margin: 5px 0;">
+        
+        <div style="font-size: 11px; color: #666; line-height: 1.4; margin-top:5px;">
+            提示：当小球在最高点附近支持力不足（v² &lt; gR）时，程序会自动模拟脱轨抛体运动。
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+
+    <script>
+        // --- 全局变量 ---
+        let scene, camera, renderer, controls;
+        let ball, trackMesh, trackRing1, trackRing2, floorMesh;
+
+        // 物理参数
+        let params = {
+            v0: 6.0,    // 最低点速度
+            R: 5.0,     // 轨道半径
+            g: 9.8,
+            m: 1.0
+        };
+
+        const BALL_RADIUS = 0.4;
+        const TRACK_WIDTH = 1.5;
+        const DT = 0.016; // 60hz 时间步长
+
+        // 运行时状态
+        let isRunning = false;
+        let mode = 'track'; // 'track' or 'fall'
+
+        // 极坐标变量 (Track Mode)
+        let theta = 0; // 0 = 最低点
+        let omega = 0; // 角速度 rad/s
+
+        // 笛卡尔坐标变量 (Fall Mode)
+        let pos = new THREE.Vector3(0, 0, 0);
+        let vel = new THREE.Vector3(0, 0, 0);
+
+        // --- 初始化 Three.js 场景 ---
+        function initScene() {
+            const container = document.getElementById('canvas-container');
+
+            // 1. Scene
+            scene = new THREE.Scene();
+            scene.background = null; 
+
+            // 2. Camera
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 2, 22);
+
+            // 3. Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.physicallyCorrectLights = true; 
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.0;
+            container.appendChild(renderer.domElement);
+
+            // 4. Controls
+            if (window.THREE && THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else if (typeof OrbitControls !== 'undefined') {
+                controls = new OrbitControls(camera, renderer.domElement);
+            }
+            if (controls) {
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+            }
+
+            // 5. Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const spotLight = new THREE.SpotLight(0xffffff, 50);
+            spotLight.position.set(10, 20, 10);
+            spotLight.angle = 0.6;
+            spotLight.penumbra = 0.2;
+            spotLight.decay = 2;
+            spotLight.distance = 100;
+            spotLight.castShadow = true;
+            spotLight.shadow.mapSize.width = 2048;
+            spotLight.shadow.mapSize.height = 2048;
+            scene.add(spotLight);
+
+            const pointLight = new THREE.PointLight(0x4db8ff, 10, 50);
+            pointLight.position.set(-5, 0, 5);
+            scene.add(pointLight);
+
+            // 6. Objects
+            createEnvironment();
+            createPhysicsObjects();
+
+            window.addEventListener('resize', onResize);
+        }
+
+        function createEnvironment() {
+            // 地板网格
+            const gridHelper = new THREE.GridHelper(50, 50, 0x444444, 0x222222);
+            gridHelper.position.y = -8;
+            scene.add(gridHelper);
+
+            // 反射地板
+            const planeGeo = new THREE.PlaneGeometry(100, 100);
+            const planeMat = new THREE.MeshStandardMaterial({ 
+                color: 0x111111, 
+                roughness: 0.8, 
+                metalness: 0.5 
+            });
+            floorMesh = new THREE.Mesh(planeGeo, planeMat);
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.position.y = -8.01;
+            floorMesh.receiveShadow = true;
+            scene.add(floorMesh);
+        }
+
+        function createPhysicsObjects() {
+            if (trackMesh) scene.remove(trackMesh);
+            if (trackRing1) scene.remove(trackRing1);
+            if (trackRing2) scene.remove(trackRing2);
+            if (ball) scene.remove(ball);
+
+            // 轨道 (玻璃质感)
+            const trackGeo = new THREE.CylinderGeometry(params.R, params.R, TRACK_WIDTH, 128, 1, true);
+            const trackMat = new THREE.MeshPhysicalMaterial({
+                color: 0xaaccff,
+                metalness: 0.1,
+                roughness: 0.05,
+                transmission: 0.6, 
+                thickness: 0.5,
+                side: THREE.DoubleSide,
+                transparent: true,
+                opacity: 0.4
+            });
+            trackMesh = new THREE.Mesh(trackGeo, trackMat);
+            trackMesh.rotation.x = Math.PI / 2;
+            scene.add(trackMesh);
+
+            // 轨道边缘
+            const ringGeo = new THREE.TorusGeometry(params.R, 0.08, 16, 128);
+            const ringMat = new THREE.MeshStandardMaterial({ color: 0x4db8ff, emissive: 0x113355 });
+            
+            trackRing1 = new THREE.Mesh(ringGeo, ringMat);
+            trackRing1.position.z = TRACK_WIDTH / 2;
+            scene.add(trackRing1);
+
+            trackRing2 = new THREE.Mesh(ringGeo, ringMat);
+            trackRing2.position.z = -TRACK_WIDTH / 2;
+            scene.add(trackRing2);
+
+            // 小球
+            const ballGeo = new THREE.SphereGeometry(BALL_RADIUS, 64, 64);
+            const ballMat = new THREE.MeshStandardMaterial({
+                color: 0xff0044,
+                metalness: 0.7,
+                roughness: 0.2,
+                emissive: 0x330000
+            });
+            ball = new THREE.Mesh(ballGeo, ballMat);
+            ball.castShadow = true;
+            scene.add(ball);
+
+            resetSimLogic();
+        }
+
+        // --- 核心物理引擎 ---
+
+        function updatePhysics() {
+            if (!isRunning) return;
+
+            const R_eff = params.R - BALL_RADIUS;
+
+            if (mode === 'track') {
+                // === 轨道模式 ===
+                
+                // 角加速度 alpha = -(g/R) * sin(theta)
+                const alpha = -(params.g / params.R) * Math.sin(theta);
+                
+                omega += alpha * DT;
+                omega *= 0.9995; // 微弱阻力
+                theta += omega * DT;
+
+                // 更新位置
+                pos.x = R_eff * Math.sin(theta);
+                pos.y = -R_eff * Math.cos(theta);
+                pos.z = 0;
+
+                // 计算速度向量
+                const v_mag = omega * R_eff;
+                vel.x = v_mag * Math.cos(theta);
+                vel.y = v_mag * Math.sin(theta);
+                vel.z = 0;
+
+                // 脱轨检测
+                if (pos.y > 0) {
+                    // 支持力 N = m(v^2/R + g*cos(theta))
+                    const N_per_m = (v_mag * v_mag) / R_eff + params.g * Math.cos(theta);
+
+                    if (N_per_m < 0) {
+                        mode = 'fall';
+                        updateStatusUI();
+                    }
+                }
+
+            } else {
+                // === 落体模式 ===
+                
+                vel.y -= params.g * DT;
+                pos.addScaledVector(vel, DT);
+
+                // 碰撞/重入检测
+                const distSq = pos.x*pos.x + pos.y*pos.y;
+                const limitSq = R_eff * R_eff;
+
+                if (distSq >= limitSq) {
+                    mode = 'track';
+                    
+                    // 计算撞击角度
+                    theta = Math.atan2(pos.x, -pos.y);
+
+                    // 修正位置
+                    pos.x = R_eff * Math.sin(theta);
+                    pos.y = -R_eff * Math.cos(theta);
+
+                    // 速度投影 (非弹性碰撞)
+                    const tx = Math.cos(theta);
+                    const ty = Math.sin(theta);
+                    const v_tan = vel.x * tx + vel.y * ty;
+                    
+                    omega = v_tan / R_eff;
+                    omega *= 0.9; // 碰撞损耗
+
+                    updateStatusUI();
+                }
+            }
+
+            // 更新 3D 对象
+            ball.position.copy(pos);
+            
+            // 简单的滚动自转
+            ball.rotation.z = -theta;
+            ball.rotateX( - (omega * R_eff * DT) / BALL_RADIUS ); 
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePhysics();
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- UI & 交互逻辑 ---
+
+        function startSim() { isRunning = true; }
+        function pauseSim() { isRunning = false; }
+        
+        function resetSimLogic() {
+            isRunning = false;
+            mode = 'track';
+            updateStatusUI();
+
+            theta = 0; // 最低点
+            const R_eff = params.R - BALL_RADIUS;
+            
+            omega = params.v0 / R_eff;
+            
+            pos.set(0, -R_eff, 0);
+            vel.set(params.v0, 0, 0);
+
+            ball.position.copy(pos);
+            ball.rotation.set(0,0,0);
+        }
+
+        function resetSim() {
+            resetSimLogic();
+        }
+
+        function updateParams() {
+            params.v0 = parseFloat(document.getElementById('input-v0').value);
+            params.R = parseFloat(document.getElementById('input-r').value);
+            params.g = parseFloat(document.getElementById('input-g').value);
+            params.m = parseFloat(document.getElementById('input-m').value);
+
+            document.getElementById('val-v0').innerText = params.v0.toFixed(1);
+            document.getElementById('val-r').innerText = params.R.toFixed(1);
+            document.getElementById('val-g').innerText = params.g.toFixed(1);
+            document.getElementById('val-m').innerText = params.m.toFixed(1);
+
+            createPhysicsObjects();
+        }
+
+        function updateStatusUI() {
+            const el = document.getElementById('status-text');
+            if (mode === 'track') {
+                el.innerHTML = '<span class="status-dot st-ok"></span>贴合轨道';
+                el.style.color = '#00ff88';
+            } else {
+                el.innerHTML = '<span class="status-dot st-fall"></span>脱轨落体中';
+                el.style.color = '#ff4d4d';
+            }
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- 启动入口 ---
+        window.onload = function() {
+            initScene();
+            resetSim();
+            animate();
+        };
+    </script>
+</body>
+</html>

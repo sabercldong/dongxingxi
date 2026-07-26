@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>两力合力范围演示 (无圆环版)</title>
+    <style>
+        :root {
+            --bg-color: #f0f2f5;
+            --panel-bg: #ffffff;
+            --text-color: #333;
+            --accent-color: #1890ff;
+            --border-color: #d9d9d9;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden; /* 禁止滚动，确保单屏 */
+            background-color: var(--bg-color);
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧画布区 */
+        .canvas-area {
+            flex: 1;
+            position: relative;
+            background-color: #fff;
+            background-image: radial-gradient(#e1e1e1 1px, transparent 1px);
+            background-size: 20px 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        canvas {
+            box-shadow: 0 0 20px rgba(0,0,0,0.05);
+            background: rgba(255,255,255,0.8);
+            border-radius: 8px;
+        }
+
+        /* 右侧控制区 */
+        .control-panel {
+            width: 320px;
+            min-width: 300px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        h2 {
+            margin-top: 0;
+            color: var(--text-color);
+            font-size: 1.2rem;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 10px;
+        }
+
+        .control-group {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #555;
+        }
+
+        .input-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        input[type="range"] {
+            flex: 1;
+            cursor: pointer;
+        }
+
+        input[type="number"] {
+            width: 60px;
+            padding: 5px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
+
+        .result-box {
+            background-color: #e6f7ff;
+            border: 1px solid #91d5ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: auto; /* 推到底部 */
+        }
+
+        .result-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 0.95rem;
+        }
+
+        .result-item.highlight {
+            font-weight: bold;
+            color: #0050b3;
+            font-size: 1.1rem;
+            border-top: 1px dashed #91d5ff;
+            padding-top: 8px;
+            margin-top: 8px;
+        }
+
+        .legend {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+        
+        /* 颜色定义 */
+        .c-f1 { background-color: #ff4d4f; }
+        .c-f2 { background-color: #1890ff; }
+        .c-res { background-color: #52c41a; }
+        /* 图例样式保留，但画布中已删除对应图形 */
+        .c-max { border: 2px dashed #ffccc7; box-sizing: border-box; background: transparent; opacity: 0.5; }
+        .c-min { border: 2px dashed #bae7ff; box-sizing: border-box; background: transparent; opacity: 0.5; }
+
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="canvas-area" id="canvasContainer">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div class="control-panel">
+        <h2>两力合成演示</h2>
+
+        <div class="control-group" style="border-left: 4px solid #ff4d4f;">
+            <label>力 F1 (红色)</label>
+            <div class="input-row">
+                <input type="range" id="sliderF1" min="10" max="200" value="100">
+                <input type="number" id="numF1" value="100" min="0"> N
+            </div>
+        </div>
+
+        <div class="control-group" style="border-left: 4px solid #1890ff;">
+            <label>力 F2 (蓝色)</label>
+            <div class="input-row">
+                <input type="range" id="sliderF2" min="10" max="200" value="80">
+                <input type="number" id="numF2" value="80" min="0"> N
+            </div>
+        </div>
+
+        <div class="control-group" style="border-left: 4px solid #faad14;">
+            <label>夹角 θ (度)</label>
+            <div class="input-row">
+                <input type="range" id="sliderAngle" min="0" max="360" value="60">
+                <input type="number" id="numAngle" value="60" min="0" max="360"> °
+            </div>
+        </div>
+
+        <div class="legend">
+            <div class="legend-item"><div class="dot c-f1"></div> F1 向量</div>
+            <div class="legend-item"><div class="dot c-f2"></div> F2 向量</div>
+            <div class="legend-item"><div class="dot c-res"></div> 合力 F 向量</div>
+            <div class="legend-item" style="color:#999"><div class="dot c-max"></div> 最大合力范围 (同向)</div>
+            <div class="legend-item" style="color:#999"><div class="dot c-min"></div> 最小合力范围 (反向)</div>
+        </div>
+
+        <div class="result-box">
+            <div class="result-item">
+                <span>最大合力 (0°):</span>
+                <span id="valMax">180.0 N</span>
+            </div>
+            <div class="result-item">
+                <span>最小合力 (180°):</span>
+                <span id="valMin">20.0 N</span>
+            </div>
+            <div class="result-item">
+                <span>合力范围:</span>
+                <span id="valRange">[20, 180]</span>
+            </div>
+            <div class="result-item highlight">
+                <span>当前合力 F:</span>
+                <span id="valRes">156.2 N</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 初始化变量
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvasContainer');
+
+    // 输入元素
+    const inputs = {
+        f1: { slider: document.getElementById('sliderF1'), num: document.getElementById('numF1') },
+        f2: { slider: document.getElementById('sliderF2'), num: document.getElementById('numF2') },
+        angle: { slider: document.getElementById('sliderAngle'), num: document.getElementById('numAngle') }
+    };
+
+    // 显示元素
+    const displays = {
+        max: document.getElementById('valMax'),
+        min: document.getElementById('valMin'),
+        range: document.getElementById('valRange'),
+        res: document.getElementById('valRes')
+    };
+
+    // 状态数据
+    let state = {
+        f1: 100,
+        f2: 80,
+        angle: 60
+    };
+
+    // 调整画布大小
+    function resizeCanvas() {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        draw();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // 同步输入框
+    function syncInputs(source, key) {
+        const val = parseFloat(source.value);
+        if (isNaN(val)) return;
+        state[key] = val;
+        if (source.type === 'range') {
+            inputs[key].num.value = val;
+        } else {
+            inputs[key].slider.value = val;
+        }
+        draw();
+    }
+
+    // 绑定事件
+    Object.keys(inputs).forEach(key => {
+        inputs[key].slider.addEventListener('input', (e) => syncInputs(e.target, key));
+        inputs[key].num.addEventListener('input', (e) => syncInputs(e.target, key));
+    });
+
+    // 绘制箭头辅助函数
+    function drawArrow(ctx, fromX, fromY, toX, toY, color, width = 3, label = "") {
+        const headlen = 10; 
+        const dx = toX - fromX;
+        const dy = toY - fromY;
+        const angle = Math.atan2(dy, dx);
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.fillStyle = color;
+        ctx.moveTo(toX, toY);
+        ctx.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
+        ctx.fill();
+
+        if (label) {
+            ctx.fillStyle = color;
+            ctx.font = "bold 14px Arial";
+            ctx.fillText(label, toX + 10, toY);
+        }
+    }
+
+    // 核心绘制逻辑
+    function draw() {
+        const w = canvas.width;
+        const h = canvas.height;
+        const cx = w / 2;
+        const cy = h / 2;
+
+        ctx.clearRect(0, 0, w, h);
+        
+        // 计算物理量
+        const f1 = state.f1;
+        const f2 = state.f2;
+        const rad = -state.angle * Math.PI / 180; 
+
+        const resMag = Math.sqrt(f1*f1 + f2*f2 + 2*f1*f2*Math.cos(state.angle * Math.PI / 180));
+        const fMax = f1 + f2;
+        const fMin = Math.abs(f1 - f2);
+
+        // 更新右侧文本面板
+        displays.max.textContent = fMax.toFixed(1) + " N";
+        displays.min.textContent = fMin.toFixed(1) + " N";
+        displays.range.textContent = `[${fMin.toFixed(1)}, ${fMax.toFixed(1)}]`;
+        displays.res.textContent = resMag.toFixed(1) + " N";
+
+        // === 绘图部分 ===
+        
+        // 缩放比例
+        const maxRadiusPx = Math.min(w, h) / 2 * 0.8;
+        const scale = fMax > 0 ? maxRadiusPx / fMax : 1;
+
+        // --- 已删除：绘制范围圆环的代码块 ---
+
+        // 2. 坐标计算
+        const f1x = cx + f1 * scale;
+        const f1y = cy;
+        const f2x = cx + f2 * scale * Math.cos(rad);
+        const f2y = cy + f2 * scale * Math.sin(rad);
+        const resX = cx + (f1 + f2 * Math.cos(rad)) * scale;
+        const resY = cy + (f2 * Math.sin(rad)) * scale;
+
+        // 3. 绘制辅助平行四边形 (虚线)
+        ctx.beginPath();
+        ctx.moveTo(f1x, f1y);
+        ctx.lineTo(resX, resY);
+        ctx.lineTo(f2x, f2y);
+        ctx.strokeStyle = "#ccc";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]); // 设置虚线
+        ctx.stroke();
+        ctx.setLineDash([]); // 重置虚线
+
+        // 4. 绘制向量
+        drawArrow(ctx, cx, cy, f1x, f1y, "#ff4d4f", 4, "F1");
+        drawArrow(ctx, cx, cy, f2x, f2y, "#1890ff", 4, "F2");
+        drawArrow(ctx, cx, cy, resX, resY, "#52c41a", 5, "F");
+
+        // 5. 绘制角度弧线
+        if (state.angle > 0) {
+            ctx.beginPath();
+            const arcR = 30;
+            ctx.arc(cx, cy, arcR, 0, rad, true);
+            ctx.strokeStyle = "#faad14";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+            ctx.fillStyle = "#faad14";
+            ctx.fillText(state.angle + "°", cx + arcR + 5, cy - 10);
+        }
+    }
+
+    // 启动
+    resizeCanvas();
+
+</script>
+
+</body>
+</html>

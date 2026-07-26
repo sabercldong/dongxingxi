@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>均匀带电圆环电场演示</title>
+    <style>
+        :root {
+            --bg-color: #fcfcfc;
+            --panel-bg: #f0f0f0;
+            --text-color: #333;
+            --accent-color: #4CAF50;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧 3D 画布区域 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background: #ffffff;
+            overflow: hidden;
+        }
+
+        /* 右侧控制区 */
+        #sidebar {
+            width: 280px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+            overflow-y: auto;
+            border-left: 1px solid #ddd;
+        }
+
+        h2 { 
+            margin-top: 0; 
+            font-size: 1.1rem; 
+            border-bottom: 2px solid var(--accent-color); 
+            padding-bottom: 10px; 
+            color: #222;
+        }
+        
+        .control-group {
+            background: #fff;
+            padding: 12px;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .control-group h3 {
+            margin: 0 0 8px 0;
+            font-size: 0.95rem;
+            color: #666;
+        }
+
+        label {
+            display: flex;
+            align-items: center;
+            font-size: 0.9rem;
+            margin-bottom: 8px;
+            cursor: pointer;
+        }
+
+        /* 简单的开关样式 */
+        input[type="checkbox"] {
+            margin-right: 10px;
+            transform: scale(1.2);
+            accent-color: var(--accent-color);
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin-top: 5px;
+            margin-bottom: 5px;
+            cursor: pointer;
+        }
+        
+        .val-display {
+            float: right;
+            font-weight: bold;
+            color: var(--accent-color);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            margin-top: 4px;
+        }
+        .color-box { width: 12px; height: 12px; border-radius: 2px; }
+
+    </style>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>均匀带电圆环</h2>
+
+        <div class="control-group">
+            <h3>参数设置</h3>
+            
+            <label>微分数量 (Count) <span id="val-count" class="val-display">12</span></label>
+            <input type="range" id="slider-count" min="2" max="32" value="12" step="2">
+            
+            <label>观测点距离 (Z轴) <span id="val-z" class="val-display">10</span></label>
+            <input type="range" id="slider-z" min="2" max="25" value="10" step="0.5">
+
+            <label>圆环半径 (R) <span id="val-r" class="val-display">8</span></label>
+            <input type="range" id="slider-r" min="3" max="15" value="8" step="0.5">
+        </div>
+
+        <div class="control-group">
+            <h3>显示控制 (复刻截图)</h3>
+            
+            <label>
+                <input type="checkbox" id="chk-ring-diff" checked> 
+                圆环微分 (电荷元)
+            </label>
+            
+            <label>
+                <input type="checkbox" id="chk-vectors" checked> 
+                电荷分场强 (dE)
+            </label>
+
+            <label>
+                <input type="checkbox" id="chk-dashed" checked> 
+                辅助虚线 (圆锥)
+            </label>
+
+            <label>
+                <input type="checkbox" id="chk-total" checked> 
+                总的合力 (E total)
+            </label>
+            
+            <label style="color: #888;">
+                <input type="checkbox" id="chk-axis" checked> 
+                显示坐标轴
+            </label>
+        </div>
+
+        <div class="control-group">
+            <h3>图例</h3>
+            <div class="legend-item"><div class="color-box" style="background:#0000ff"></div> 带电圆环</div>
+            <div class="legend-item"><div class="color-box" style="background:#ff0000"></div> 电荷元 (dq)</div>
+            <div class="legend-item"><div class="color-box" style="background:#00cc00"></div> 观测点 A</div>
+            <div class="legend-item"><div class="color-box" style="background:#00ffff"></div> 合场强</div>
+        </div>
+    </div>
+
+<script>
+    // --- 1. 基础场景初始化 ---
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xffffff); // 白底
+    // 添加一点淡色雾化，增强空间感
+    scene.fog = new THREE.Fog(0xffffff, 20, 100);
+
+    const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+    // 初始视角：侧向俯视，类似截图
+    camera.position.set(25, 15, 25);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    // 灯光
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
+
+    // 控制器
+    let controls;
+    if (typeof THREE.OrbitControls !== 'undefined') {
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+    }
+
+    // --- 2. 场景对象容器 ---
+    const objectsGroup = new THREE.Group();
+    scene.add(objectsGroup);
+    
+    // 坐标轴辅助
+    const axesHelper = new THREE.AxesHelper(30);
+    // 设置轴颜色：X红, Y绿, Z蓝 (Z轴是我们关注的轴)
+    scene.add(axesHelper);
+
+    // 材质定义
+    const ringMaterial = new THREE.MeshPhongMaterial({ color: 0x2222ff, shininess: 50 }); // 蓝色圆环
+    const chargeMaterial = new THREE.MeshPhongMaterial({ color: 0xff0000 }); // 红色点电荷
+    const pointAMaterial = new THREE.MeshPhongMaterial({ color: 0x00cc00 }); // 绿色观测点
+    
+    // 虚线材质
+    const dashedMaterial = new THREE.LineDashedMaterial({
+        color: 0x000000, // 黑色虚线
+        linewidth: 1,
+        scale: 1,
+        dashSize: 0.5,
+        gapSize: 0.3,
+        opacity: 0.5,
+        transparent: true
+    });
+
+    // --- 3. 核心绘制函数 ---
+    
+    // 存储动态生成的 mesh 以便清理
+    let dynamicMeshes = [];
+
+    function clearScene() {
+        dynamicMeshes.forEach(mesh => {
+            if (mesh.geometry) mesh.geometry.dispose();
+            // 材质通常复用，不 dispose
+            objectsGroup.remove(mesh);
+        });
+        dynamicMeshes = [];
+    }
+
+    function updateSimulation() {
+        clearScene();
+
+        // 获取 UI 参数
+        const count = parseInt(document.getElementById('slider-count').value);
+        const zPos = parseFloat(document.getElementById('slider-z').value);
+        const radius = parseFloat(document.getElementById('slider-r').value);
+        
+        const showDiff = document.getElementById('chk-ring-diff').checked;
+        const showVectors = document.getElementById('chk-vectors').checked;
+        const showDashed = document.getElementById('chk-dashed').checked;
+        const showTotal = document.getElementById('chk-total').checked;
+        
+        axesHelper.visible = document.getElementById('chk-axis').checked;
+
+        // 1. 绘制圆环本体
+        // 使用 TorusGeometry: radius, tube, radialSegments, tubularSegments
+        const torusGeo = new THREE.TorusGeometry(radius, 0.15, 8, 100); 
+        // 旋转一下，使其平躺在 XY 平面 (Threejs Torus 默认是竖着的)
+        // 实际上我们不需要旋转，因为 Torus 默认在 XY 平面围绕 Z 轴生成? 
+        // 不，默认是在 XY 平面围绕 Z 轴生成。我们希望它躺在 XZ 平面？
+        // 物理习惯：圆环在 XY 平面，轴线是 Z 轴。
+        // ThreeJS Torus 默认生成在 XY 平面，中心在原点。符合我们的需求。
+        const ringMesh = new THREE.Mesh(torusGeo, ringMaterial);
+        objectsGroup.add(ringMesh);
+        dynamicMeshes.push(ringMesh);
+
+        // 2. 绘制观测点 A
+        const pointA = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 0.8), pointAMaterial);
+        pointA.position.set(0, 0, zPos);
+        objectsGroup.add(pointA);
+        dynamicMeshes.push(pointA);
+
+        // 辅助矢量：观测点位置
+        const posA = new THREE.Vector3(0, 0, zPos);
+        let totalE = new THREE.Vector3(0, 0, 0);
+
+        // 3. 循环生成微分元
+        for (let i = 0; i < count; i++) {
+            const theta = (i / count) * Math.PI * 2;
+            const x = radius * Math.cos(theta);
+            const y = radius * Math.sin(theta);
+            const posQ = new THREE.Vector3(x, y, 0);
+
+            // A. 绘制电荷元 (红色小球)
+            if (showDiff) {
+                const qMesh = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), chargeMaterial);
+                qMesh.position.copy(posQ);
+                objectsGroup.add(qMesh);
+                dynamicMeshes.push(qMesh);
+            }
+
+            // 计算矢量 r = A - Q
+            const vecR = new THREE.Vector3().subVectors(posA, posQ);
+            const dist = vecR.length();
+            
+            // 模拟库仑定律 E ~ 1/r^2 (为了可视化效果，系数 k 调大点)
+            // 这里的矢量长度我们设为固定比例以便观察，或者真实物理比例
+            // 为了模仿截图，我们用固定长度表示方向，或者稍微随距离衰减
+            const visualScale = 8; 
+            const dir = vecR.clone().normalize();
+            
+            // 累加合力 (简单叠加)
+            totalE.add(dir.clone().multiplyScalar(1)); 
+
+            // B. 绘制虚线 (圆锥母线)
+            if (showDashed) {
+                const points = [posQ, posA];
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(geometry, dashedMaterial);
+                line.computeLineDistances(); // 必须调用以显示虚线
+                objectsGroup.add(line);
+                dynamicMeshes.push(line);
+            }
+
+            // C. 绘制分场强 dE (红色箭头)
+            if (showVectors) {
+                // 箭头从点 A 出发? 还是从电荷出发? 截图里似乎箭头是汇聚到 A 的。
+                // 物理上场是指向 A 的（如果是正电荷）。
+                // 截图里的红色箭头起点在 A，指向远离源的方向（正电荷在A点产生的场）。
+                // 对，箭头应该画在 A 点。
+                
+                const arrowLength = 5; 
+                // 截图里箭头是散开的（表示分量），但也汇聚于一点。
+                // 让我们把箭头起点放在 A 点，方向沿 vecR 方向
+                const arrowHelper = new THREE.ArrowHelper(dir, posA, arrowLength, 0xff0000, 1, 0.5);
+                objectsGroup.add(arrowHelper);
+                dynamicMeshes.push(arrowHelper);
+            }
+        }
+
+        // 4. 绘制总合力 (青色箭头)
+        if (showTotal && count > 1) {
+            // 归一化总合力方向 (由于对称性，应该纯粹指向 Z 轴)
+            // 加上一点容错，如果 count 是奇数可能不完全垂直，但物理上积分是垂直的
+            const totalDir = totalE.normalize();
+            
+            // 如果 z < 0，场强应该指向 -Z。如果 z > 0，指向 +Z
+            // 根据上面的计算自动处理了
+            
+            // 画一条长长的青色线或箭头，穿过圆环中心
+            // 截图里是一条很长的青色线
+            const totalLength = 15; 
+            
+            // 我们可以画一条穿过原点和 A 的直线来表示轴
+            const axisGeo = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0,0, -10), 
+                new THREE.Vector3(0,0, 30)
+            ]);
+            // 我们只画箭头表示合力
+            const totalArrow = new THREE.ArrowHelper(
+                totalDir, 
+                posA, // 起点在 A
+                totalLength, 
+                0x00ffff, // 青色
+                2, // 箭头头长
+                1  // 箭头头宽
+            );
+            // 增加线条宽度 (Threejs LineWidth 在某些浏览器无效，但在 ArrowHelper 里我们只能这样)
+            // 可以通过 Mesh 模拟粗箭头，但 ArrowHelper 够用了
+            objectsGroup.add(totalArrow);
+            dynamicMeshes.push(totalArrow);
+        }
+    }
+
+    // --- 4. UI 事件绑定 ---
+    const sliders = ['slider-count', 'slider-z', 'slider-r'];
+    const checks = ['chk-ring-diff', 'chk-vectors', 'chk-dashed', 'chk-total', 'chk-axis'];
+
+    sliders.forEach(id => {
+        const el = document.getElementById(id);
+        const display = document.getElementById(id.replace('slider', 'val'));
+        el.addEventListener('input', () => {
+            display.innerText = el.value;
+            updateSimulation();
+        });
+    });
+
+    checks.forEach(id => {
+        document.getElementById(id).addEventListener('change', updateSimulation);
+    });
+
+    window.addEventListener('resize', () => {
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    });
+
+    // --- 5. 动画循环 ---
+    function animate() {
+        requestAnimationFrame(animate);
+        if (controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // 初始化
+    updateSimulation();
+    animate();
+
+</script>
+</body>
+</html>

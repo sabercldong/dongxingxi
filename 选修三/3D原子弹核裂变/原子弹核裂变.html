@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>原子弹引爆控制台 (单屏版)</title>
+    <style>
+        /* --- 布局：绝对单屏，无滚动 --- */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0f1115; /* 深空灰背景 */
+            color: #ecf0f1;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            overflow: hidden; /* 禁止滚动 */
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧：可视化演示区 (75%) */
+        #display-area {
+            flex: 3;
+            position: relative;
+            background: radial-gradient(circle at center, #1a1d24 0%, #000 100%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        canvas {
+            box-shadow: 0 0 50px rgba(0,0,0,0.8);
+            border-radius: 50%; /* 圆形视窗 */
+            background: #000;
+        }
+
+        /* 覆盖在画布上的文字标签 */
+        .label {
+            position: absolute;
+            color: rgba(255,255,255,0.4);
+            font-size: 12px;
+            pointer-events: none;
+        }
+
+        /* 右侧：控制面板 (25%) */
+        #control-panel {
+            flex: 1;
+            background: #1e2329;
+            border-left: 2px solid #333;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+        }
+
+        /* 仪表盘元素 */
+        h1 { margin: 0; font-size: 24px; color: #e74c3c; letter-spacing: 2px; text-transform: uppercase; border-bottom: 1px solid #444; padding-bottom: 15px;}
+        
+        .status-box {
+            background: #000;
+            border: 1px solid #333;
+            color: #2ecc71; /* 终端绿 */
+            font-family: 'Courier New', monospace;
+            padding: 15px;
+            height: 40%;
+            overflow-y: auto;
+            font-size: 13px;
+            line-height: 1.5;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+
+        .monitor {
+            background: #2c3e50;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .monitor-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; color: #bdc3c7; }
+        .val { font-weight: bold; color: #fff; }
+
+        /* 按钮组 */
+        .btn-group { display: flex; flex-direction: column; gap: 10px; }
+        
+        button {
+            padding: 15px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+
+        #btn-start {
+            background: linear-gradient(135deg, #c0392b, #96281b);
+            color: white;
+            box-shadow: 0 4px 0 #6d1b13;
+        }
+        #btn-start:active { transform: translateY(4px); box-shadow: none; }
+        #btn-start:disabled { background: #555; color: #888; box-shadow: none; cursor: not-allowed; }
+
+        #btn-reset { background: #34495e; color: white; }
+        #btn-reset:hover { background: #415b76; }
+
+        /* 闪光层 */
+        #flash {
+            position: absolute; top:0; left:0; width:100%; height:100%;
+            background: white; pointer-events: none; opacity: 0; transition: opacity 2s; z-index: 99;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="display-area">
+        <div id="flash"></div>
+        <canvas id="simCanvas"></canvas>
+        <div class="label" style="top: 10%; left: 50%; transform: translateX(-50%);">高爆炸药层</div>
+        <div class="label" style="top: 50%; left: 50%; transform: translate(-50%, -50%); color: rgba(52, 152, 219, 0.5);">钚核心</div>
+    </div>
+
+    <div id="control-panel">
+        <div>
+            <h1>☢️ 武器控制台</h1>
+            <p style="color:#7f8c8d; font-size:12px; margin-bottom: 20px;">代号：胖子 (Fat Man) / 内爆式</p>
+
+            <div class="monitor">
+                <div class="monitor-row"><span>核心密度:</span> <span id="val-density" class="val" style="color:#3498db">正常</span></div>
+                <div class="monitor-row"><span>中子通量:</span> <span id="val-flux" class="val">0</span></div>
+                <div class="monitor-row"><span>当前阶段:</span> <span id="val-phase" class="val" style="color:#f1c40f">待机</span></div>
+            </div>
+
+            <div class="status-box" id="console-log">
+                > 系统初始化完成...<br>
+                > 保险已解除。<br>
+                > 等待引爆指令。
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button id="btn-start" onclick="startSequence()">🚀 启动引爆程序</button>
+            <button id="btn-reset" onclick="resetSim()">↺ 重置系统</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // 自适应画布大小 (保持正方形)
+        let size = Math.min(window.innerWidth * 0.7, window.innerHeight * 0.9);
+        canvas.width = size;
+        canvas.height = size;
+        const CX = size / 2;
+        const CY = size / 2;
+
+        // 模拟参数
+        let state = 'IDLE'; // IDLE, COMPRESS, FISSION, EXPLODE
+        let atoms = [];
+        let explosives = [];
+        let neutrons = [];
+        let coreRadius = size * 0.25; // 初始核心半径
+        let maxRadius = size * 0.25;
+        let shockwaveR = 0;
+        
+        // 初始化对象
+        function init() {
+            atoms = [];
+            explosives = [];
+            neutrons = [];
+            coreRadius = maxRadius;
+            shockwaveR = 0;
+            state = 'IDLE';
+
+            // 1. 生成钚原子 (蓝色点)
+            for(let i=0; i<150; i++) {
+                let r = Math.sqrt(Math.random()) * coreRadius;
+                let theta = Math.random() * 2 * Math.PI;
+                atoms.push({
+                    x: CX + r * Math.cos(theta),
+                    y: CY + r * Math.sin(theta),
+                    baseR: r, // 记录原始半径用于压缩计算
+                    baseTheta: theta,
+                    active: true
+                });
+            }
+
+            // 2. 生成炸药块 (红色方块环绕)
+            let expCount = 12;
+            for(let i=0; i<expCount; i++) {
+                let angle = (i / expCount) * Math.PI * 2;
+                let r = coreRadius + 40;
+                explosives.push({
+                    x: CX + r * Math.cos(angle),
+                    y: CY + r * Math.sin(angle),
+                    angle: angle,
+                    r: r
+                });
+            }
+            
+            draw();
+        }
+
+        // 写日志
+        function log(msg) {
+            const box = document.getElementById('console-log');
+            box.innerHTML += `> ${msg}<br>`;
+            box.scrollTop = box.scrollHeight;
+        }
+
+        // 更新数据面板
+        function updateMonitor(density, flux, phase) {
+            document.getElementById('val-density').innerText = density;
+            document.getElementById('val-flux').innerText = flux;
+            document.getElementById('val-phase').innerText = phase;
+        }
+
+        // --- 核心动画循环 ---
+        function animate() {
+            if (state === 'IDLE') return; // 待机时不刷新以省资源
+
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // 拖影效果
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 绘制/更新炸药
+            if (state === 'COMPRESS') {
+                coreRadius *= 0.98; // 核心缩小
+                
+                // 炸药向内移动
+                explosives.forEach(e => {
+                    e.r *= 0.98;
+                    e.x = CX + e.r * Math.cos(e.angle);
+                    e.y = CY + e.r * Math.sin(e.angle);
+                });
+
+                // 转换状态判断
+                if (coreRadius < maxRadius * 0.4) {
+                    state = 'FISSION';
+                    log("达到超临界密度！中子源点火！");
+                    updateMonitor("极高 (超临界)", "1 (初始)", "链式反应起始");
+                    // 注入初始中子
+                    neutrons.push({x: CX, y: CY, vx: 2, vy: 2});
+                }
+            }
+
+            if (state !== 'EXPLODE') {
+                ctx.fillStyle = '#c0392b'; // 炸药红
+                explosives.forEach(e => {
+                    ctx.save();
+                    ctx.translate(e.x, e.y);
+                    ctx.rotate(e.angle);
+                    ctx.fillRect(-10, -5, 20, 10); // 画炸药块
+                    // 画箭头
+                    if(state === 'COMPRESS') {
+                        ctx.beginPath();
+                        ctx.moveTo(-15, 0);
+                        ctx.lineTo(-25, -5);
+                        ctx.lineTo(-25, 5);
+                        ctx.fill();
+                    }
+                    ctx.restore();
+                });
+            }
+
+            // 2. 绘制/更新原子
+            let currentAtomColor = '#3498db'; // 蓝
+            if (state === 'FISSION') currentAtomColor = '#f1c40f'; // 变黄
+            
+            ctx.fillStyle = currentAtomColor;
+            atoms.forEach(a => {
+                if (!a.active) return;
+                
+                if (state === 'COMPRESS' || state === 'FISSION') {
+                    // 更新位置随半径收缩
+                    let scale = coreRadius / maxRadius;
+                    a.x = CX + a.baseR * scale * Math.cos(a.baseTheta);
+                    a.y = CY + a.baseR * scale * Math.sin(a.baseTheta);
+                }
+                
+                ctx.beginPath();
+                ctx.arc(a.x, a.y, 4, 0, Math.PI*2); // 原子大小
+                ctx.fill();
+            });
+
+            // 3. 链式反应逻辑 (FISSION 阶段)
+            if (state === 'FISSION') {
+                // 中子运动
+                ctx.fillStyle = '#fff';
+                for (let i = neutrons.length - 1; i >= 0; i--) {
+                    let n = neutrons[i];
+                    n.x += n.vx;
+                    n.y += n.vy;
+                    
+                    // 绘制中子
+                    ctx.beginPath();
+                    ctx.arc(n.x, n.y, 3, 0, Math.PI*2);
+                    ctx.fill();
+
+                    // 碰撞检测
+                    let hit = false;
+                    for (let j = 0; j < atoms.length; j++) {
+                        let a = atoms[j];
+                        if (a.active) {
+                            let dx = n.x - a.x;
+                            let dy = n.y - a.y;
+                            if (dx*dx + dy*dy < 50) { // 撞到了
+                                a.active = false; // 原子裂变消失
+                                hit = true;
+                                // 产生2个新中子
+                                neutrons.push({x: a.x, y: a.y, vx: Math.random()*10-5, vy: Math.random()*10-5});
+                                neutrons.push({x: a.x, y: a.y, vx: Math.random()*10-5, vy: Math.random()*10-5});
+                                break;
+                            }
+                        }
+                    }
+
+                    // 边界或命中移除
+                    if (hit || n.x < 0 || n.x > size || n.y < 0 || n.y > size) {
+                        neutrons.splice(i, 1);
+                    }
+                }
+                
+                document.getElementById('val-flux').innerText = neutrons.length * 1000; // 模拟数值
+
+                // 爆发判定
+                if (neutrons.length > 200) {
+                    state = 'EXPLODE';
+                    log("能量失控释放 -> 核爆！");
+                    updateMonitor("无法读取", "极大", "核爆");
+                    document.getElementById('flash').style.opacity = 1;
+                    setTimeout(() => { document.getElementById('flash').style.opacity = 0; }, 2000);
+                }
+            }
+
+            // 4. 爆炸动画
+            if (state === 'EXPLODE') {
+                shockwaveR += 20;
+                ctx.beginPath();
+                ctx.arc(CX, CY, shockwaveR, 0, Math.PI*2);
+                ctx.fillStyle = '#fff';
+                ctx.fill();
+                
+                // 黄红火球
+                ctx.beginPath();
+                ctx.arc(CX, CY, shockwaveR * 0.8, 0, Math.PI*2);
+                ctx.fillStyle = '#f39c12';
+                ctx.fill();
+            }
+
+            if (shockwaveR < size * 1.5) {
+                requestAnimationFrame(animate);
+            } else if (state === 'EXPLODE') {
+                log("演示结束。");
+                document.getElementById('btn-start').disabled = false;
+                document.getElementById('btn-start').innerText = "再次引爆";
+            }
+        }
+
+        // --- 控制逻辑 ---
+        function startSequence() {
+            if (state !== 'IDLE') return;
+            
+            document.getElementById('btn-start').disabled = true;
+            document.getElementById('btn-start').innerText = "程序运行中...";
+            
+            // 步骤 1: 压缩
+            log("1. 启动常规炸药...");
+            state = 'COMPRESS';
+            updateMonitor("正在压缩...", "0", "内爆阶段");
+            animate();
+        }
+
+        function resetSim() {
+            // 强制重置
+            state = 'IDLE';
+            init();
+            
+            // 重置UI
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            draw(); // 画初始态
+            
+            document.getElementById('btn-start').disabled = false;
+            document.getElementById('btn-start').innerText = "🚀 启动引爆程序";
+            document.getElementById('console-log').innerHTML = "> 系统重置完成。<br>> 等待指令。";
+            updateMonitor("正常", "0", "待机");
+            document.getElementById('flash').style.opacity = 0;
+        }
+
+        function draw() {
+            // 静态绘制初始帧
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // 核心
+            ctx.fillStyle = '#3498db';
+            atoms.forEach(a => {
+                ctx.beginPath();
+                ctx.arc(a.x, a.y, 4, 0, Math.PI*2);
+                ctx.fill();
+            });
+            
+            // 炸药
+            ctx.fillStyle = '#c0392b';
+            explosives.forEach(e => {
+                ctx.save();
+                ctx.translate(e.x, e.y);
+                ctx.rotate(e.angle);
+                ctx.fillRect(-10, -5, 20, 10);
+                ctx.restore();
+            });
+        }
+
+        // 窗口大小改变自适应
+        window.addEventListener('resize', () => {
+            size = Math.min(window.innerWidth * 0.7, window.innerHeight * 0.9);
+            canvas.width = size;
+            canvas.height = size;
+            resetSim(); // 大小改变时重置以防错位
+        });
+
+        init(); // 启动
+
+    </script>
+</body>
+</html>

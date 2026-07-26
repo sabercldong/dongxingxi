@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物理模型：相似三角形 (无图表版)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: "Microsoft YaHei", sans-serif;
+            background-color: #1e1e1e;
+            color: #fff;
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧 3D 画布 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background: #000;
+            overflow: hidden;
+        }
+
+        /* 右侧 功能区 */
+        #sidebar {
+            width: 340px;
+            background-color: #2d2d2d;
+            border-left: 1px solid #444;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        .problem-box {
+            background: #383838;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 13px;
+            line-height: 1.5;
+            border-left: 4px solid #4CAF50;
+        }
+
+        h2 { margin-top: 0; color: #eee; font-size: 18px; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        
+        .control-group {
+            margin-bottom: 15px;
+            background: rgba(0,0,0,0.2);
+            padding: 12px;
+            border-radius: 8px;
+        }
+
+        label { display: block; margin-bottom: 5px; font-size: 13px; color: #aaa; }
+
+        /* 开关样式 */
+        .toggle-row { display: flex; align-items: center; margin-bottom: 8px; }
+        .toggle-row label { margin-bottom: 0; margin-left: 10px; color: #fff; cursor: pointer;}
+        input[type="checkbox"] { transform: scale(1.2); cursor: pointer; }
+
+        /* 按钮样式 */
+        .btn-row { display: flex; gap: 8px; margin-bottom: 8px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: 0.2s; font-size: 13px;
+        }
+        .btn-primary { background-color: #2196F3; color: white; }
+        .btn-primary:hover { background-color: #1976D2; }
+        .btn-danger { background-color: #f44336; color: white; }
+        .btn-danger:hover { background-color: #d32f2f; }
+        
+        input[type="range"] { width: 100%; cursor: pointer; }
+
+        /* 图例 */
+        .legend { font-size: 12px; margin-top: 5px; background: #222; padding: 10px; border-radius: 5px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .color-box { width: 12px; height: 12px; margin-right: 8px; border-radius: 2px; }
+    </style>
+
+    <script src="./three.min.js"></script>
+    <script src="./OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>物理演示控制台</h2>
+
+        <div class="problem-box">
+            <strong>题目：</strong><br>
+            光滑半球面上，小球在绳拉力作用下从A点缓慢滑向顶点。分析拉力T与支持力Fn的变化。
+        </div>
+
+        <div class="control-group" style="background: rgba(255, 255, 0, 0.05); border: 1px solid #666;">
+            <label style="color: #ffeb3b; font-weight: bold;">可视化辅助线</label>
+            <div class="toggle-row">
+                <input type="checkbox" id="show-geom-tri" checked>
+                <label for="show-geom-tri">几何三角形 ΔOMA (黄线)</label>
+            </div>
+            <div class="toggle-row">
+                <input type="checkbox" id="show-force-tri">
+                <label for="show-force-tri">力三角形 (首尾相接虚线)</label>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <label>运行控制</label>
+            <div class="btn-row">
+                <button id="btn-start" class="btn-primary" onclick="startSim()">开始</button>
+                <button id="btn-pause" class="btn-primary" onclick="pauseSim()">暂停</button>
+            </div>
+            <button id="btn-reset" class="btn-danger" onclick="resetSim()">还原 / 重置</button>
+        </div>
+
+        <div class="control-group">
+            <label>演示速度: <span id="speed-val">0.5</span></label>
+            <input type="range" id="speed-range" min="0.1" max="2.0" step="0.1" value="0.5">
+        </div>
+
+        <div class="legend">
+            <div style="margin-bottom:5px; color:#aaa;">矢量图例：</div>
+            <div class="legend-item"><div class="color-box" style="background:red;"></div> 拉力 T (随绳长减小)</div>
+            <div class="legend-item"><div class="color-box" style="background:#00ff00;"></div> 支持力 Fn (不变)</div>
+            <div class="legend-item"><div class="color-box" style="background:#0088ff;"></div> 重力 G (不变)</div>
+        </div>
+        
+        <div class="problem-box" style="background: #222; border-color: #2196F3; margin-top: auto;">
+            <strong>原理结论：</strong><br>
+            利用相似三角形法：<br>
+            Force Δ (G, T, Fn) ∽ Geo Δ (OM, MA, AO)<br>
+            <br>
+            Fn / R = T / L = G / H<br>
+            ∴ <strong>Fn 不变，T 减小</strong>
+        </div>
+    </div>
+
+<script>
+    let scene, camera, renderer, controls;
+    let ball, pulley, hemisphere, stringLine;
+    let arrowT, arrowFn, arrowG;
+    let forceTriArrows = [];
+    let geomTriangleLine;
+    
+    // 物理常数
+    const R = 10; 
+    const H = 20; 
+    
+    // 状态变量
+    let isRunning = false;
+    let progress = 0;
+    let speed = 0.5;
+    const startAngle = Math.PI / 2.1; 
+    const endAngle = 0.15;
+
+    // UI 开关状态
+    let showGeomTri = true;
+    let showForceTri = false;
+
+    function initThree() {
+        const container = document.getElementById('canvas-container');
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x000000);
+
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        camera.position.set(35, 25, 45);
+        camera.lookAt(0, 8, 0);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        if (typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+        else if (typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+        if(controls) { controls.enableDamping = true; controls.dampingFactor = 0.05; }
+
+        // 灯光
+        scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.7);
+        dirLight.position.set(10, 30, 10);
+        scene.add(dirLight);
+
+        addObjects();
+        setupUIListeners();
+        window.addEventListener('resize', onWindowResize);
+    }
+
+    function addObjects() {
+        // 1. 地面
+        const plane = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.MeshStandardMaterial({ color: 0x333333, roughness: 0.8 }));
+        plane.rotation.x = -Math.PI / 2; scene.add(plane);
+
+        // 2. 半球 (透明)
+        const hemiGeo = new THREE.SphereGeometry(R, 32, 16, 0, Math.PI*2, 0, Math.PI/2);
+        hemisphere = new THREE.Mesh(hemiGeo, new THREE.MeshPhongMaterial({ color: 0x555555, transparent: true, opacity: 0.3, side: THREE.DoubleSide }));
+        scene.add(hemisphere);
+        const wireLine = new THREE.LineSegments(new THREE.WireframeGeometry(hemiGeo), new THREE.LineBasicMaterial({ color: 0x888888, opacity: 0.2, transparent: true }));
+        scene.add(wireLine);
+
+        // 3. 滑轮与支架
+        pulley = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1, 16), new THREE.MeshStandardMaterial({ color: 0xffaa00 }));
+        pulley.rotation.z = Math.PI / 2; pulley.position.set(0, H, 0); scene.add(pulley);
+        scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, H, 0), new THREE.Vector3(0, 30, 0)]), new THREE.LineBasicMaterial({ color: 0xffaa00 })));
+        
+        // 4. 小球 (无阴影材质)
+        ball = new THREE.Mesh(new THREE.SphereGeometry(0.8, 32, 32), new THREE.MeshBasicMaterial({ color: 0x00ffff }));
+        scene.add(ball);
+
+        // 5. 绳子
+        stringLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,H,0)]), new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 }));
+        scene.add(stringLine);
+
+        // 6. 标签
+        addLabel(new THREE.Vector3(0,0,0), "O");
+        addLabel(new THREE.Vector3(0,H+1,0), "M");
+
+        // 7. 受力箭头 (小球中心) - 强制 BasicMaterial 无阴影
+        arrowT = createBasicArrow(0xff0000);
+        arrowFn = createBasicArrow(0x00ff00);
+        arrowG = createBasicArrow(0x0088ff);
+        scene.add(arrowT); scene.add(arrowFn); scene.add(arrowG);
+
+        // 8. 几何三角形 (Loop)
+        const geomTriGeo = new THREE.BufferGeometry();
+        const geomPositions = new Float32Array(4 * 3); 
+        geomTriGeo.setAttribute('position', new THREE.BufferAttribute(geomPositions, 3));
+        geomTriangleLine = new THREE.LineLoop(geomTriGeo, new THREE.LineBasicMaterial({ color: 0xffff00, linewidth: 3 }));
+        scene.add(geomTriangleLine);
+
+        // 9. 力三角形 (虚线)
+        const colors = [0x0088ff, 0x00ff00, 0xff0000]; // G, Fn, T
+        for(let i=0; i<3; i++) {
+            const arrow = new THREE.ArrowHelper(new THREE.Vector3(0,1,0), new THREE.Vector3(), 1, colors[i], 0.8, 0.4);
+            arrow.line.material = new THREE.LineDashedMaterial({ color: colors[i], dashSize: 0.5, gapSize: 0.3, linewidth: 2 });
+            arrow.line.computeLineDistances();
+            arrow.cone.material = new THREE.MeshBasicMaterial({ color: colors[i] });
+            arrow.visible = false;
+            scene.add(arrow);
+            forceTriArrows.push(arrow);
+        }
+
+        updatePhysics(startAngle);
+    }
+
+    // 辅助函数：创建无光照影响的箭头
+    function createBasicArrow(colorHex) {
+        const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 5, colorHex, 1, 0.5);
+        arrow.line.material = new THREE.LineBasicMaterial({ color: colorHex });
+        arrow.cone.material = new THREE.MeshBasicMaterial({ color: colorHex });
+        return arrow;
+    }
+
+    function addLabel(pos, text) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = 'white'; ctx.font = '30px Arial'; ctx.fillText(text, 10, 50);
+        const texture = new THREE.CanvasTexture(canvas);
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }));
+        sprite.position.copy(pos); sprite.scale.set(3, 3, 1);
+        scene.add(sprite);
+    }
+
+    function updatePhysics(angle) {
+        // 坐标计算
+        const x = R * Math.sin(angle); 
+        const y = R * Math.cos(angle); 
+        const z = 0;
+        const ballPos = new THREE.Vector3(x, y, z);
+        ball.position.copy(ballPos);
+
+        // 绳子
+        const sPos = stringLine.geometry.attributes.position.array;
+        sPos[0]=x; sPos[1]=y; sPos[2]=z; sPos[3]=0; sPos[4]=H; sPos[5]=0;
+        stringLine.geometry.attributes.position.needsUpdate = true;
+
+        // 几何三角形 ΔOMA
+        const gPos = geomTriangleLine.geometry.attributes.position.array;
+        gPos[0]=0; gPos[1]=0; gPos[2]=0; // O
+        gPos[3]=0; gPos[4]=H; gPos[5]=0; // M
+        gPos[6]=x; gPos[7]=y; gPos[8]=z; // A
+        geomTriangleLine.geometry.attributes.position.needsUpdate = true;
+        geomTriangleLine.visible = showGeomTri;
+
+        // 物理力学计算
+        const sideOM = H;
+        const sideOA = R;
+        const sideMA = Math.sqrt(x*x + (H-y)*(H-y)); // 绳长 L
+        
+        // 比例系数 k (映射几何长度到力的大小)
+        const k = 6 / sideOM; // 假设 mg 长度显示为 6
+        const magG = sideOM * k;
+        const magFn = sideOA * k;
+        const magT = sideMA * k;
+
+        // 方向
+        const dirG = new THREE.Vector3(0, -1, 0);
+        const dirFn = ballPos.clone().normalize();
+        const dirT = new THREE.Vector3(0-x, H-y, 0-z).normalize();
+
+        // 原点受力箭头
+        arrowG.position.copy(ballPos); arrowG.setDirection(dirG); arrowG.setLength(magG);
+        arrowFn.position.copy(ballPos); arrowFn.setDirection(dirFn); arrowFn.setLength(magFn);
+        arrowT.position.copy(ballPos); arrowT.setDirection(dirT); arrowT.setLength(magT);
+
+        // 力三角形 (首尾相接)
+        if (showForceTri) {
+            // G (下)
+            forceTriArrows[0].position.copy(ballPos);
+            forceTriArrows[0].setDirection(dirG);
+            forceTriArrows[0].setLength(magG);
+            forceTriArrows[0].line.computeLineDistances();
+
+            // Fn (接 G 末端)
+            const endOfG = ballPos.clone().add(dirG.clone().multiplyScalar(magG));
+            forceTriArrows[1].position.copy(endOfG);
+            forceTriArrows[1].setDirection(dirFn);
+            forceTriArrows[1].setLength(magFn);
+            forceTriArrows[1].line.computeLineDistances();
+
+            // T (接 Fn 末端 -> 回到起点)
+            const endOfFn = endOfG.clone().add(dirFn.clone().multiplyScalar(magFn));
+            forceTriArrows[2].position.copy(endOfFn);
+            forceTriArrows[2].setDirection(dirT);
+            forceTriArrows[2].setLength(magT);
+            forceTriArrows[2].line.computeLineDistances();
+        }
+        forceTriArrows.forEach(a => a.visible = showForceTri);
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        if (isRunning) {
+            const range = startAngle - endAngle;
+            const currentAngle = startAngle - (progress * range);
+            if (progress < 1.0) {
+                updatePhysics(currentAngle);
+                progress += 0.005 * speed;
+            } else {
+                isRunning = false; document.getElementById('btn-start').innerText = "开始";
+            }
+        }
+        renderer.render(scene, camera);
+    }
+
+    // 事件监听
+    function setupUIListeners() {
+        document.getElementById('speed-range').addEventListener('input', (e) => {
+            speed = parseFloat(e.target.value);
+            document.getElementById('speed-val').innerText = speed.toFixed(1);
+        });
+        
+        const updateStatic = () => {
+            if(!isRunning) updatePhysics(startAngle - (progress * (startAngle - endAngle)));
+        };
+
+        document.getElementById('show-geom-tri').addEventListener('change', (e) => {
+            showGeomTri = e.target.checked;
+            updateStatic();
+        });
+        document.getElementById('show-force-tri').addEventListener('change', (e) => {
+            showForceTri = e.target.checked;
+            updateStatic();
+        });
+    }
+
+    function startSim() { if(progress >= 1) resetSim(); isRunning = true; document.getElementById('btn-start').innerText = "运行中"; }
+    function pauseSim() { isRunning = false; document.getElementById('btn-start').innerText = "继续"; }
+    function resetSim() {
+        isRunning = false; progress = 0;
+        document.getElementById('btn-start').innerText = "开始";
+        updatePhysics(startAngle);
+    }
+    function onWindowResize() {
+        const container = document.getElementById('canvas-container');
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    initThree();
+    animate();
+
+</script>
+</body>
+</html>

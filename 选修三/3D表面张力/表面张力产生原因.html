@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>表面张力微观成因演示 (修正版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #1a1a1a; }
+        
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧功能区 */
+        #ui-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 320px;
+            height: 100vh;
+            background: rgba(30, 30, 30, 0.95);
+            color: #ddd;
+            padding: 20px;
+            box-sizing: border-box;
+            border-left: 1px solid #555;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            overflow-y: auto;
+            z-index: 10;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+        }
+
+        h2 { margin: 0 0 10px 0; color: #4facfe; border-bottom: 2px solid #4facfe; padding-bottom: 10px; }
+        h3 { margin: 15px 0 5px 0; font-size: 15px; color: #fff; font-weight: 600; }
+        p { font-size: 12px; color: #aaa; margin: 0 0 10px 0; line-height: 1.4; }
+        
+        .control-group { background: #252525; padding: 12px; border-radius: 6px; border: 1px solid #3e3e3e; }
+        label { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 8px; color: #eee; }
+        input[type=range] { width: 100%; cursor: pointer; height: 6px; background: #444; border-radius: 3px; -webkit-appearance: none; margin-top: 5px; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; background: #4facfe; border-radius: 50%; cursor: pointer; }
+        input[type=checkbox] { transform: scale(1.2); cursor: pointer; }
+        
+        .btn-group { display: flex; gap: 8px; margin-top: 10px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px;
+            cursor: pointer; font-weight: bold; font-size: 12px; transition: 0.2s; color: white;
+        }
+        .btn-start { background: #28a745; }
+        .btn-pause { background: #ffc107; color: #222; }
+        .btn-reset { background: #dc3545; }
+        button:hover { opacity: 0.8; }
+        
+        .toggle-chart { margin-top: auto; background: #007bff; width: 100%; padding: 12px; }
+
+        /* 左上角图表区 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 300px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            cursor: move;
+            z-index: 20;
+            user-select: none;
+        }
+        #chart-header {
+            font-size: 13px; color: #333; margin-bottom: 8px; text-align: center;
+            font-weight: bold; border-bottom: 1px solid #ccc; padding-bottom: 5px;
+        }
+        .legend-info { font-size: 11px; color: #666; margin-top: 5px; text-align: center; }
+        .hidden { display: none !important; }
+
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">:: 拖动此处 - 层级受力分析 ::</div>
+        <canvas id="forceChart"></canvas>
+        <div class="legend-info">
+            长条越长 = 向下的合力越大<br>
+            <span style="color:red">红色</span>=表面层 (受力不平衡)<br>
+            <span style="color:green">绿色</span>=内部层 (受力平衡)
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h2>表面张力微观演示</h2>
+        
+        <div class="control-group">
+            <h3>运行控制</h3>
+            <div class="btn-group">
+                <button class="btn-start" onclick="app.start()">开始</button>
+                <button class="btn-pause" onclick="app.pause()">暂停</button>
+                <button class="btn-reset" onclick="app.reset()">还原</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <h3>显示设置</h3>
+            <label>
+                <span>显示受力箭头</span>
+                <input type="checkbox" checked onchange="app.toggleVectors(this.checked)">
+            </label>
+            <label>
+                <span><b>仅显示表面层 (Top Layer)</b></span>
+                <input type="checkbox" id="chk-surface" onchange="app.toggleSurfaceOnly(this.checked)">
+            </label>
+            <p>勾选后，内部所有的蓝色分子及其箭头都会隐藏。</p>
+        </div>
+
+        <div class="control-group">
+            <h3>物理参数</h3>
+            
+            <label>
+                <span>分子引力范围 (Range)</span>
+                <span id="val-range">1.5</span>
+            </label>
+            <input type="range" min="1.1" max="5.0" step="0.1" value="1.5" oninput="app.updateParam('range', this.value)">
+            <p><b>观察点：</b>增大此值，表面分子会被更深层的分子吸引，红色箭头会显著变长。</p>
+
+            <label>
+                <span>温度 (热运动)</span>
+                <span id="val-temp">1.0</span>
+            </label>
+            <input type="range" min="0" max="3.0" step="0.1" value="1.0" oninput="app.updateParam('temperature', this.value)">
+        </div>
+
+        <button class="toggle-chart" onclick="app.toggleChart()">显示/隐藏 图表</button>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+
+    <script>
+        class MoleculeDemo {
+            constructor() {
+                this.container = document.getElementById('canvas-container');
+                this.isRunning = true;
+                this.molecules = [];
+                // 增加层数深度以便更好地演示引力范围
+                this.gridSize = { x: 8, y: 7, z: 8 }; 
+                this.spacing = 3.0;
+                
+                this.params = {
+                    temperature: 1.0,
+                    interactionRange: 1.5, // 初始范围
+                    showVectors: true,
+                    surfaceOnly: false
+                };
+
+                this.chartVisible = true;
+                
+                this.initThree();
+                this.createMolecules();
+                this.initChart();
+                this.initDrag();
+                this.animate();
+            }
+
+            initThree() {
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x111111);
+                this.scene.fog = new THREE.Fog(0x111111, 20, 100);
+
+                this.camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+                this.camera.position.set(45, 30, 45);
+                this.camera.lookAt(0, 0, 0);
+
+                this.renderer = new THREE.WebGLRenderer({ antialias: true });
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+                this.container.appendChild(this.renderer.domElement);
+
+                // Lighting
+                this.scene.add(new THREE.AmbientLight(0x444444));
+                const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+                dirLight.position.set(20, 40, 20);
+                this.scene.add(dirLight);
+                
+                const Controls = window.OrbitControls || THREE.OrbitControls;
+                if (Controls) {
+                    this.controls = new Controls(this.camera, this.renderer.domElement);
+                    this.controls.enableDamping = true;
+                    this.controls.target.set(0, 5, 0);
+                }
+            }
+
+            createMolecules() {
+                // Remove old meshes
+                this.molecules.forEach(m => {
+                    this.scene.remove(m.mesh);
+                    if(m.arrow) this.scene.remove(m.arrow);
+                });
+                this.molecules = [];
+
+                const sphereGeo = new THREE.SphereGeometry(0.8, 16, 16);
+                const materialBulk = new THREE.MeshPhongMaterial({ color: 0x0055aa, shininess: 60 });
+                const materialSurface = new THREE.MeshPhongMaterial({ color: 0x00ffff, shininess: 100, emissive: 0x003333 });
+
+                const offsetX = (this.gridSize.x - 1) * this.spacing / 2;
+                const offsetY = (this.gridSize.y - 1) * this.spacing / 2;
+                const offsetZ = (this.gridSize.z - 1) * this.spacing / 2;
+
+                for (let y = 0; y < this.gridSize.y; y++) {
+                    for (let x = 0; x < this.gridSize.x; x++) {
+                        for (let z = 0; z < this.gridSize.z; z++) {
+                            
+                            const isSurface = (y === this.gridSize.y - 1);
+                            
+                            const mesh = new THREE.Mesh(sphereGeo, isSurface ? materialSurface : materialBulk);
+                            
+                            const px = x * this.spacing - offsetX;
+                            const py = y * this.spacing - offsetY; 
+                            const pz = z * this.spacing - offsetZ;
+
+                            mesh.position.set(px, py, pz);
+                            this.scene.add(mesh);
+
+                            // Arrow Helper
+                            const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), mesh.position, 0, 0xff0000);
+                            this.scene.add(arrow);
+
+                            this.molecules.push({
+                                mesh: mesh,
+                                arrow: arrow,
+                                basePos: new THREE.Vector3(px, py, pz),
+                                layer: y,
+                                isSurface: isSurface,
+                                phase: Math.random() * Math.PI * 2
+                            });
+                        }
+                    }
+                }
+            }
+
+            initChart() {
+                if(typeof Chart === 'undefined') return;
+                const ctx = document.getElementById('forceChart').getContext('2d');
+                
+                const labels = Array.from({length: this.gridSize.y}, (_, i) => `第 ${i+1} 层`);
+                
+                this.chart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: '平均垂直合力 (向下)',
+                            data: Array(this.gridSize.y).fill(0),
+                            backgroundColor: (ctx) => {
+                                const i = ctx.dataIndex;
+                                return i === this.gridSize.y - 1 ? '#ff4d4d' : '#28a745';
+                            }
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        animation: false,
+                        indexAxis: 'y', 
+                        scales: {
+                            x: { beginAtZero: true, suggestedMax: 5 },
+                            y: { reverse: true } // 让顶层在上面
+                        },
+                        plugins: { legend: { display: false } }
+                    }
+                });
+            }
+
+            initDrag() {
+                const el = document.getElementById('chart-wrapper');
+                let isDragging = false, startX, startY, initialLeft, initialTop;
+                el.onmousedown = e => {
+                    isDragging = true;
+                    startX = e.clientX; startY = e.clientY;
+                    initialLeft = el.offsetLeft; initialTop = el.offsetTop;
+                };
+                document.onmousemove = e => {
+                    if(!isDragging) return;
+                    el.style.left = (initialLeft + e.clientX - startX) + 'px';
+                    el.style.top = (initialTop + e.clientY - startY) + 'px';
+                };
+                document.onmouseup = () => { isDragging = false; };
+            }
+
+            calculateForces() {
+                const layerForceSum = new Float32Array(this.gridSize.y);
+                const layerCount = new Float32Array(this.gridSize.y);
+                
+                // 物理参数预计算
+                const range = this.spacing * this.params.interactionRange;
+                const rangeSq = range * range;
+                const time = Date.now() * 0.005 * this.params.temperature;
+
+                // 1. 位置更新 (热运动)
+                for(let mol of this.molecules) {
+                    if(this.isRunning) {
+                        const jit = 0.15 * this.params.temperature;
+                        mol.mesh.position.x = mol.basePos.x + Math.sin(time + mol.phase) * jit;
+                        mol.mesh.position.y = mol.basePos.y + Math.cos(time + mol.phase * 1.1) * jit;
+                        mol.mesh.position.z = mol.basePos.z + Math.sin(time * 0.7 + mol.phase) * jit;
+                    }
+                }
+
+                // 2. 力的计算 (O(N^2) 简化版，演示用足够)
+                for (let i = 0; i < this.molecules.length; i++) {
+                    const molA = this.molecules[i];
+                    
+                    // --- 关键修复：强制隐藏逻辑 ---
+                    // 如果开启“只显示表面”，且当前分子不是表面层
+                    if (this.params.surfaceOnly && !molA.isSurface) {
+                        molA.mesh.visible = false;
+                        molA.arrow.visible = false; 
+                        continue; // 跳过后续计算
+                    } else {
+                        molA.mesh.visible = true; // 确保可见
+                    }
+
+                    // 开始计算受力
+                    let fx = 0, fy = 0, fz = 0;
+
+                    for (let j = 0; j < this.molecules.length; j++) {
+                        if (i === j) continue;
+                        const molB = this.molecules[j];
+
+                        const dx = molB.mesh.position.x - molA.mesh.position.x;
+                        const dy = molB.mesh.position.y - molA.mesh.position.y;
+                        const dz = molB.mesh.position.z - molA.mesh.position.z;
+                        const distSq = dx*dx + dy*dy + dz*dz;
+
+                        if (distSq < rangeSq && distSq > 0.01) {
+                            const dist = Math.sqrt(distSq);
+                            // 引力模型：距离越近力越大。使用简单的 (1 - d/R) 线性衰减模拟
+                            // 乘以 3.0 是为了放大视觉效果
+                            const forceMag = (1 - dist / range) * 3.0; 
+                            
+                            fx += (dx / dist) * forceMag;
+                            fy += (dy / dist) * forceMag;
+                            fz += (dz / dist) * forceMag;
+                        }
+                    }
+
+                    // 统计垂直合力 (向下为正，为了图表好读)
+                    layerForceSum[molA.layer] += (-fy); 
+                    layerCount[molA.layer]++;
+
+                    // 更新箭头
+                    if (this.params.showVectors) {
+                        const forceVec = new THREE.Vector3(fx, fy, fz);
+                        const len = forceVec.length();
+                        
+                        // 阈值过滤，太小的力不显示
+                        if (len > 0.1) {
+                            molA.arrow.visible = true;
+                            // 放大箭头长度以便观察
+                            molA.arrow.setLength(len * 1.5); 
+                            molA.arrow.setDirection(forceVec.normalize());
+                            molA.arrow.position.copy(molA.mesh.position);
+
+                            // 颜色：大幅度向下(负Y)为红，平衡为绿
+                            if (fy < -0.5) {
+                                molA.arrow.setColor(0xff3333); // 红 (受强拉力)
+                            } else {
+                                molA.arrow.setColor(0x33ff33); // 绿 (平衡)
+                            }
+                        } else {
+                            molA.arrow.visible = false;
+                        }
+                    } else {
+                        molA.arrow.visible = false;
+                    }
+                }
+
+                // 更新图表
+                if (this.chart && this.chartVisible && this.isRunning) {
+                    const avgData = [];
+                    for(let k=0; k<this.gridSize.y; k++) {
+                        avgData.push(layerCount[k] > 0 ? layerForceSum[k] / layerCount[k] : 0);
+                    }
+                    this.chart.data.datasets[0].data = avgData;
+                    // 为了性能，限制更新频率
+                    if(Date.now() % 3 === 0) this.chart.update('none'); 
+                }
+            }
+
+            // UI Callbacks
+            start() { this.isRunning = true; }
+            pause() { this.isRunning = false; }
+            reset() {
+                this.isRunning = false;
+                this.molecules.forEach(m => {
+                    m.mesh.position.copy(m.basePos);
+                    m.arrow.visible = false;
+                    m.mesh.visible = true;
+                });
+                document.getElementById('chk-surface').checked = false;
+                this.params.surfaceOnly = false;
+                this.params.interactionRange = 1.5;
+                document.getElementById('val-range').innerText = "1.5";
+                document.querySelector('input[type=range]').value = 1.5;
+                this.calculateForces(); // 重算一次
+            }
+            updateParam(key, val) {
+                this.params[key === 'range' ? 'interactionRange' : key] = parseFloat(val);
+                if(key === 'range') document.getElementById('val-range').innerText = val;
+                if(key === 'temperature') document.getElementById('val-temp').innerText = val;
+            }
+            toggleVectors(val) { this.params.showVectors = val; }
+            toggleSurfaceOnly(val) { 
+                this.params.surfaceOnly = val; 
+                // 立即触发一次计算以刷新可见性
+                if(!this.isRunning) this.calculateForces();
+            }
+            toggleChart() {
+                this.chartVisible = !this.chartVisible;
+                document.getElementById('chart-wrapper').classList.toggle('hidden');
+            }
+
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                this.calculateForces();
+                if(this.controls) this.controls.update();
+                this.renderer.render(this.scene, this.camera);
+            }
+        }
+
+        window.onload = () => { window.app = new MoleculeDemo(); };
+    </script>
+</body>
+</html>

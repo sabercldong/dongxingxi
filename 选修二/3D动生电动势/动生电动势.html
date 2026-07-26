@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>洛伦兹力修复版</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #050505; color: #eee; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 电势标签样式 */
+        .potential-label {
+            position: absolute; font-weight: bold; font-size: 14px; padding: 4px 8px;
+            border-radius: 4px; pointer-events: none; opacity: 0;
+            text-shadow: 0 0 4px black; transition: opacity 0.3s;
+            white-space: nowrap;
+        }
+        .pos-pot { color: #ff5555; border: 1px solid #ff5555; background: rgba(50,0,0,0.8); }
+        .neg-pot { color: #5599ff; border: 1px solid #5599ff; background: rgba(0,0,50,0.8); }
+
+        /* 右侧控制面板 */
+        #sidebar {
+            position: absolute; right: 0; top: 0; width: 320px; height: 100%;
+            background: rgba(20, 20, 20, 0.95); border-left: 1px solid #444;
+            padding: 15px; box-sizing: border-box; display: flex; flex-direction: column; gap: 12px;
+            overflow-y: auto;
+        }
+
+        h2 { margin: 0; font-size: 18px; color: #4db8ff; border-bottom: 1px solid #555; padding-bottom: 8px; }
+        
+        .control-row { margin-bottom: 5px; }
+        .label-row { display: flex; justify-content: space-between; font-size: 13px; color: #aaa; margin-bottom: 4px; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        .btn-group { display: flex; gap: 8px; }
+        button {
+            flex: 1; padding: 8px; border: none; border-radius: 4px;
+            font-weight: bold; cursor: pointer; color: white; transition: 0.2s; font-size: 13px;
+        }
+        #btn-start { background: #28a745; }
+        #btn-pause { background: #ffc107; color: black; }
+        #btn-reset { background: #dc3545; }
+
+        .legend { font-size: 13px; line-height: 1.6; color: #ccc; background: rgba(255,255,255,0.08); padding: 10px; border-radius: 4px; }
+        .arrow-icon { font-weight: bold; font-size: 16px; display: inline-block; width: 20px; text-align: center;}
+        
+        .note { font-size: 12px; color: #888; margin-top: 10px; border-top: 1px solid #444; padding-top: 10px; }
+    </style>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    
+    <div id="label-front" class="potential-label">端点 A</div>
+    <div id="label-back" class="potential-label">端点 B</div>
+
+    <div id="sidebar">
+        <h2>物理演示控制</h2>
+        
+        <div class="control-row">
+            <div class="label-row"><span>杆运动速度 (v)</span> <span id="val-v">0.0</span></div>
+            <input type="range" id="slider-v" min="-5" max="5" step="0.1" value="0">
+        </div>
+
+        <div class="control-row">
+            <div class="label-row"><span>磁感应强度 (B)</span> <span id="val-b">1.0</span></div>
+            <input type="range" id="slider-b" min="0" max="2" step="0.1" value="1.0">
+        </div>
+
+        <div class="btn-group">
+            <button id="btn-start">开始</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">重置</button>
+        </div>
+
+        <div class="legend">
+            <div style="color:white; margin-bottom:8px; border-bottom:1px solid #555;"><b>电子受力图例 (负电荷)</b></div>
+            
+            <div><span class="arrow-icon" style="color:#00ff00;">↑</span> <b>绿色 (驱动力)</b></div>
+            <div style="font-size:12px; color:#aaa; margin-left:24px; margin-bottom:5px;">
+                垂直于杆。指向屏幕里，导致电子堆积，产生电动势。
+            </div>
+            
+            <div><span class="arrow-icon" style="color:#ffffff;">←</span> <b>白色 (安培阻力)</b></div>
+            <div style="font-size:12px; color:#ff6666; margin-left:24px; margin-bottom:5px;">
+                平行于杆。方向始终与杆的运动方向相反。
+            </div>
+
+            <div><span class="arrow-icon" style="color:#d000ff;">↗</span> <b>紫色 (合力)</b></div>
+        </div>
+        
+            </div>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let rod, electrons = [];
+        let params = { v: 0, b: 1.0, running: false };
+        const labelFront = document.getElementById('label-front');
+        const labelBack = document.getElementById('label-back');
+
+        // 安全检查：Three.js 是否加载
+        if (typeof THREE === 'undefined') {
+            alert("错误：three.min.js 未加载，请确保文件在同一目录下。");
+        }
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(10, 20, 30); // 调整相机位置
+            camera.lookAt(0, 0, 0);
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            container.appendChild(renderer.domElement);
+
+            // 4. 灯光
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 5);
+            scene.add(dirLight);
+            
+            // 5. 网格
+            scene.add(new THREE.GridHelper(60, 60, 0x333333, 0x111111));
+
+            // 6. 控制器 (添加错误捕捉，防止 OrbitControls 报错导致黑屏)
+            try {
+                if (typeof THREE.OrbitControls !== 'undefined') {
+                    controls = new THREE.OrbitControls(camera, renderer.domElement);
+                } else if (typeof OrbitControls !== 'undefined') {
+                    controls = new OrbitControls(camera, renderer.domElement);
+                }
+            } catch (e) {
+                console.warn("控制器加载失败，使用固定视角", e);
+            }
+
+            createModel();
+            animate();
+        }
+
+        function createModel() {
+            // 导轨
+            const railMat = new THREE.MeshStandardMaterial({ color: 0x666666 });
+            const rail1 = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 80, 16), railMat);
+            rail1.rotation.z = Math.PI / 2; rail1.position.z = -5; scene.add(rail1);
+            const rail2 = rail1.clone(); rail2.position.z = 5; scene.add(rail2);
+
+            // 导体棒
+            const rodGeo = new THREE.BoxGeometry(1.5, 1.5, 12);
+            const rodMat = new THREE.MeshPhongMaterial({ color: 0xffcc00, transparent: true, opacity: 0.3, side: THREE.DoubleSide });
+            rod = new THREE.Mesh(rodGeo, rodMat);
+            scene.add(rod);
+
+            // 磁场箭头
+            const bGroup = new THREE.Group();
+            for(let x=-20; x<=20; x+=8) {
+                for(let z=-4; z<=4; z+=4) {
+                    const arrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(x, -2, z), 4, 0x00ffff, 0.5, 0.3);
+                    bGroup.add(arrow);
+                }
+            }
+            scene.add(bGroup);
+            rod.userData.bGroup = bGroup;
+
+            // 电子
+            const elecGeo = new THREE.SphereGeometry(0.25, 16, 16);
+            const elecMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            
+            for(let i=0; i<15; i++) {
+                const el = new THREE.Mesh(elecGeo, elecMat);
+                el.userData = { baseZ: (Math.random()-0.5)*10, baseX: (Math.random()-0.5)*0.8, baseY: (Math.random()-0.5)*0.8 };
+                el.position.set(el.userData.baseX, el.userData.baseY, el.userData.baseZ);
+
+                // 箭头可视化
+                const arrowDrive = new THREE.ArrowHelper(new THREE.Vector3(0,0,1), new THREE.Vector3(0,0,0), 0, 0x00ff00, 0.4, 0.2); // 绿
+                el.add(arrowDrive); el.userData.arrowDrive = arrowDrive;
+
+                const arrowResist = new THREE.ArrowHelper(new THREE.Vector3(1,0,0), new THREE.Vector3(0,0,0), 0, 0xffffff, 0.4, 0.2); // 白
+                el.add(arrowResist); el.userData.arrowResist = arrowResist;
+
+                const arrowTotal = new THREE.ArrowHelper(new THREE.Vector3(1,0,1), new THREE.Vector3(0,0,0), 0, 0xd000ff, 0.4, 0.2); // 紫
+                el.add(arrowTotal); el.userData.arrowTotal = arrowTotal;
+
+                rod.add(el);
+                electrons.push(el);
+            }
+        }
+
+        function updatePhysics() {
+            if (params.running) {
+                rod.position.x += params.v * 0.1;
+                // 循环播放
+                if (rod.position.x > 30) rod.position.x = -30;
+                if (rod.position.x < -30) rod.position.x = 30;
+            }
+
+            // --- 物理计算 (严格校验版) ---
+            
+            // 1. 驱动力 (F_drive): 垂直杆方向
+            // v_rod(右, +X) x B(上, +Y) = (+Z)。电子带负电 => F指向 (-Z, 里)。
+            const forceZ = -1.0 * params.v * params.b; 
+
+            // 2. 漂移速度 (v_drift): 沿杆方向
+            const driftVel = forceZ * 0.6; 
+
+            // 3. 阻力 (F_resist): 沿杆方向，阻碍运动
+            // 公式: F = -e * (v_drift x B)
+            // v_drift(里, -Z) x B(上, +Y) = (右, +X)。
+            // 电子带负电 => F指向 (左, -X)。
+            // 结论: 如果杆向右(v>0), 阻力应该向左(<0)。
+            // 计算: forceX = -1.0 * (driftVel * B的模 * e的系数)
+            // driftVel是负数, B是正数 -> 乘积负。再乘-1.0 -> 正? 
+            // 不对，v_drift x B 的结果是 +X。乘负电荷是 -X。
+            // 叉乘的数学结果: (0,0,vz) x (0,by,0) = (-vz*by, 0, 0)。
+            // vz是负的, by是正的 -> (-vz*by) 是正数 (+X)。
+            // 再乘电荷q (-e): 正数 * 负数 = 负数 (-X)。
+            // 所以 ForceX 最终必须是负值 (当杆向右时)。
+            // 下面的公式：driftVel(负) * B(正) = 负。为了得到负的ForceX，这里系数用正的即可。
+            const forceX = 1.0 * driftVel * params.b * 1.5; 
+
+            const totalMag = Math.sqrt(forceZ*forceZ + forceX*forceX);
+
+            electrons.forEach(el => {
+                // 电子漂移位置更新
+                let targetZ = el.userData.baseZ + (driftVel * 8.0);
+                targetZ = Math.max(-5.5, Math.min(5.5, targetZ));
+                el.position.z += (targetZ - el.position.z) * 0.1;
+
+                if (Math.abs(totalMag) > 0.05) {
+                    // 绿色：驱动力 (Z轴)
+                    el.userData.arrowDrive.visible = true;
+                    el.userData.arrowDrive.setDirection(new THREE.Vector3(0, 0, forceZ > 0 ? 1 : -1));
+                    el.userData.arrowDrive.setLength(Math.abs(forceZ), Math.abs(forceZ)*0.3, Math.abs(forceZ)*0.2);
+
+                    // 白色：阻力 (X轴) - 修正：指向运动反方
+                    el.userData.arrowResist.visible = true;
+                    // forceX 为负时，指向左(-1,0,0)
+                    el.userData.arrowResist.setDirection(new THREE.Vector3(forceX > 0 ? 1 : -1, 0, 0));
+                    el.userData.arrowResist.setLength(Math.abs(forceX), Math.abs(forceX)*0.3, Math.abs(forceX)*0.2);
+
+                    // 紫色：合力
+                    el.userData.arrowTotal.visible = true;
+                    const totalVec = new THREE.Vector3(forceX, 0, forceZ).normalize();
+                    el.userData.arrowTotal.setDirection(totalVec);
+                    el.userData.arrowTotal.setLength(totalMag, totalMag*0.3, totalMag*0.2);
+                } else {
+                    el.userData.arrowDrive.visible = false;
+                    el.userData.arrowResist.visible = false;
+                    el.userData.arrowTotal.visible = false;
+                }
+            });
+
+            updateLabels(forceZ);
+        }
+
+        function updateLabels(forceZ) {
+            // 将 3D 坐标转为 2D 屏幕坐标
+            const posFront = new THREE.Vector3(0, 0.8, 6).applyMatrix4(rod.matrixWorld);
+            const posBack = new THREE.Vector3(0, 0.8, -6).applyMatrix4(rod.matrixWorld);
+            
+            // 安全检查：避免相机未初始化导致报错
+            if(!camera) return;
+            
+            posFront.project(camera); 
+            posBack.project(camera);
+
+            const x1 = (posFront.x * .5 + .5) * window.innerWidth;
+            const y1 = (-(posFront.y * .5) + .5) * window.innerHeight;
+            const x2 = (posBack.x * .5 + .5) * window.innerWidth;
+            const y2 = (-(posBack.y * .5) + .5) * window.innerHeight;
+
+            labelFront.style.left = x1 + 'px'; labelFront.style.top = y1 + 'px';
+            labelBack.style.left = x2 + 'px'; labelBack.style.top = y2 + 'px';
+
+            if (Math.abs(params.v * params.b) < 0.1) {
+                labelFront.style.opacity = 0; labelBack.style.opacity = 0;
+            } else {
+                labelFront.style.opacity = 1; labelBack.style.opacity = 1;
+                if (forceZ < 0) { // 电子被推向后方 (Back)
+                    labelFront.textContent = "+ 高电势"; labelFront.className = "potential-label pos-pot";
+                    labelBack.textContent = "- 低电势"; labelBack.className = "potential-label neg-pot";
+                } else {
+                    labelFront.textContent = "- 低电势"; labelFront.className = "potential-label neg-pot";
+                    labelBack.textContent = "+ 高电势"; labelBack.className = "potential-label pos-pot";
+                }
+            }
+        }
+
+        // --- 交互 ---
+        const sV = document.getElementById('slider-v');
+        const sB = document.getElementById('slider-b');
+        
+        function updateParams() {
+            params.v = parseFloat(sV.value);
+            params.b = parseFloat(sB.value);
+            document.getElementById('val-v').textContent = params.v.toFixed(1);
+            document.getElementById('val-b').textContent = params.b.toFixed(1);
+            if(rod && rod.userData.bGroup) rod.userData.bGroup.visible = params.b > 0.1;
+        }
+
+        sV.oninput = updateParams;
+        sB.oninput = updateParams;
+
+        document.getElementById('btn-start').onclick = () => params.running = true;
+        document.getElementById('btn-pause').onclick = () => params.running = false;
+        document.getElementById('btn-reset').onclick = () => { 
+            params.running = false; 
+            params.v = 0; sV.value = 0; updateParams(); 
+            rod.position.x = 0; 
+            electrons.forEach(el => el.position.z = el.userData.baseZ); 
+        };
+
+        window.onresize = () => {
+            if(camera && renderer) {
+                camera.aspect = window.innerWidth/window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        };
+
+        // 启动
+        init();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePhysics();
+            if(controls) controls.update();
+            if(renderer && scene && camera) renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

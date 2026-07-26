@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>磁聚焦演示 (修复版)</title>
+    <style>
+        body { 
+            margin: 0; overflow: hidden; background-color: #050505; 
+            font-family: 'Microsoft YaHei', sans-serif;
+            display: flex; height: 100vh;
+        }
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        #sidebar {
+            width: 340px; background-color: #1e1e1e; color: #eee;
+            border-left: 1px solid #444; padding: 20px;
+            box-sizing: border-box; display: flex; flex-direction: column; gap: 15px;
+            overflow-y: auto; z-index: 20;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+        }
+        h2 { margin: 0 0 10px 0; font-size: 18px; border-bottom: 2px solid #00aaff; padding-bottom: 10px; }
+        .control-group { background: #2b2b2b; padding: 12px; border-radius: 6px; }
+        label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; color: #bbb; }
+        span.value { color: #00aaff; font-weight: bold; }
+        input[type=range] { width: 100%; cursor: pointer; margin-bottom: 8px; accent-color: #00aaff; }
+        
+        .btn-row { display: flex; gap: 8px; margin-top: 5px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 4px;
+            font-weight: bold; cursor: pointer; transition: 0.2s;
+            color: white; font-size: 13px;
+        }
+        .btn-start { background-color: #2e7d32; } 
+        .btn-start:hover { background-color: #1b5e20; }
+        .btn-special { background-color: #00aaff; color: #fff; } 
+        .btn-special:hover { background-color: #0088cc; }
+        .btn-reset { background-color: #c62828; }
+        .btn-reset:hover { background-color: #b71c1c; }
+        .btn-disabled { background-color: #444; color: #888; cursor: not-allowed; }
+
+        .legend { font-size: 12px; color: #888; margin-top: 5px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 4px; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+        
+        .instruction { font-size: 11px; color: #aaa; margin-top: 5px; line-height: 1.5; border-top: 1px solid #444; padding-top: 5px;}
+        .key { display: inline-block; padding: 1px 4px; background: #444; border-radius: 3px; color: #fff; font-family: monospace;}
+        
+        #formula-display { font-family: 'Times New Roman', serif; font-style: italic; text-align: center; color: #fff; background: #333; padding: 5px; border-radius: 4px; margin-top: 5px;}
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>磁聚焦实验室 (Magnetic Lens)</h2>
+
+        <div class="control-group">
+            <div class="btn-row">
+                <button id="btn-start" class="btn-start">▶ 发射粒子束</button>
+                <button id="btn-reset" class="btn-reset">↺ 重置</button>
+            </div>
+            <div class="btn-row">
+                <button id="btn-focus" class="btn-special">★ 设为 r = R (完美聚焦)</button>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div id="formula-display">r = mv / qB</div>
+            
+            <label>磁感应强度 B <span id="val-B" class="value">1.0</span></label>
+            <input type="range" id="input-B" min="0.1" max="5.0" step="0.05" value="1.0">
+            
+            <label>粒子初速度 v₀ <span id="val-v" class="value">10.0</span></label>
+            <input type="range" id="input-v" min="1" max="20" step="0.1" value="10.0">
+
+            <label>粒子束宽度 <span id="val-width" class="value">16</span></label>
+            <input type="range" id="input-width" min="1" max="28" step="1" value="16">
+        </div>
+
+        <div class="control-group">
+            <div class="legend">
+                <div class="legend-item"><div class="dot" style="background:rgba(0,255,255,0.3); border:1px solid cyan"></div> 圆形磁场区域 (R=10)</div>
+                <div class="legend-item"><div class="dot" style="background:#ff3333"></div> 粒子束 (+q)</div>
+                <div class="legend-item"><div class="dot" style="background:#ff00ff"></div> 理论汇聚点</div>
+            </div>
+            <div class="instruction">
+                <strong>修正说明：</strong><br>
+                粒子带正电，向右运动，磁场向外（Z轴）。<br>
+                受洛伦兹力向下，故汇聚点位于圆的底部 (0, -R)。<br>
+                <br>
+                <strong>操作：</strong><br>
+                <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> 平移 / 右键平移<br>
+                左键旋转 / 滚轮缩放
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let particles = [];
+        let magneticRegion;
+        let focusMarker; // 粉色汇聚点
+        
+        let hasStarted = false; 
+        const keyState = {}; 
+
+        // 物理常量
+        const R_FIELD = 10.0; // 磁场半径
+        const BEAM_COUNT = 15; // 粒子束数量
+
+        const params = {
+            q: 1.0, 
+            m: 1.0,
+            B: 1.0,      
+            v0: 10.0,    
+            beamWidth: 16.0
+        };
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+            
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+
+            // 调整相机位置，更方便看全景
+            camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+            camera.position.set(0, 0, 60); 
+            camera.up.set(0, 1, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(container.clientWidth, container.clientHeight);
+            container.appendChild(renderer.domElement);
+
+            // 灯光
+            scene.add(new THREE.AmbientLight(0x444444));
+            const dLight = new THREE.DirectionalLight(0xffffff, 1);
+            dLight.position.set(10, 10, 20);
+            scene.add(dLight);
+
+            // 1. 创建圆形磁场可视区域
+            const geometry = new THREE.CylinderGeometry(R_FIELD, R_FIELD, 2, 64);
+            const material = new THREE.MeshPhongMaterial({ 
+                color: 0x00ffff, 
+                transparent: true, 
+                opacity: 0.15,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+            magneticRegion = new THREE.Mesh(geometry, material);
+            magneticRegion.rotation.x = Math.PI / 2; // 躺平在XY平面
+            scene.add(magneticRegion);
+
+            // 磁场边界线
+            const borderGeo = new THREE.RingGeometry(R_FIELD - 0.1, R_FIELD, 64);
+            const borderMat = new THREE.MeshBasicMaterial({ color: 0x00ffff, side: THREE.DoubleSide });
+            const border = new THREE.Mesh(borderGeo, borderMat);
+            scene.add(border);
+
+            // 2. 汇聚点标记 (理论汇聚点)
+            const focusGeo = new THREE.SphereGeometry(0.5, 16, 16);
+            const focusMat = new THREE.MeshBasicMaterial({ color: 0xff00ff });
+            focusMarker = new THREE.Mesh(focusGeo, focusMat);
+            // 初始隐藏，位置待定
+            focusMarker.visible = false; 
+            scene.add(focusMarker);
+
+            // 3. 辅助网格
+            const grid = new THREE.GridHelper(60, 30, 0x333333, 0x111111);
+            grid.rotation.x = Math.PI / 2; 
+            grid.position.z = -1;
+            scene.add(grid);
+
+            // 控制器
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            initParticles();
+            bindUI();
+            bindInputEvents();
+            animate();
+        }
+
+        function initParticles() {
+            // 清理旧粒子
+            particles.forEach(p => {
+                scene.remove(p.mesh);
+                scene.remove(p.trail);
+            });
+            particles = [];
+
+            const startX = -30;
+            const halfWidth = params.beamWidth / 2;
+            
+            for(let i = 0; i < BEAM_COUNT; i++) {
+                // 在Y轴上均匀分布
+                let yOff = -halfWidth + (params.beamWidth / (BEAM_COUNT - 1)) * i;
+                if (BEAM_COUNT === 1) yOff = 0;
+
+                const mesh = new THREE.Mesh(
+                    new THREE.SphereGeometry(0.25, 16, 16),
+                    new THREE.MeshBasicMaterial({ color: 0xff3333 })
+                );
+                
+                const state = {
+                    pos: new THREE.Vector3(startX, yOff, 0),
+                    vel: new THREE.Vector3(params.v0, 0, 0),
+                    active: true
+                };
+
+                mesh.position.copy(state.pos);
+                scene.add(mesh);
+
+                // 轨迹线
+                const trailGeo = new THREE.BufferGeometry();
+                const positions = new Float32Array(3000 * 3);
+                trailGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                trailGeo.setDrawRange(0, 0);
+                const trailMat = new THREE.LineBasicMaterial({ color: 0xffff00, opacity: 0.6, transparent: true });
+                const trail = new THREE.Line(trailGeo, trailMat);
+                scene.add(trail);
+
+                particles.push({ mesh, state, trail, trailIdx: 0, positions });
+            }
+        }
+
+        function bindInputEvents() {
+            window.addEventListener('keydown', (e) => { keyState[e.code] = true; });
+            window.addEventListener('keyup', (e) => { keyState[e.code] = false; });
+        }
+
+        // 键盘平移控制
+        function handleCameraPan() {
+            if (!controls) return;
+            const panSpeed = 0.5;
+            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+            const up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+            const panOffset = new THREE.Vector3();
+
+            if (keyState['KeyA'] || keyState['ArrowLeft']) panOffset.addScaledVector(right, -panSpeed);
+            if (keyState['KeyD'] || keyState['ArrowRight']) panOffset.addScaledVector(right, panSpeed);
+            if (keyState['KeyW'] || keyState['ArrowUp']) panOffset.addScaledVector(up, panSpeed);
+            if (keyState['KeyS'] || keyState['ArrowDown']) panOffset.addScaledVector(up, -panSpeed);
+
+            if (panOffset.lengthSq() > 0) {
+                camera.position.add(panOffset);
+                controls.target.add(panOffset);
+            }
+        }
+
+        function bindUI() {
+            const btnStart = document.getElementById('btn-start');
+            const btnReset = document.getElementById('btn-reset');
+            const btnFocus = document.getElementById('btn-focus');
+
+            btnStart.addEventListener('click', () => {
+                hasStarted = true;
+                btnStart.classList.add('btn-disabled');
+            });
+
+            btnReset.addEventListener('click', () => {
+                hasStarted = false;
+                initParticles();
+                btnStart.classList.remove('btn-disabled');
+                focusMarker.visible = false;
+            });
+
+            // --- 核心功能：设为 r = R (修正版) ---
+            btnFocus.addEventListener('click', () => {
+                // r = mv / qB  =>  B = mv / qr
+                const targetB = (params.m * params.v0) / (params.q * R_FIELD);
+                
+                if(targetB > 5.0 || targetB < 0.1) {
+                    alert("需要调整速度才能在当前范围内聚焦");
+                    return;
+                }
+
+                params.B = targetB;
+                document.getElementById('input-B').value = targetB;
+                document.getElementById('val-B').innerText = targetB.toFixed(2);
+                
+                hasStarted = false;
+                initParticles();
+                btnStart.classList.remove('btn-disabled');
+                
+                // ★★★ 修正点 ★★★
+                // 粒子右移，B向外，力向下 -> 汇聚于底部 (0, -R)
+                focusMarker.position.set(0, -R_FIELD, 0); 
+                focusMarker.visible = true; 
+            });
+
+            document.getElementById('input-B').addEventListener('input', (e) => {
+                params.B = parseFloat(e.target.value);
+                document.getElementById('val-B').innerText = params.B.toFixed(2);
+                focusMarker.visible = false; 
+            });
+
+            document.getElementById('input-v').addEventListener('input', (e) => {
+                params.v0 = parseFloat(e.target.value);
+                document.getElementById('val-v').innerText = params.v0.toFixed(1);
+                if(!hasStarted) initParticles();
+                focusMarker.visible = false;
+            });
+
+            document.getElementById('input-width').addEventListener('input', (e) => {
+                params.beamWidth = parseFloat(e.target.value);
+                document.getElementById('val-width').innerText = params.beamWidth.toFixed(0);
+                if(!hasStarted) initParticles();
+            });
+        }
+
+        function updatePhysics(dt) {
+            const subSteps = 5; 
+            const ddt = dt / subSteps;
+            // B 场在 Z 轴正方向
+            const BVec = new THREE.Vector3(0, 0, params.B); 
+
+            particles.forEach(p => {
+                if(!p.state.active) return;
+
+                for(let s=0; s<subSteps; s++) {
+                    const distSq = p.state.pos.x * p.state.pos.x + p.state.pos.y * p.state.pos.y;
+                    
+                    if (distSq < R_FIELD * R_FIELD) {
+                        // F = q(v x B). 
+                        // v=(vx,0,0) x B=(0,0,Bz) => F=(0, -vx*Bz, 0) -> 力向下
+                        const acc = new THREE.Vector3()
+                            .copy(p.state.vel)
+                            .cross(BVec)
+                            .multiplyScalar(params.q / params.m);
+                        
+                        p.state.vel.add(acc.multiplyScalar(ddt));
+                    }
+                    p.state.pos.add(p.state.vel.clone().multiplyScalar(ddt));
+                }
+
+                if(p.state.pos.length() > 60) p.state.active = false;
+            });
+        }
+
+        function updateVisuals() {
+            particles.forEach(p => {
+                p.mesh.position.copy(p.state.pos);
+
+                if(p.trailIdx < 3000 - 1) {
+                    p.positions[p.trailIdx * 3] = p.state.pos.x;
+                    p.positions[p.trailIdx * 3 + 1] = p.state.pos.y;
+                    p.positions[p.trailIdx * 3 + 2] = p.state.pos.z;
+                    p.trailIdx++;
+                    p.trail.geometry.setDrawRange(0, p.trailIdx);
+                    p.trail.geometry.attributes.position.needsUpdate = true;
+                }
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            handleCameraPan();
+
+            if (hasStarted) {
+                updatePhysics(0.03); 
+                updateVisuals();
+            }
+
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            const container = document.getElementById('canvas-container');
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>

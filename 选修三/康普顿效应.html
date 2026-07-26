@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>康普顿效应演示 (Compton Effect)</title>
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --sidebar-bg: #151a25;
+            --text-main: #cfd8dc;
+            --accent: #00e5ff;       /* 电子蓝 */
+            --photon-in: #ffea00;    /* 入射光黄 */
+            --photon-out: #ff9100;   /* 散射光橙 */
+            --border: #2c3e50;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* 左侧演示区 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            border-right: 1px solid var(--border);
+            overflow: hidden;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* HUD 信息层 */
+        .hud {
+            position: absolute;
+            pointer-events: none;
+            font-family: monospace;
+            font-weight: bold;
+            text-shadow: 0 0 2px black;
+        }
+
+        .hud-top-left { top: 20px; left: 20px; font-size: 1.2rem; }
+
+        /* 右侧控制区 */
+        #sidebar {
+            width: 360px;
+            background-color: var(--sidebar-bg);
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            min-width: 320px;
+        }
+
+        h2 { margin-top: 0; border-bottom: 2px solid var(--border); padding-bottom: 10px; color: var(--text-main); }
+        
+        .control-group {
+            background: rgba(255,255,255,0.03);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid var(--border);
+        }
+
+        label { display: block; margin-bottom: 8px; font-weight: bold; font-size: 0.9rem; }
+        
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        input[type=range] { flex: 1; cursor: pointer; }
+        .val-disp { font-family: monospace; color: var(--accent); width: 60px; text-align: right; }
+
+        /* 按钮 */
+        .btn-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        button {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .btn-primary { background: var(--accent); color: #000; }
+        .btn-primary:hover { background: #00b8d4; }
+        .btn-toggle { background: #37474f; color: #fff; }
+        .btn-toggle.active { background: #66bb6a; }
+
+        /* 数据面板 */
+        .data-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            font-size: 0.85rem;
+        }
+        .data-item {
+            background: rgba(0,0,0,0.2);
+            padding: 8px;
+            border-radius: 4px;
+        }
+        .data-label { color: #90a4ae; margin-bottom: 4px; font-size: 0.75rem; }
+        .data-value { font-weight: bold; font-family: monospace; font-size: 1rem; }
+
+        /* 颜色指示器 */
+        .color-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+
+        /* 公式与解释 */
+        .formula-box {
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            font-size: 1.1rem;
+            margin: 10px 0;
+            border: 1px solid #333;
+        }
+        
+        .details { font-size: 0.85rem; line-height: 1.5; color: #b0bec5; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas"></canvas>
+        <div class="hud hud-top-left">
+            <div><span class="color-dot" style="background:var(--photon-in)"></span>入射光子 (Incoming)</div>
+            <div style="margin-top:5px"><span class="color-dot" style="background:var(--photon-out)"></span>散射光子 (Scattered)</div>
+            <div style="margin-top:5px"><span class="color-dot" style="background:var(--accent)"></span>反冲电子 (Recoil Electron)</div>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        <h2>🔬 参数控制</h2>
+
+        <div class="btn-group">
+            <button class="btn-primary" onclick="firePhoton()">发射光子 (Fire)</button>
+            <button class="btn-toggle active" id="btn-vector" onclick="toggleVectors()">显示矢量 (Vectors)</button>
+        </div>
+
+        <div class="control-group">
+            <label>入射光子能量 (E<sub>in</sub>)</label>
+            <div class="slider-row">
+                <input type="range" id="energy-slider" min="10" max="1000" step="10" value="100">
+                <span class="val-disp" id="energy-val">100</span>
+                <span>keV</span>
+            </div>
+            <div style="font-size: 0.75rem; color: #777; margin-top:5px;">(X射线 ~ 伽马射线)</div>
+        </div>
+
+        <div class="control-group">
+            <label>散射角度 (θ)</label>
+            <div class="slider-row">
+                <input type="range" id="angle-slider" min="0" max="180" step="1" value="45">
+                <span class="val-disp" id="angle-val">45</span>
+                <span>°</span>
+            </div>
+        </div>
+
+        <div class="control-group">
+            <div style="margin-bottom:10px; font-weight:bold;">📊 实验数据</div>
+            <div class="data-grid">
+                <div class="data-item">
+                    <div class="data-label">散射能量 (E')</div>
+                    <div class="data-value" style="color:var(--photon-out)" id="disp-e-out">0.00 keV</div>
+                </div>
+                <div class="data-item">
+                    <div class="data-label">电子动能 (Ke)</div>
+                    <div class="data-value" style="color:var(--accent)" id="disp-ke">0.00 keV</div>
+                </div>
+                <div class="data-item">
+                    <div class="data-label">波长改变量 (Δλ)</div>
+                    <div class="data-value" id="disp-delta-lambda">0.00 pm</div>
+                </div>
+                <div class="data-item">
+                    <div class="data-label">电子反冲角 (φ)</div>
+                    <div class="data-value" id="disp-recoil-angle">0.0°</div>
+                </div>
+            </div>
+        </div>
+
+        <div>
+            <h3 style="color:var(--text-main); font-size:1rem; border-bottom:1px solid #333; padding-bottom:5px;">📖 物理原理</h3>
+            <div class="formula-box">
+                Δλ = λ' - λ = λ<sub>c</sub> (1 - cos θ)
+            </div>
+            <p class="details">
+                <strong>康普顿效应</strong>证明了光具有粒子性（光子）。<br><br>
+                当光子撞击静止电子时，一部分能量转移给电子，导致散射光子的频率降低（波长变长）。<br>
+                <span style="color:#777; font-size:0.8rem;">λ<sub>c</sub> (康普顿波长) ≈ 2.43 pm</span>
+            </p>
+        </div>
+    </div>
+
+<script>
+    // --- 物理常量 ---
+    const Me_c2 = 511; // 电子静止能量 (keV)
+    const lambda_c = 2.426; // 康普顿波长 (pm)
+
+    // --- DOM 元素 ---
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    const sEnergy = document.getElementById('energy-slider');
+    const sAngle = document.getElementById('angle-slider');
+    const dEnergy = document.getElementById('energy-val');
+    const dAngle = document.getElementById('angle-val');
+    const btnVector = document.getElementById('btn-vector');
+
+    // 数据显示 DOM
+    const outE_disp = document.getElementById('disp-e-out');
+    const ke_disp = document.getElementById('disp-ke');
+    const dl_disp = document.getElementById('disp-delta-lambda');
+    const phi_disp = document.getElementById('disp-recoil-angle');
+
+    // --- 状态变量 ---
+    let width, height;
+    let cx, cy; // 碰撞中心
+    let showVectors = true;
+    let animationState = 'idle'; // idle, animating
+    let animTime = 0;
+
+    // 物理参数
+    let E_in = 100; // keV
+    let theta_deg = 45; // 散射角
+    let theta_rad = Math.PI / 4;
+    
+    // 计算结果
+    let E_out = 0;
+    let K_e = 0;
+    let phi_rad = 0; // 电子反冲角
+    let P_in_mag = 0; // 入射动量模长 (相对单位)
+    let P_out_mag = 0;
+    let P_e_mag = 0;
+
+    // 动画对象
+    let photon = { x: 0, y: 0, active: false, type: 'in' };
+    let electron = { x: 0, y: 0, active: false };
+
+    // --- 初始化 ---
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        sEnergy.addEventListener('input', updateParams);
+        sAngle.addEventListener('input', updateParams);
+        updateParams(); // 初始计算
+        draw(); // 初始绘制
+    }
+
+    function resize() {
+        width = document.getElementById('canvas-container').clientWidth;
+        height = document.getElementById('canvas-container').clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+        cx = width / 2;
+        cy = height / 2;
+        if (animationState === 'idle') draw();
+    }
+
+    function toggleVectors() {
+        showVectors = !showVectors;
+        btnVector.classList.toggle('active');
+        if (animationState === 'idle') draw();
+    }
+
+    // --- 核心物理计算 ---
+    function updateParams() {
+        // 1. 获取输入
+        E_in = parseFloat(sEnergy.value);
+        theta_deg = parseFloat(sAngle.value);
+        theta_rad = theta_deg * (Math.PI / 180);
+
+        // 更新 UI 数值
+        dEnergy.textContent = E_in;
+        dAngle.textContent = theta_deg;
+
+        // 2. 康普顿散射公式
+        // E' = E / (1 + (E/mc^2)(1 - cosθ))
+        const alpha = E_in / Me_c2;
+        E_out = E_in / (1 + alpha * (1 - Math.cos(theta_rad)));
+        
+        // 3. 电子动能 Conservation of Energy
+        K_e = E_in - E_out;
+
+        // 4. 波长变化
+        const delta_lambda = lambda_c * (1 - Math.cos(theta_rad));
+
+        // 5. 电子反冲角 (Conservation of Momentum)
+        // 纵向动量守恒: Pe * sin(phi) = P' * sin(theta)
+        // 横向动量守恒: Pe * cos(phi) = P - P' * cos(theta)
+        // tan(phi) = (P' sin theta) / (P - P' cos theta)
+        // 相对论下 P = E/c (光子)
+        // tan(phi) = (E' sin theta) / (E - E' cos theta)
+        // 注意分母可能为0 (当 E' cos theta = E 时，但在康普顿效应中 E'总小于E，除非theta=0)
+        
+        const num = E_out * Math.sin(theta_rad);
+        const den = E_in - E_out * Math.cos(theta_rad);
+        phi_rad = Math.atan2(num, den);
+
+        // 6. 动量模长 (用于画矢量图)
+        // 简单的相对比例，不换算绝对物理单位
+        P_in_mag = E_in; 
+        P_out_mag = E_out;
+        // P_e 矢量长度用余弦定理算或者直接从分量算
+        // Pe^2 = P^2 + P'^2 - 2PP'cos(theta)
+        P_e_mag = Math.sqrt(P_in_mag**2 + P_out_mag**2 - 2*P_in_mag*P_out_mag*Math.cos(theta_rad));
+
+
+        // 更新数据面板
+        outE_disp.textContent = E_out.toFixed(2) + " keV";
+        ke_disp.textContent = K_e.toFixed(2) + " keV";
+        dl_disp.textContent = delta_lambda.toFixed(2) + " pm";
+        phi_disp.textContent = (phi_rad * 180 / Math.PI).toFixed(1) + "°";
+
+        if (animationState === 'idle') draw();
+    }
+
+    // --- 动画控制 ---
+    function firePhoton() {
+        animationState = 'inbound';
+        animTime = 0;
+        
+        // 重置位置
+        photon = { x: 0, y: cy, active: true, type: 'in' };
+        electron = { x: cx, y: cy, active: false }; // 此时电子在中心静止
+        
+        animate();
+    }
+
+    function animate() {
+        if (animationState === 'idle') return;
+
+        ctx.clearRect(0, 0, width, height);
+        drawStaticElements(); // 背景、矢量图（如果在idle时显示）...
+                              // 在动画中，我们依然显示矢量图作为参考？可以。
+
+        const speed = width * 0.02; // 动画速度
+
+        if (animationState === 'inbound') {
+            // 光子飞向中心
+            photon.x += speed;
+            if (photon.x >= cx) {
+                photon.x = cx;
+                animationState = 'scatter';
+                // 碰撞时刻
+            }
+            drawPhoton(0, cy, photon.x, cy, E_in, 'in');
+            drawElectron(cx, cy); // 静止电子
+            
+            // 绘制幽灵矢量图 (背景)
+            if(showVectors) drawVectorDiagram(0.2);
+
+        } else if (animationState === 'scatter') {
+            // 散射过程
+            animTime += speed;
+            
+            // 1. 散射光子位置
+            const p_dx = Math.cos(theta_rad) * animTime;
+            const p_dy = -Math.sin(theta_rad) * animTime; // Canvas Y轴向下，向上为负
+            
+            // 2. 反冲电子位置
+            // 电子速度应该稍微慢一点以示区别? 实际上取决于动能
+            // 这里为了演示，让它们跑一样快或者根据动量比例缩放距离
+            const e_dist = animTime * (P_e_mag / P_in_mag); // 简单的视觉比例
+            const e_dx = Math.cos(phi_rad) * e_dist;
+            const e_dy = Math.sin(phi_rad) * e_dist;
+
+            // 绘制轨迹
+            drawPhoton(cx, cy, cx + p_dx, cy + p_dy, E_out, 'out');
+            
+            // 绘制电子
+            const ex = cx + e_dx;
+            const ey = cy + e_dy;
+            drawElectron(ex, ey);
+
+            // 边界检测 (停止动画)
+            if (animTime > width * 0.6) {
+                animationState = 'idle';
+                draw(); // 绘制最终静止状态
+                return;
+            }
+            
+            // 绘制高亮矢量图
+            if(showVectors) drawVectorDiagram(0.5);
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    // --- 绘图函数 ---
+
+    function draw() {
+        ctx.clearRect(0, 0, width, height);
+        drawStaticElements();
+        
+        // 默认状态：电子在中间
+        drawElectron(cx, cy);
+        
+        // 提示文字
+        ctx.fillStyle = "#555";
+        ctx.font = "14px sans-serif";
+        ctx.textAlign = "center";
+        if (animationState === 'idle') {
+            ctx.fillText("点击 '发射光子' 开始演示", cx, cy + 40);
+        }
+    }
+
+    function drawStaticElements() {
+        // 画十字准星
+        ctx.strokeStyle = "#222";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 5]);
+        ctx.beginPath();
+        ctx.moveTo(0, cy);
+        ctx.lineTo(width, cy);
+        ctx.moveTo(cx, 0);
+        ctx.lineTo(cx, height);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (showVectors && animationState === 'idle') {
+            drawVectorDiagram(0.8);
+        }
+    }
+
+    // 绘制动量矢量图
+    function drawVectorDiagram(opacity) {
+        ctx.globalAlpha = opacity;
+        const scale = 150 / Math.max(P_in_mag, 1); // 缩放使得最大矢量长度约为150px
+        
+        // 1. 入射光子动量 (P) - 虚线表示碰撞前
+        drawArrow(cx - P_in_mag*scale, cy, cx, cy, "var(--photon-in)", "p");
+        
+        // 2. 散射光子动量 (P')
+        const p_out_x = cx + Math.cos(theta_rad) * P_out_mag * scale;
+        const p_out_y = cy - Math.sin(theta_rad) * P_out_mag * scale;
+        drawArrow(cx, cy, p_out_x, p_out_y, "var(--photon-out)", "p'");
+
+        // 3. 电子动量 (Pe)
+        const pe_x = cx + Math.cos(phi_rad) * P_e_mag * scale;
+        const pe_y = cy + Math.sin(phi_rad) * P_e_mag * scale;
+        drawArrow(cx, cy, pe_x, pe_y, "var(--accent)", "Pe");
+
+        // 绘制角度标记
+        // Theta
+        ctx.beginPath();
+        ctx.arc(cx, cy, 30, -theta_rad, 0);
+        ctx.strokeStyle = "var(--photon-out)";
+        ctx.stroke();
+        ctx.fillStyle = "var(--photon-out)";
+        ctx.fillText("θ", cx + 35, cy - 10);
+
+        // Phi
+        ctx.beginPath();
+        ctx.arc(cx, cy, 30, 0, phi_rad);
+        ctx.strokeStyle = "var(--accent)";
+        ctx.stroke();
+        ctx.fillStyle = "var(--accent)";
+        ctx.fillText("φ", cx + 35, cy + 20);
+
+        ctx.globalAlpha = 1.0;
+    }
+
+    // 绘制箭头
+    function drawArrow(x1, y1, x2, y2, color, label) {
+        const headlen = 10;
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        ctx.strokeStyle = color; // 使用CSS变量颜色需在JS中特殊处理? 不，Canvas需要具体值
+        // 获取CSS变量值 hack
+        const div = document.createElement('div');
+        div.style.color = color;
+        document.body.appendChild(div);
+        const rgbColor = getComputedStyle(div).color;
+        document.body.removeChild(div);
+        
+        ctx.strokeStyle = rgbColor;
+        ctx.fillStyle = rgbColor;
+        ctx.lineWidth = 2;
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - headlen * Math.cos(angle - Math.PI / 6), y2 - headlen * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(x2 - headlen * Math.cos(angle + Math.PI / 6), y2 - headlen * Math.sin(angle + Math.PI / 6));
+        ctx.fill();
+
+        if (label) {
+            ctx.fillText(label, x2 + 10, y2);
+        }
+    }
+
+    // 绘制光子（波浪线）
+    function drawPhoton(x1, y1, x2, y2, energy, type) {
+        ctx.save();
+        ctx.beginPath();
+        
+        const dist = Math.hypot(x2 - x1, y2 - y1);
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+        
+        // 能量越高，波长越短 (频率越高)
+        // 视觉模拟：Wavelength ~ 1/Energy
+        const waveLen = 2000 / energy; 
+        const amplitude = 6;
+        
+        ctx.translate(x1, y1);
+        ctx.rotate(angle);
+        
+        ctx.moveTo(0, 0);
+        for (let x = 0; x <= dist; x += 2) {
+            const y = amplitude * Math.sin(x * (Math.PI * 2) / waveLen);
+            ctx.lineTo(x, y);
+        }
+        
+        // 颜色渐变: 入射黄 -> 散射橙/红
+        // 实际上可以用 waveLen 算颜色，这里简化用类型
+        if (type === 'in') ctx.strokeStyle = '#ffea00';
+        else ctx.strokeStyle = '#ff9100'; // 散射光总比入射光红
+        
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        
+        // 画个粒子头
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.beginPath();
+        ctx.arc(dist, 0, 3, 0, Math.PI*2);
+        ctx.fill();
+
+        ctx.restore();
+    }
+
+    function drawElectron(x, y) {
+        ctx.beginPath();
+        ctx.arc(x, y, 8, 0, Math.PI * 2);
+        ctx.fillStyle = '#00e5ff';
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#00e5ff';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        
+        ctx.fillStyle = "#000";
+        ctx.font = "10px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("e-", x, y);
+    }
+
+    // 启动
+    init();
+
+</script>
+</body>
+</html>

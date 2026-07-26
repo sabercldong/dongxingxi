@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>氢原子全能级分立光谱 (Discrete & Full Levels)</title>
+    <style>
+        :root {
+            --bg-color: #050505;
+            --panel-bg: #1a1a1a;
+            --text-color: #e5e5e5;
+            --accent: #3b82f6; /* 亮蓝 */
+            --border: #333;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', sans-serif;
+            height: 100vh;
+            display: flex;
+            overflow: hidden; /* 页面不滚动 */
+        }
+
+        /* 左侧视觉区 */
+        #main-view {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            background: radial-gradient(circle at center, #222 0%, #000 90%);
+        }
+
+        /* 画布容器 */
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+
+        /* 底部光谱记录仪 */
+        #spectrum-recorder {
+            height: 140px;
+            background: #000;
+            border-top: 1px solid var(--border);
+            padding: 10px 20px;
+            display: flex;
+            flex-direction: column;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        .recorder-title {
+            font-size: 0.8rem;
+            color: #888;
+            margin-bottom: 5px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* 光谱条轨道 */
+        .spectrum-track {
+            flex: 1;
+            position: relative;
+            background: linear-gradient(to right, #0a0a0a 0%, #1a1a1a 50%, #0a0a0a 100%);
+            border: 1px solid #333;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        /* 刻度 */
+        .scale-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: #555;
+            margin-top: 5px;
+        }
+
+        /* 谱线样式 */
+        .spectral-line {
+            position: absolute;
+            top: 0; bottom: 0;
+            width: 2px;
+            transition: all 0.5s;
+        }
+
+        /* 幽灵线 (Ghost Lines) - 提示可能有线的位置 */
+        .ghost-line {
+            background-color: rgba(255, 255, 255, 0.08);
+            width: 1px;
+            border-right: 1px dashed rgba(255,255,255,0.1);
+        }
+        .ghost-label {
+            position: absolute;
+            top: 5px;
+            font-size: 0.6rem;
+            color: #444;
+            transform: translateX(-50%);
+        }
+
+        /* 实线 (Active Lines) - 只有触发后才显示 */
+        .real-line {
+            width: 3px;
+            box-shadow: 0 0 10px currentColor, 0 0 20px currentColor;
+            z-index: 10;
+            animation: flashLine 0.8s ease-out;
+        }
+
+        @keyframes flashLine {
+            0% { transform: scaleY(1.2) scaleX(2); filter: brightness(2); }
+            100% { transform: scaleY(1) scaleX(1); filter: brightness(1); }
+        }
+
+        /* 右侧控制栏 */
+        #sidebar {
+            width: 320px;
+            background-color: var(--panel-bg);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--panel-bg);
+        }
+        .sidebar-header h2 { margin: 0; font-size: 1.2rem; color: #fff; }
+
+        .sidebar-content {
+            flex: 1;
+            overflow-y: auto; /* 关键：允许垂直滚动 */
+            padding: 20px;
+        }
+        
+        /* 美化滚动条 */
+        .sidebar-content::-webkit-scrollbar { width: 8px; }
+        .sidebar-content::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+        .sidebar-content::-webkit-scrollbar-track { background: #111; }
+
+        .control-group {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        label { display: block; color: #aaa; margin-bottom: 8px; font-size: 0.9rem; }
+        
+        select {
+            width: 100%;
+            padding: 8px;
+            background: #222;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 4px;
+            margin-bottom: 12px;
+        }
+
+        button.btn-jump {
+            width: 100%;
+            padding: 12px;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button.btn-jump:hover { background: #2563eb; }
+        button.btn-jump:disabled { background: #444; cursor: not-allowed; }
+
+        /* 历史记录列表 */
+        .history-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .history-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            font-size: 0.85rem;
+            color: #ccc;
+        }
+        .color-dot {
+            width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 8px;
+        }
+
+        .helper-text { font-size: 0.8rem; color: #666; margin-top: 20px; line-height: 1.5; }
+    </style>
+</head>
+<body>
+
+    <div id="main-view">
+        <div id="canvas-wrapper">
+            <canvas id="atomCanvas"></canvas>
+            <div style="position:absolute; top:20px; left:20px; pointer-events:none;">
+                <span id="status-badge" style="background:rgba(0,0,0,0.6); padding:4px 8px; border-radius:4px; font-size:0.8rem; border:1px solid #444; color:#aaa;">
+                    就绪 (Ready)
+                </span>
+            </div>
+        </div>
+
+        <div id="spectrum-recorder">
+            <div class="recorder-title">
+                <span>分立光谱记录 (可见光区 400-700nm)</span>
+                <span id="lines-count">已点亮: 0/4</span>
+            </div>
+            <div class="spectrum-track" id="track">
+                <div class="spectral-line ghost-line" style="left: 85.3%;">
+                    <span class="ghost-label">n=3</span>
+                </div>
+                <div class="spectral-line ghost-line" style="left: 28.6%;">
+                    <span class="ghost-label">n=4</span>
+                </div>
+                <div class="spectral-line ghost-line" style="left: 11.3%;">
+                    <span class="ghost-label">n=5</span>
+                </div>
+                <div class="spectral-line ghost-line" style="left: 3.3%;">
+                    <span class="ghost-label">n=6</span>
+                </div>
+            </div>
+            <div class="scale-labels">
+                <span>400nm (紫)</span>
+                <span>500nm</span>
+                <span>600nm</span>
+                <span>700nm (红)</span>
+            </div>
+        </div>
+    </div>
+
+    <aside id="sidebar">
+        <div class="sidebar-header">
+            <h2>⚛️ 量子控制台</h2>
+        </div>
+        <div class="sidebar-content">
+            <div class="control-group">
+                <label>能级选择 (1 ~ 7)</label>
+                <div>
+                    <span style="font-size:0.8rem; color:#888;">起始轨道 n<sub>start</sub></span>
+                    <select id="n-start">
+                        <option value="1">1 (基态)</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5" selected>5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                    </select>
+                </div>
+                <div>
+                    <span style="font-size:0.8rem; color:#888;">目标轨道 n<sub>end</sub></span>
+                    <select id="n-end">
+                        <option value="1">1 (紫外区-莱曼系)</option>
+                        <option value="2" selected>2 (可见光-巴尔末系)</option>
+                        <option value="3">3 (红外区-帕邢系)</option>
+                        <option value="4">4 (红外区-布拉开系)</option>
+                        <option value="5">5 (红外区-普丰德系)</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                    </select>
+                </div>
+                <button class="btn-jump" id="btn-jump" onclick="executeJump()">激发跃迁</button>
+            </div>
+
+            <div class="control-group">
+                <label>跃迁数据</label>
+                <div style="font-family: monospace; line-height: 1.6; font-size: 0.9rem;">
+                    <div>类型: <span id="val-type" style="color:#aaa">--</span></div>
+                    <div>波长: <span id="val-lambda" style="font-weight:bold; color:#fff">--</span></div>
+                    <div>能量: <span id="val-energy" style="color:#aaa">--</span></div>
+                    <div>区域: <span id="val-region" style="color:#aaa">--</span></div>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>历史记录</label>
+                <ul class="history-list" id="history-list">
+                    </ul>
+            </div>
+            
+            <div class="helper-text">
+                <p><strong>如何观测分立光谱？</strong></p>
+                1. 将目标轨道设为 <strong>n=2</strong>。<br>
+                2. 依次将起始轨道设为 <strong>3, 4, 5, 6</strong> 并跃迁。<br>
+                3. 你会看到底部的幽灵虚线被逐一“点亮”成彩色实线。<br>
+                <p>这证明了原子的能级是分立的，光谱是不连续的。</p>
+            </div>
+        </div>
+    </aside>
+
+<script>
+    // === 核心逻辑 ===
+    const R_H = 1.097e7; // 里德伯常量
+    const MAX_ORBIT = 7; // 支持的最大能级
+    const track = document.getElementById('track');
+    const historyList = document.getElementById('history-list');
+    const btnJump = document.getElementById('btn-jump');
+    const statusBadge = document.getElementById('status-badge');
+
+    // 状态
+    let width, height, cx, cy;
+    let electron = { n: 5, r: 0, angle: 0 };
+    let photon = { active: false, r: 0, color: '#fff', type: 'out' };
+    let animating = false;
+    let visibleLinesCount = 0;
+    
+    // 防止重复记录同一条谱线
+    const recordedLines = new Set();
+
+    // Canvas Setup
+    const canvas = document.getElementById('atomCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        // 初始电子半径
+        electron.r = getVisualRadius(electron.n);
+        animate();
+    }
+
+    function resize() {
+        width = canvas.parentElement.clientWidth;
+        height = canvas.parentElement.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+        cx = width / 2;
+        cy = height / 2;
+    }
+
+    // 计算轨道半径 (自动缩放以适应屏幕)
+    function getVisualRadius(n) {
+        const minDim = Math.min(width, height);
+        // 让 n=7 占据大约 45% 的半轴
+        const maxR = (minDim / 2) * 0.9; 
+        const minR = 30;
+        const step = (maxR - minR) / MAX_ORBIT;
+        return minR + (n * step);
+    }
+
+    // === 物理计算 ===
+    function calculate(nStart, nEnd) {
+        const nL = Math.min(nStart, nEnd);
+        const nH = Math.max(nStart, nEnd);
+        const type = nStart > nEnd ? 'emission' : 'absorption';
+        
+        // 公式
+        const term = (1 / (nL * nL)) - (1 / (nH * nH));
+        const wavelengthM = 1 / (R_H * term);
+        const nm = wavelengthM * 1e9;
+        const eV = 1240 / nm;
+
+        // 颜色映射
+        let color = '#444'; // 默认不可见
+        let region = 'Visible';
+        
+        if (nm < 380) { region = '紫外线 (UV)'; color = '#a855f7'; } // 紫色示意
+        else if (nm > 750) { region = '红外线 (IR)'; color = '#ef4444'; } // 红色示意
+        else {
+            region = '可见光 (Visible)';
+            color = getSpectralColor(nm);
+        }
+
+        // 光谱条上是否可见 (仅 400-700 范围)
+        const isSpectralVisible = (nm >= 400 && nm <= 700) && (type === 'emission');
+
+        return { nStart, nEnd, nm, eV, type, color, region, isSpectralVisible };
+    }
+
+    // === 交互控制 ===
+    function executeJump() {
+        if (animating) return;
+
+        const nStart = parseInt(document.getElementById('n-start').value);
+        const nEnd = parseInt(document.getElementById('n-end').value);
+
+        if (nStart === nEnd) {
+            updateStatus("能级相同，无法跃迁");
+            return;
+        }
+
+        const data = calculate(nStart, nEnd);
+        
+        // 更新面板数据
+        updateDataPanel(data);
+
+        // 开始动画
+        animating = true;
+        btnJump.disabled = true;
+        electron.n = nStart; 
+        electron.r = getVisualRadius(nStart); // 瞬间复位以防万一
+
+        if (data.type === 'emission') {
+            updateStatus(`发射跃迁: n=${nStart} -> n=${nEnd}`);
+            // 1. 电子先动
+            moveElectron(nEnd, () => {
+                // 2. 电子到位后，光子飞出
+                emitPhoton(data.color, () => {
+                    finalizeJump(data);
+                });
+            });
+        } else {
+            updateStatus(`吸收跃迁: n=${nStart} -> n=${nEnd}`);
+            // 1. 光子先飞入
+            absorbPhoton(data.color, () => {
+                // 2. 光子吸收后，电子动
+                moveElectron(nEnd, () => {
+                    finalizeJump(data);
+                });
+            });
+        }
+    }
+
+    function finalizeJump(data) {
+        animating = false;
+        btnJump.disabled = false;
+        electron.n = data.nEnd;
+        updateStatus("就绪");
+        
+        // 如果是可见光发射，点亮光谱条
+        if (data.isSpectralVisible) {
+            addSpectralLine(data.nm, data.color);
+        }
+        
+        addHistory(data);
+    }
+
+    // === 动画流程 ===
+    function moveElectron(targetN, callback) {
+        const startR = electron.r;
+        const endR = getVisualRadius(targetN);
+        const duration = 800;
+        const startTime = Date.now();
+
+        function step() {
+            const p = Math.min((Date.now() - startTime) / duration, 1);
+            // Ease in out
+            const ease = p < .5 ? 2 * p * p : -1 + (4 - 2 * p) * p;
+            
+            electron.r = startR + (endR - startR) * ease;
+
+            if (p < 1) requestAnimationFrame(step);
+            else callback();
+        }
+        step();
+    }
+
+    function emitPhoton(color, callback) {
+        photon = { active: true, r: 0, color: color, type: 'out' };
+        const maxDist = Math.max(width, height) * 0.6;
+        const speed = 15;
+
+        function step() {
+            photon.r += speed;
+            if (photon.r < maxDist) requestAnimationFrame(step);
+            else {
+                photon.active = false;
+                callback();
+            }
+        }
+        step();
+    }
+
+    function absorbPhoton(color, callback) {
+        const maxDist = Math.max(width, height) * 0.6;
+        photon = { active: true, r: maxDist, color: color, type: 'in' };
+        const speed = 15;
+
+        function step() {
+            photon.r -= speed;
+            if (photon.r > 0) requestAnimationFrame(step);
+            else {
+                photon.active = false;
+                callback();
+            }
+        }
+        step();
+    }
+
+    // === UI 更新 ===
+    function addSpectralLine(nm, color) {
+        const id = Math.round(nm);
+        if (recordedLines.has(id)) return; // 已经有这根线了
+
+        recordedLines.add(id);
+        visibleLinesCount++;
+        document.getElementById('lines-count').textContent = `已点亮: ${visibleLinesCount}`;
+
+        // 计算位置: 400nm -> 0%, 700nm -> 100%
+        const percent = ((nm - 400) / 300) * 100;
+        
+        const line = document.createElement('div');
+        line.className = 'spectral-line real-line';
+        line.style.left = percent + '%';
+        line.style.backgroundColor = color;
+        
+        track.appendChild(line);
+    }
+
+    function addHistory(data) {
+        const li = document.createElement('li');
+        li.className = 'history-item';
+        
+        const arrow = data.type === 'emission' ? '↓' : '↑';
+        const cssColor = data.isSpectralVisible ? data.color : '#666';
+        
+        li.innerHTML = `
+            <div>
+                <span class="color-dot" style="background:${data.color}"></span>
+                <span style="font-weight:bold; color:${cssColor}">n=${data.nStart} &rarr; ${data.nEnd}</span>
+            </div>
+            <div style="font-family:monospace">
+                ${data.nm.toFixed(1)} nm
+            </div>
+        `;
+        
+        // 插入到列表顶部
+        historyList.insertBefore(li, historyList.firstChild);
+    }
+
+    function updateDataPanel(data) {
+        document.getElementById('val-type').textContent = data.type === 'emission' ? "发射 (Emission)" : "吸收 (Absorption)";
+        document.getElementById('val-type').style.color = data.type === 'emission' ? "var(--accent)" : "#f472b6";
+        
+        document.getElementById('val-lambda').textContent = data.nm.toFixed(2) + " nm";
+        document.getElementById('val-lambda').style.color = data.color;
+        
+        document.getElementById('val-energy').textContent = data.eV.toFixed(3) + " eV";
+        document.getElementById('val-region').textContent = data.region;
+    }
+
+    function updateStatus(msg) {
+        statusBadge.textContent = msg;
+    }
+
+    // === 绘图循环 ===
+    function animate() {
+        ctx.fillStyle = "rgba(0,0,0,0.25)"; // 拖尾效果
+        ctx.fillRect(0, 0, width, height);
+
+        // 1. 绘制原子核
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6, 0, Math.PI*2);
+        ctx.fillStyle = "#ef4444";
+        ctx.fill();
+
+        // 2. 绘制所有轨道
+        for (let i = 1; i <= MAX_ORBIT; i++) {
+            const r = getVisualRadius(i);
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            // 样式：如果是当前电子所在轨道，稍亮
+            const isCurrent = (i === electron.n && !animating);
+            ctx.strokeStyle = isCurrent ? "rgba(255,255,255,0.5)" : "rgba(255,255,255,0.1)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // 标签
+            if (cx) {
+                ctx.fillStyle = "rgba(255,255,255,0.3)";
+                ctx.font = "10px sans-serif";
+                ctx.fillText(i, cx + r + 2, cy);
+            }
+        }
+
+        // 3. 绘制电子
+        electron.angle += (0.05 / electron.n); // 外层转得慢
+        const ex = cx + Math.cos(electron.angle) * electron.r;
+        const ey = cy + Math.sin(electron.angle) * electron.r;
+        
+        ctx.beginPath();
+        ctx.arc(ex, ey, 5, 0, Math.PI*2);
+        ctx.fillStyle = "cyan";
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = "cyan";
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // 4. 绘制光子 (波浪线)
+        if (photon.active) {
+            ctx.save();
+            ctx.translate(ex, ey);
+            ctx.rotate(electron.angle); // 沿径向
+            
+            // 移动原点到光子位置
+            // 如果是 absorption (in)，r 是从外到内减小。为了方便，我们只用 photon.r 代表距离圆心的距离
+            // 但是这里坐标系已经平移到了电子(ex, ey)，所以需要算相对距离
+            // 简单化：始终画在 photon.r 处，这里 photon.r 暂时定义为 relative to electron
+            
+            ctx.translate(photon.type === 'out' ? photon.r : photon.r, 0); 
+
+            ctx.beginPath();
+            ctx.strokeStyle = photon.color;
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 5;
+            ctx.shadowColor = photon.color;
+            
+            const waveLen = 30;
+            for(let x=0; x<=waveLen; x+=2) {
+                const y = Math.sin(x * 0.5) * 5;
+                ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.restore();
+        }
+
+        requestAnimationFrame(animate);
+    }
+
+    // 工具：波长转RGB
+    function getSpectralColor(wavelength) {
+        let r, g, b;
+        if (wavelength >= 380 && wavelength < 440) {
+            r = -1 * (wavelength - 440) / (440 - 380); g = 0; b = 1;
+        } else if (wavelength >= 440 && wavelength < 490) {
+            r = 0; g = (wavelength - 440) / (490 - 440); b = 1;
+        } else if (wavelength >= 490 && wavelength < 510) {
+            r = 0; g = 1; b = -1 * (wavelength - 510) / (510 - 490);
+        } else if (wavelength >= 510 && wavelength < 580) {
+            r = (wavelength - 510) / (580 - 510); g = 1; b = 0;
+        } else if (wavelength >= 580 && wavelength < 645) {
+            r = 1; g = -1 * (wavelength - 645) / (645 - 580); b = 0;
+        } else if (wavelength >= 645 && wavelength <= 750) {
+            r = 1; g = 0; b = 0;
+        } else {
+            return "#444";
+        }
+        return `rgb(${Math.floor(r * 255)},${Math.floor(g * 255)},${Math.floor(b * 255)})`;
+    }
+
+    init();
+</script>
+</body>
+</html>

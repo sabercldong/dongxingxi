@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>波的传播与质点振动 (Wave & Particles)</title>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --panel-color: #2d2d2d;
+            --text-color: #e0e0e0;
+            --accent-color: #00bcd4;
+            --particle-active: #4caf50; /* 绿色：已振动 */
+            --particle-front: #ff9800;  /* 橙色：刚传到 */
+            --particle-idle: #666;      /* 灰色：未传到 */
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* 左侧画布 */
+        .simulation-area {
+            flex-grow: 1;
+            position: relative;
+            background-color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+        }
+
+        /* 状态条 */
+        .status-bar {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 12px 20px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 1.1rem;
+            border-left: 4px solid var(--accent-color);
+            line-height: 1.6;
+            pointer-events: none; /* 让鼠标穿透 */
+        }
+
+        /* 右侧控制面板 */
+        .control-panel {
+            width: 320px;
+            background-color: var(--panel-color);
+            padding: 25px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+
+        h2 {
+            margin-top: 0;
+            font-size: 1.4rem;
+            border-bottom: 2px solid var(--accent-color);
+            padding-bottom: 10px;
+            color: #fff;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        label {
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+            color: #ccc;
+        }
+
+        input[type=range] { width: 100%; cursor: pointer; }
+
+        /* 按钮组 */
+        .btn-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        button {
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+        }
+
+        .btn-step {
+            background-color: var(--accent-color);
+            color: #111;
+            grid-column: span 2; 
+            font-size: 1.1rem;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-auto { background-color: #4caf50; color: white; }
+        .btn-reset { background-color: #f44336; color: white; }
+        button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+
+        /* 图例 */
+        .legend-box {
+            margin-top: auto;
+            background: rgba(0,0,0,0.2);
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+        }
+        .legend-item { display: flex; align-items: center; margin-bottom: 8px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 10px; display: inline-block; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="simulation-area" id="simArea">
+        <div class="status-bar" id="statusBar">
+            时间: 0<br>波前位置: 0
+        </div>
+        <canvas id="waveCanvas"></canvas>
+    </div>
+
+    <div class="control-panel">
+        <h2>波与质点演示</h2>
+
+        <div class="control-group">
+            <label>步进单位: <span style="color:var(--accent-color)">T / 8</span> (波长/8)</label>
+        </div>
+
+        <div class="control-group">
+            <label>波长 (λ) <span id="valWave" style="color:var(--accent-color)">320</span></label>
+            <input type="range" id="inpWave" min="200" max="600" step="80" value="320">
+            <small style="color:#666">推荐使用80的倍数以便对齐</small>
+        </div>
+
+        <div class="control-group">
+            <label>振幅 (A) <span id="valAmp" style="color:var(--accent-color)">60</span></label>
+            <input type="range" id="inpAmp" min="20" max="100" value="60">
+        </div>
+
+        <div class="btn-grid">
+            <button class="btn-step" id="btnStep">
+                <span>▶|</span> 下一步 (T/8)
+            </button>
+            <button class="btn-auto" id="btnAuto">自动播放</button>
+            <button class="btn-reset" id="btnReset">重置</button>
+        </div>
+
+        <div class="legend-box">
+            <div style="margin-bottom:10px; font-weight:bold; color:#fff;">质点状态图示：</div>
+            <div class="legend-item">
+                <span class="dot" style="background:var(--particle-active)"></span>
+                <span>已起振 (在做简谐运动)</span>
+            </div>
+            <div class="legend-item">
+                <span class="dot" style="background:var(--particle-front); box-shadow: 0 0 5px var(--particle-front);"></span>
+                <span><strong>波前</strong> (波刚好传到)</span>
+            </div>
+            <div class="legend-item">
+                <span class="dot" style="border:2px solid var(--particle-idle); box-sizing:border-box;"></span>
+                <span>未起振 (静止)</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('waveCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('simArea');
+    const statusBar = document.getElementById('statusBar');
+
+    // 状态变量
+    let stepCount = 0; 
+    let isAutoPlaying = false;
+    let autoPlayInterval;
+
+    // 参数
+    const params = {
+        wavelength: 320,
+        amplitude: 60
+    };
+
+    const ui = {
+        wave: document.getElementById('inpWave'),
+        amp: document.getElementById('inpAmp'),
+        valWave: document.getElementById('valWave'),
+        valAmp: document.getElementById('valAmp'),
+        btnStep: document.getElementById('btnStep'),
+        btnAuto: document.getElementById('btnAuto'),
+        btnReset: document.getElementById('btnReset')
+    };
+
+    function resize() {
+        canvas.width = container.clientWidth;
+        canvas.height = container.clientHeight;
+        draw();
+    }
+    window.addEventListener('resize', resize);
+
+    function updateParams() {
+        params.wavelength = parseInt(ui.wave.value);
+        params.amplitude = parseInt(ui.amp.value);
+        ui.valWave.textContent = params.wavelength;
+        ui.valAmp.textContent = params.amplitude;
+        draw();
+    }
+
+    ui.wave.addEventListener('input', updateParams);
+    ui.amp.addEventListener('input', updateParams);
+
+    ui.btnStep.addEventListener('click', () => {
+        stopAutoPlay();
+        stepCount++;
+        draw();
+    });
+
+    ui.btnReset.addEventListener('click', () => {
+        stopAutoPlay();
+        stepCount = 0;
+        draw();
+    });
+
+    ui.btnAuto.addEventListener('click', () => {
+        if (isAutoPlaying) stopAutoPlay();
+        else startAutoPlay();
+    });
+
+    function startAutoPlay() {
+        isAutoPlaying = true;
+        ui.btnAuto.textContent = "暂停";
+        ui.btnAuto.style.backgroundColor = "#ff9800";
+        autoPlayInterval = setInterval(() => {
+            stepCount++;
+            draw();
+        }, 300);
+    }
+
+    function stopAutoPlay() {
+        isAutoPlaying = false;
+        ui.btnAuto.textContent = "自动播放";
+        ui.btnAuto.style.backgroundColor = "#4caf50";
+        clearInterval(autoPlayInterval);
+    }
+
+    // 核心绘图
+    function draw() {
+        // 1. 背景与基础线
+        ctx.fillStyle = '#222';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        const centerY = canvas.height / 2;
+        const stepDist = params.wavelength / 8; // 空间步长：lambda/8
+        const currentWaveFrontX = stepCount * stepDist;
+
+        // 更新文字
+        const t_fract = stepCount % 8;
+        const t_int = Math.floor(stepCount / 8);
+        let t_str = t_fract === 0 && t_int === 0 ? "0" : 
+                   (t_fract === 0 ? `${t_int}T` : `${t_int > 0 ? t_int + " " : ""}${t_fract}/8 T`);
+        statusBar.innerHTML = `时间: <span style="color:#00bcd4; font-weight:bold">${t_str}</span><br>` +
+                              `波前位置: <span style="color:#ff9800">${(stepCount/8).toFixed(3)} λ</span>`;
+
+        // 2. 绘制连续波形线 (背后的线)
+        ctx.beginPath();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(0, 188, 212, 0.4)'; // 稍微调淡一点，突出质点
+        
+        for (let x = 0; x <= Math.min(currentWaveFrontX, canvas.width); x += 2) {
+            const phase = 2 * Math.PI * (stepCount / 8) - 2 * Math.PI * (x / params.wavelength);
+            const y = centerY - params.amplitude * Math.sin(phase);
+            if (x === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+
+        // 绘制未传到区域的直线
+        if (currentWaveFrontX < canvas.width) {
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(100, 100, 100, 0.3)';
+            ctx.moveTo(currentWaveFrontX, centerY);
+            ctx.lineTo(canvas.width, centerY);
+            ctx.stroke();
+        }
+
+        // 3. 绘制质点 (Particles)
+        // 我们每隔 stepDist (即 lambda/8) 放置一个质点
+        // 这样可以保证每次点击按钮，波正好传到下一个质点
+        
+        // 计算屏幕能放下多少个质点
+        const numParticles = Math.ceil(canvas.width / stepDist) + 1;
+
+        for (let i = 0; i < numParticles; i++) {
+            const pX = i * stepDist; // 质点的平衡位置X坐标
+            let pY = centerY;
+            let pState = 'idle'; // idle, active, front
+
+            if (pX < currentWaveFrontX - 0.1) {
+                // 波已经传过这里，质点振动
+                pState = 'active';
+                const phase = 2 * Math.PI * (stepCount / 8) - 2 * Math.PI * (pX / params.wavelength);
+                pY = centerY - params.amplitude * Math.sin(phase);
+            } else if (Math.abs(pX - currentWaveFrontX) < 1.0) {
+                // 波刚好传到这里 (误差允许范围内)
+                pState = 'front';
+                pY = centerY; // 波前位置位移为0
+            } else {
+                // 波还没到
+                pState = 'idle';
+                pY = centerY;
+            }
+
+            // 绘制质点
+            ctx.beginPath();
+            if (pState === 'active') {
+                ctx.fillStyle = '#4caf50'; // 绿
+                ctx.arc(pX, pY, 5, 0, Math.PI * 2);
+                ctx.fill();
+            } else if (pState === 'front') {
+                ctx.fillStyle = '#ff9800'; // 橙
+                ctx.arc(pX, pY, 7, 0, Math.PI * 2); // 稍微大一点
+                ctx.fill();
+                
+                // 给波前加个光晕效果
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(255, 152, 0, 0.4)';
+                ctx.lineWidth = 2;
+                ctx.arc(pX, pY, 12, 0, Math.PI * 2);
+                ctx.stroke();
+            } else {
+                ctx.strokeStyle = '#666'; // 灰空心
+                ctx.lineWidth = 2;
+                ctx.arc(pX, pY, 4, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // 绘制编号 (可选，每4个标一下，防止太乱)
+            if (i % 8 === 0) {
+                ctx.fillStyle = '#888';
+                ctx.font = '10px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(`P${i}`, pX, centerY + params.amplitude + 20);
+            }
+        }
+    }
+
+    // 初始化
+    resize();
+    
+</script>
+
+</body>
+</html>

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>单缝衍射 (多级亮纹增强版)</title>
+    <style>
+        :root {
+            --bg-color: #0f0f12;
+            --panel-bg: #1a1a20;
+            --text-main: #e0e0e0;
+            --accent: #00bcd4; /* 青色 */
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h2 { border-bottom: 2px solid var(--accent); padding-bottom: 10px; margin-bottom: 20px; }
+
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        /* 画布容器 */
+        .canvas-box {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        canvas {
+            display: block;
+            margin: 5px auto;
+            background: #000;
+            cursor: crosshair;
+        }
+
+        .label { color: var(--accent); font-weight: bold; margin-bottom: 8px; font-size: 0.9em; }
+
+        /* 控制面板 */
+        .controls {
+            width: 280px;
+            background: var(--panel-bg);
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+
+        .control-item { display: flex; flex-direction: column; gap: 5px; }
+        
+        .header { display: flex; justify-content: space-between; font-size: 0.85em; color: #aaa; }
+        
+        input[type=range] { width: 100%; cursor: pointer; accent-color: var(--accent); }
+
+        .info-box {
+            font-size: 0.8em;
+            color: #888;
+            background: rgba(255,255,255,0.05);
+            padding: 10px;
+            border-radius: 4px;
+            line-height: 1.5;
+        }
+        
+        .highlight { color: #fff; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>单缝衍射：多级亮纹演示</h2>
+
+    <div class="container">
+        <div class="canvas-box">
+            <div class="label">波场传播 (俯视)</div>
+            <canvas id="waveCanvas" width="360" height="400"></canvas>
+        </div>
+
+        <div class="canvas-box">
+            <div class="label">屏幕衍射图样 & 强度曲线</div>
+            <canvas id="screenCanvas" width="220" height="400"></canvas>
+        </div>
+
+        <div class="controls">
+            <div class="control-item">
+                <div class="header">
+                    <label>波长 (λ)</label>
+                    <span id="val_lambda">600 nm</span>
+                </div>
+                <input type="range" id="sl_lambda" min="400" max="750" value="600" step="10">
+                <div id="color_preview" style="height:4px; width:100%; border-radius:2px; margin-top:5px;"></div>
+            </div>
+
+            <div class="control-item">
+                <div class="header">
+                    <label>狭缝宽度 (a)</label>
+                    <span id="val_a">12 (适中)</span>
+                </div>
+                <input type="range" id="sl_a" min="2" max="30" value="12" step="1">
+            </div>
+
+            <div class="control-item">
+                <div class="header">
+                    <label>曝光增益 (模拟人眼)</label>
+                    <span id="val_gain">高</span>
+                </div>
+                <input type="range" id="sl_gain" min="1" max="5" value="3" step="0.1">
+            </div>
+
+            <div class="info-box">
+                <strong>观察要点：</strong><br>
+                1. 中央是宽大的主极大。<br>
+                2. 两侧有明显的<strong>次级亮纹</strong>。<br>
+                3. 次级亮纹的理论亮度很低 (第1级约4.7%)，程序已通过"曝光增益"将其增强显示。<br>
+                <br>
+                公式: $I = I_0 (\frac{\sin \beta}{\beta})^2$
+            </div>
+        </div>
+    </div>
+
+<script>
+    const waveCanvas = document.getElementById('waveCanvas');
+    const waveCtx = waveCanvas.getContext('2d');
+    const screenCanvas = document.getElementById('screenCanvas');
+    const screenCtx = screenCanvas.getContext('2d');
+
+    const slLambda = document.getElementById('sl_lambda');
+    const slA = document.getElementById('sl_a');
+    const slGain = document.getElementById('sl_gain');
+    
+    const valLambda = document.getElementById('val_lambda');
+    const valA = document.getElementById('val_a');
+    const colorPreview = document.getElementById('color_preview');
+
+    let params = {
+        lambda: 600,
+        a: 12,
+        gain: 3, // 视觉增益
+        time: 0
+    };
+
+    // 波长转RGB
+    function getWavelengthColor(nm) {
+        let r, g, b;
+        if (nm >= 380 && nm < 440) { r = -(nm - 440) / (440 - 380); g = 0; b = 1; }
+        else if (nm >= 440 && nm < 490) { r = 0; g = (nm - 440) / (490 - 440); b = 1; }
+        else if (nm >= 490 && nm < 510) { r = 0; g = 1; b = -(nm - 510) / (510 - 490); }
+        else if (nm >= 510 && nm < 580) { r = (nm - 510) / (580 - 510); g = 1; b = 0; }
+        else if (nm >= 580 && nm < 645) { r = 1; g = -(nm - 645) / (645 - 580); b = 0; }
+        else if (nm >= 645 && nm <= 780) { r = 1; g = 0; b = 0; }
+        else { r=0; g=0; b=0; }
+        
+        // 简单亮度修正
+        let factor = 1;
+        if(nm > 700) factor = 0.3 + 0.7*(780-nm)/(780-700);
+        else if(nm < 420) factor = 0.3 + 0.7*(nm-380)/(420-380);
+
+        return [Math.floor(r * 255 * factor), Math.floor(g * 255 * factor), Math.floor(b * 255 * factor)];
+    }
+
+    function updateParams() {
+        params.lambda = parseInt(slLambda.value);
+        params.a = parseInt(slA.value);
+        params.gain = parseFloat(slGain.value);
+        
+        valLambda.textContent = params.lambda + " nm";
+        valA.textContent = params.a;
+        
+        const rgb = getWavelengthColor(params.lambda);
+        colorPreview.style.backgroundColor = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+    }
+
+    [slLambda, slA, slGain].forEach(e => e.addEventListener('input', updateParams));
+
+    // --- 绘图逻辑 1: 屏幕强度分布 (重点优化) ---
+    function drawScreen() {
+        const w = screenCanvas.width;
+        const h = screenCanvas.height;
+        screenCtx.clearRect(0, 0, w, h);
+
+        const centerY = h / 2;
+        const rgb = getWavelengthColor(params.lambda);
+        
+        // 参数缩放系数，用于在有限画布上展示合适数量的条纹
+        const scale = 120; 
+
+        screenCtx.beginPath();
+        screenCtx.strokeStyle = "rgba(255,255,255,0.9)";
+        screenCtx.lineWidth = 2;
+
+        for (let y = 0; y < h; y++) {
+            // 计算屏幕位置对应的衍射角相关参数 beta
+            // beta = (pi * a * sin(theta)) / lambda
+            let dist = Math.abs(y - centerY);
+            
+            // 为了让现象明显，这里对物理公式做了一些比例调整
+            let beta = (Math.PI * params.a * dist) / (params.lambda * 0.15); 
+
+            // 物理强度 I (归一化 0~1)
+            let intensity = 0;
+            if (beta === 0) intensity = 1;
+            else intensity = Math.pow(Math.sin(beta) / beta, 2);
+
+            // --- 视觉优化核心 ---
+            // 1. 伽马校正/对数增强：让暗纹变亮，以便人眼能看到
+            // 类似于 pow(intensity, 1/gain)
+            let visualIntensity = Math.pow(intensity, 1 / params.gain);
+            
+            // 2. 绘制条纹背景
+            screenCtx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${visualIntensity})`;
+            screenCtx.fillRect(w/2 - 30, y, 60, 1);
+
+            // 3. 绘制强度曲线
+            // 为了让次级极大在曲线图上也明显，我们混合一点对数缩放
+            // 纯线性显示会让次级波峰贴在Y轴上看不清
+            let graphVal = intensity; 
+            if (params.gain > 1.5) {
+                // 如果开启了增益，曲线图也稍微放大低强度部分
+                graphVal = Math.pow(intensity, 0.5); 
+            }
+            
+            let graphX = (w/2 + 35) + graphVal * (w/2 - 45);
+            
+            if (y === 0) screenCtx.moveTo(graphX, y);
+            else screenCtx.lineTo(graphX, y);
+        }
+        screenCtx.stroke();
+        
+        // 绘制轴线
+        screenCtx.strokeStyle = "#555";
+        screenCtx.beginPath();
+        screenCtx.moveTo(0, centerY); screenCtx.lineTo(w, centerY);
+        screenCtx.stroke();
+    }
+
+    // --- 绘图逻辑 2: 波场传播 ---
+    function drawWave() {
+        const w = waveCanvas.width;
+        const h = waveCanvas.height;
+        const imgData = waveCtx.createImageData(w, h);
+        const data = imgData.data;
+
+        const slitX = 40;
+        const centerY = h / 2;
+        const halfA = params.a * 1.5; // 稍微放大缝宽以便观察
+        
+        const k = (2 * Math.PI) / (params.lambda * 0.05); // 波数
+        
+        // 为了性能，减少点源数量，但足够产生纹理
+        const numSources = 20; 
+        const rgb = getWavelengthColor(params.lambda);
+
+        for (let x = 0; x < w; x+=2) {
+            for (let y = 0; y < h; y+=2) {
+                let amp = 0;
+
+                if (x < slitX) {
+                    // 入射平面波
+                    amp = Math.cos(k * x - params.time);
+                } else {
+                    // 衍射波：积分（累加）缝内所有点源的贡献
+                    // 只有当 y 在衍射角允许范围内叠加才有意义，但这里做全场模拟
+                    for (let i = 0; i < numSources; i++) {
+                        let sy = (centerY - halfA) + (i / (numSources-1)) * (2 * halfA);
+                        let d = Math.sqrt((x-slitX)**2 + (y-sy)**2);
+                        amp += Math.cos(k * d - params.time);
+                    }
+                    amp /= numSources; // 归一化
+                    
+                    // 距离衰减 (模拟真实光波)
+                    let distDecay = 1 / (1 + (x-slitX)*0.01);
+                    amp *= distDecay;
+                }
+
+                // 视觉强度
+                let val = (amp + 1) / 2; // -1~1 -> 0~1
+                val = Math.pow(val, 2); // 强度
+                
+                // 增强显示
+                val = Math.pow(val, 0.6); 
+
+                const idx = (y * w + x) * 4;
+                // 简单的2x2像素填充
+                const fill = (i) => {
+                    data[i] = rgb[0] * val;
+                    data[i+1] = rgb[1] * val;
+                    data[i+2] = rgb[2] * val;
+                    data[i+3] = 255;
+                };
+                fill(idx); fill(idx+4); fill(idx + w*4); fill(idx + w*4 + 4);
+            }
+        }
+        waveCtx.putImageData(imgData, 0, 0);
+
+        // 绘制挡板
+        waveCtx.fillStyle = "#222";
+        waveCtx.fillRect(slitX-5, 0, 10, h);
+        waveCtx.clearRect(slitX-5, centerY-halfA, 10, halfA*2);
+    }
+
+    function animate() {
+        params.time += 0.2;
+        drawWave();
+        drawScreen();
+        requestAnimationFrame(animate);
+    }
+
+    updateParams();
+    animate();
+
+</script>
+</body>
+</html>

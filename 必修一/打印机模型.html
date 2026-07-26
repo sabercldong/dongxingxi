@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>打印机送纸原理 - 终极修复版</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        /* 左侧画布区 */
+        #canvas-container {
+            flex: 1;
+            position: relative;
+            background-color: #1e1e1e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        canvas {
+            box-shadow: 0 0 40px rgba(0,0,0,0.6);
+            background-color: #252526;
+            border-radius: 4px;
+        }
+
+        /* 右侧功能区 */
+        #sidebar {
+            width: 380px;
+            background-color: #1a1a1a;
+            border-left: 1px solid #333;
+            display: flex;
+            flex-direction: column;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            background: #252526;
+            border-bottom: 1px solid #333;
+        }
+
+        h2 { margin: 0; font-size: 1.2rem; color: #4caf50; display: flex; align-items: center; gap: 10px; }
+        
+        .sidebar-content {
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .panel {
+            background: #2d2d30;
+            border: 1px solid #3e3e42;
+            border-radius: 6px;
+            padding: 12px;
+        }
+
+        .panel-title {
+            font-size: 0.85rem;
+            color: #999;
+            text-transform: uppercase;
+            font-weight: bold;
+            border-bottom: 1px solid #444;
+            padding-bottom: 8px;
+            margin-bottom: 10px;
+        }
+
+        /* 按钮组样式 */
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            font-weight: 600;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+        }
+
+        .btn-primary { background-color: #2196F3; color: white; }
+        .btn-primary:hover { background-color: #1976D2; }
+        
+        /* 重置按钮样式 */
+        .btn-reset { background-color: #424242; color: white; }
+        .btn-reset:hover { background-color: #616161; }
+
+        .toggle-row {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #333; padding: 10px; border-radius: 4px; cursor: pointer; border: 1px solid #555;
+        }
+        
+        /* 物理图例 */
+        .legend-row { display: flex; align-items: center; margin-bottom: 6px; font-size: 0.85rem; }
+        .color-box { width: 12px; height: 12px; border-radius: 3px; margin-right: 8px; }
+
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container">
+        <canvas id="simCanvas" width="800" height="650"></canvas>
+    </div>
+
+    <div id="sidebar">
+        <div class="sidebar-header">
+            <h2>🖨️ 送纸原理演示</h2>
+        </div>
+
+        <div class="sidebar-content">
+            <div class="panel">
+                <div class="panel-title">操作控制</div>
+                
+                <div class="btn-group">
+                    <button class="btn-primary" onclick="startFeed()">▶ 开始送纸</button>
+                    <button class="btn-reset" onclick="resetSim()">↺ 重置</button>
+                </div>
+
+                <div class="toggle-row" onclick="toggleView()">
+                    <span>🔍 受力分析视图 (Exploded View)</span>
+                    <input type="checkbox" id="viewToggle" checked>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">受力图例 (Force Legend)</div>
+                <div class="legend-row">
+                    <div class="color-box" style="background:#4CAF50;"></div>
+                    <span>动力 (Drive Force) - 绿色</span>
+                </div>
+                <div class="legend-row">
+                    <div class="color-box" style="background:#F44336;"></div>
+                    <span>阻力 (Resistance) - 红色</span>
+                </div>
+                <div class="legend-row">
+                    <div class="color-box" style="background:#64b5f6;"></div>
+                    <span>正压力 (Normal Force N) - 蓝色</span>
+                </div>
+                <div class="legend-row">
+                    <div class="color-box" style="background:#9C27B0;"></div>
+                    <span>重力 (Gravity G) - 紫色</span>
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">核心原理总结</div>
+                <div style="font-size: 0.85rem; line-height: 1.6; color: #ccc;">
+                    <strong>1. 为什么只有第一张动？</strong><br>
+                    搓纸轮给的动力(绿) > 下层给的阻力(红)。<br><br>
+                    <strong>2. 为什么下面的不动？</strong><br>
+                    因为受到底部传导上来的最大静摩擦阻力，大于上方传来的动力。<br><br>
+                    
+                </div>
+            </div>
+        </div>
+    </div>
+
+<script>
+    const canvas = document.getElementById('simCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // 配置
+    const config = {
+        paperWidth: 320,
+        paperHeight: 14,
+        startX: 240,
+        startY: 320,
+        rollerRadius: 42,
+        gapExpanded: 80,
+        gapCompact: 15,
+        arrowLen: 65,
+        feedSpeed: 4
+    };
+
+    let state = {
+        isFeeding: false,
+        isExpanded: true, 
+        papers: [],
+        rollerAngle: 0
+    };
+
+    function initPapers() {
+        state.papers = [
+            { id: 1, name: "第1张 (Top)", color: "#ffffff", x: 0 },
+            { id: 2, name: "第2张 (Mid)", color: "#e0e0e0", x: 0 },
+            { id: 3, name: "第3张 (Mid)", color: "#cfcfcf", x: 0 },
+            { id: 4, name: "最后一张 (Bottom)", color: "#bfbfbf", x: 0 }
+        ];
+        state.isFeeding = false;
+        state.rollerAngle = 0;
+        draw();
+    }
+
+    // 绘制箭头
+    function drawArrow(x, y, length, dirX, dirY, color, label) {
+        const head = 8;
+        const endX = x + length * dirX;
+        const endY = y + length * dirY;
+        
+        ctx.save();
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 2; // 默认线宽
+
+        // 如果是压力线，且方向向下，根据层级加粗（仅演示效果）
+        if(dirY === 1 && color === '#64b5f6') ctx.lineWidth = 3;
+
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(endX, endY);
+        ctx.stroke();
+
+        // 箭头头
+        const angle = Math.atan2(endY - y, endX - x);
+        ctx.beginPath();
+        ctx.moveTo(endX, endY);
+        ctx.lineTo(endX - head * Math.cos(angle - Math.PI / 6), endY - head * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(endX - head * Math.cos(angle + Math.PI / 6), endY - head * Math.sin(angle + Math.PI / 6));
+        ctx.fill();
+
+        // 标签
+        if(label) {
+            ctx.font = "bold 11px Arial";
+            ctx.textAlign = "center";
+            // 简单调整标签位置
+            let tx = x + (length/2)*dirX;
+            let ty = y + (length/2)*dirY;
+            if(dirY === 1) { tx += 15; } // 垂直线的文字靠右
+            else { ty -= 8; }            // 水平线的文字靠上
+            
+            ctx.fillText(label, tx, ty);
+        }
+        ctx.restore();
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const gap = state.isExpanded ? config.gapExpanded : config.gapCompact;
+
+        // 1. 分离垫
+        const padY = config.startY + state.papers.length * gap + 15;
+        ctx.fillStyle = "#333";
+        ctx.fillRect(config.startX - 20, padY, config.paperWidth + 40, 15);
+        ctx.fillStyle = "#d32f2f"; // 红色高阻力
+        ctx.fillRect(config.startX + 60, padY, 140, 5);
+        ctx.fillStyle = "#aaa";
+        ctx.font = "12px Arial";
+        ctx.fillText("分离垫 / 阻尼片", config.startX + 210, padY + 12);
+
+        // 2. 纸张循环
+        state.papers.forEach((p, i) => {
+            const y = config.startY + i * gap;
+            const cx = config.startX + p.x + config.paperWidth/2;
+            const cy = y + config.paperHeight/2;
+
+            // 纸体
+            ctx.fillStyle = p.color;
+            ctx.strokeStyle = "#666";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.roundRect(config.startX + p.x, y, config.paperWidth, config.paperHeight, 2);
+            ctx.fill();
+            ctx.stroke();
+            
+            // 文字
+            ctx.fillStyle = "#333";
+            ctx.textAlign = "left";
+            ctx.fillText(p.name, config.startX + p.x + 8, y + 11);
+
+            // === 受力分析 ===
+            if (state.isExpanded) {
+                // A. 垂直受力 (N + G)
+                // 压力 N (蓝色)
+                drawArrow(cx, y - gap/2 - 5, gap/2, 0, 1, '#64b5f6', `N${i+1}`);
+                // 重力 G (紫色)
+                drawArrow(cx + 30, cy, 35, 0, 1, '#9C27B0', 'G');
+
+                // B. 水平受力 (动力/阻力)
+                if (i === 0) {
+                    // Top Sheet
+                    drawArrow(cx - 50, cy - 10, config.arrowLen, 1, 0, '#4CAF50', "动力(轮)");
+                    drawArrow(cx + 50, cy + 10, config.arrowLen * 0.6, -1, 0, '#F44336', "阻力");
+                } else if (i < 3) {
+                    // Middle
+                    drawArrow(cx - 50, cy - 10, config.arrowLen * 0.6, 1, 0, '#4CAF50', "动力");
+                    drawArrow(cx + 50, cy + 10, config.arrowLen * 0.6, -1, 0, '#F44336', "阻力");
+                } else {
+                    // Bottom
+                    drawArrow(cx - 50, cy - 10, config.arrowLen * 0.6, 1, 0, '#4CAF50', "动力");
+                    // 最大的阻力
+                    drawArrow(cx + 50, cy + 10, config.arrowLen * 1.0, -1, 0, '#F44336', "最大阻力(垫)");
+                }
+            }
+        });
+
+        // 3. 搓纸轮
+        drawRoller();
+        
+        // 如果展开，画出源头压力
+        if(state.isExpanded) {
+            const rx = config.startX + config.paperWidth/2;
+            const ry = config.startY - config.rollerRadius;
+            drawArrow(rx, ry - 50, 45, 0, 1, '#64b5f6', "F_压");
+        }
+    }
+
+    function drawRoller() {
+        const rx = config.startX + config.paperWidth/2;
+        const ry = config.startY - config.rollerRadius + 5;
+        
+        ctx.save();
+        ctx.translate(rx, ry);
+        ctx.rotate(state.rollerAngle);
+        
+        ctx.beginPath();
+        ctx.arc(0, 0, config.rollerRadius, 0, Math.PI*2);
+        // 橙色轮子
+        const grd = ctx.createRadialGradient(0,0,10, 0,0, config.rollerRadius);
+        grd.addColorStop(0, "#FFC107");
+        grd.addColorStop(1, "#FF6F00");
+        ctx.fillStyle = grd;
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#FFF";
+        ctx.stroke();
+
+        // 纹理
+        for(let k=0; k<6; k++) {
+            ctx.beginPath();
+            ctx.moveTo(0,0);
+            ctx.lineTo(config.rollerRadius, 0);
+            ctx.stroke();
+            ctx.rotate(Math.PI/3);
+        }
+        ctx.restore();
+        
+        ctx.fillStyle = "#FFC107";
+        ctx.textAlign = "center";
+        ctx.fillText("搓纸轮", rx, ry - config.rollerRadius - 15);
+    }
+
+    function update() {
+        if(state.isFeeding) {
+            state.rollerAngle -= 0.1;
+            state.papers[0].x += config.feedSpeed;
+            if(state.papers[0].x > 600) state.isFeeding = false;
+        }
+        draw();
+        requestAnimationFrame(update);
+    }
+
+    // === 控制函数 ===
+    function startFeed() {
+        if(state.papers[0].x > 100) {
+            alert("请先点击重置按钮");
+            return;
+        }
+        state.isFeeding = true;
+    }
+
+    // 修复的重置功能
+    function resetSim() {
+        state.isFeeding = false;
+        state.papers.forEach(p => p.x = 0);
+        state.rollerAngle = 0;
+        draw();
+    }
+
+    function toggleView() {
+        const cb = document.getElementById('viewToggle');
+        // 防止点击label时触发两次
+        if(event.target.type !== 'checkbox') {
+             cb.checked = !cb.checked;
+        }
+        state.isExpanded = cb.checked;
+        draw();
+    }
+
+    initPapers();
+    update();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>微元法推导 - 符号化演示版</title>
+    <style>
+        * { box-sizing: border-box; }
+        body, html { 
+            margin: 0; padding: 0; width: 100%; height: 100%; 
+            overflow: hidden; background: #050505; color: #e0e6ed;
+            font-family: -apple-system, "Noto Sans SC", sans-serif;
+        }
+
+        /* 主容器 */
+        .app-wrapper { display: flex; height: 100vh; width: 100vw; }
+
+        /* 左侧：超大图像区 */
+        .visual-area {
+            flex: 1; background: #000;
+            display: flex; align-items: center; justify-content: center;
+            position: relative;
+        }
+        canvas { width: 95%; height: 92%; }
+
+        /* 右侧：控制与理论边栏 */
+        .sidebar {
+            width: 340px; background: #111; border-left: 1px solid #333;
+            display: flex; flex-direction: column; padding: 25px;
+            overflow-y: auto;
+        }
+
+        h2 { font-size: 1.2rem; color: #409eff; margin-top: 0; margin-bottom: 25px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+
+        .control-group { margin-bottom: 20px; }
+        .control-group label { display: block; font-size: 0.85rem; color: #999; margin-bottom: 8px; }
+        
+        input[type="number"] {
+            width: 100%; background: #222; border: 1px solid #444;
+            color: #409eff; padding: 8px; border-radius: 4px;
+            font-size: 1rem; font-weight: bold; outline: none;
+        }
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: #409eff; }
+        .val-tag { color: #409eff; font-weight: bold; float: right; font-family: monospace; }
+
+        /* 文字描述区 */
+        .theory-section {
+            margin-top: 10px; padding-top: 10px;
+            font-size: 0.95rem; line-height: 1.8; color: #ccc;
+        }
+        .step { margin-bottom: 25px; }
+        .step b { color: #f56c6c; display: block; margin-bottom: 6px; font-size: 1rem; }
+        
+        /* 公式卡片样式 */
+        .formula-card {
+            background: #1a1a1a; padding: 15px; border-radius: 8px;
+            color: #67c23a; font-family: "Consolas", monospace; margin: 15px 0;
+            border-left: 4px solid #67c23a; font-size: 1.1rem;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+            text-align: center;
+        }
+
+        .sidebar::-webkit-scrollbar { width: 4px; }
+        .sidebar::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="app-wrapper">
+    <main class="visual-area">
+        <canvas id="mainCanvas"></canvas>
+    </main>
+
+    <aside class="sidebar">
+        <h2>理论推导控制台</h2>
+
+        <div class="control-group">
+            <label>初速度 v0 (m/s) <span id="v0-v" class="val-tag">15</span></label>
+            <input type="range" id="v0-i" min="0" max="40" value="15">
+        </div>
+        <div class="control-group">
+            <label>加速度 a (m/s²) <span id="a-v" class="val-tag">3</span></label>
+            <input type="range" id="a-i" min="0" max="10" value="3">
+        </div>
+        <div class="control-group">
+            <label>总时间 T (s) <span id="t-v" class="val-tag">8</span></label>
+            <input type="range" id="t-i" min="1" max="15" value="8">
+        </div>
+        
+        <div class="control-group">
+            <label>分割份数 N (份)</label>
+            <input type="number" id="n-i" value="20" min="1" max="1000">
+        </div>
+
+        <div class="theory-section">
+            <div class="step">
+                <b>1. 时间轴微元化</b>
+                将总时间 <strong>t</strong> 分成 <strong>n</strong> 个等份，每个微元时间宽度为 <strong>Δt = t / n</strong>。
+            </div>
+            <div class="step">
+                <b>2. 面积累加原理</b>
+                在 <strong>Δt</strong> 极短的情况下，各段位移近似为矩形面积 <strong>vi · Δt</strong>。总位移为所有矩形面积之和。
+            </div>
+            <div class="step">
+                <b>3. 几何结构拆解</b>
+                当 <strong>n</strong> 趋于无穷大时，图像下方的总面积等同于梯形面积：
+                <ul>
+                    <li>矩形部分：初速度贡献的位移</li>
+                    <li>三角形部分：加速度产生的额外位移</li>
+                </ul>
+            </div>
+            
+            <div class="formula-card">
+                x = v0·t + ½·a·t²
+            </div>
+
+            <div class="step" style="font-size: 0.85rem; color: #666; font-style: italic;">
+                注：增大 N 值，观察离散矩形如何向连续几何图形演变。
+            </div>
+        </div>
+    </aside>
+</div>
+
+<script>
+    const canvas = document.getElementById('mainCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const slideIds = ['v0-i', 'a-i', 't-i'];
+    const slideVals = ['v0-v', 'a-v', 't-v'];
+    const nInput = document.getElementById('n-i');
+
+    function sync() {
+        slideIds.forEach((id, i) => {
+            document.getElementById(slideVals[i]).innerText = document.getElementById(id).value;
+        });
+
+        const v0 = parseFloat(document.getElementById('v0-i').value);
+        const a = parseFloat(document.getElementById('a-i').value);
+        const T = parseFloat(document.getElementById('t-i').value);
+        let N = parseInt(nInput.value);
+        
+        if(isNaN(N) || N < 1) N = 1;
+        if(N > 2000) N = 2000;
+
+        render(v0, a, T, N);
+    }
+
+    function render(v0, a, T, N) {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
+        const w = canvas.width;
+        const h = canvas.height;
+        const pad = 90;
+
+        const maxV = Math.max(v0 + a * T + 5, 20);
+        const maxT = T + 1;
+
+        const getX = (t) => pad + (t / maxT) * (w - pad * 1.8);
+        const getY = (v) => (h - pad) - (v / maxV) * (h - pad * 1.8);
+
+        ctx.clearRect(0, 0, w, h);
+
+        // 1. 坐标轴绘制
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(pad, pad/2); ctx.lineTo(pad, h - pad); ctx.lineTo(w - pad/2, h - pad);
+        ctx.stroke();
+
+        // 2. 绘制微元矩形
+        const dt = T / N;
+        for (let i = 0; i < N; i++) {
+            const ts = i * dt;
+            const curV = v0 + a * ts;
+            const xL = getX(ts);
+            const xR = getX(ts + dt);
+            const yTop = getY(curV);
+            const yBase = getY(0);
+
+            ctx.fillStyle = `rgba(64, 158, 255, ${0.2 + (i/N) * 0.5})`;
+            ctx.fillRect(xL, yTop, xR - xL, yBase - yTop);
+            
+            if (N < 150) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+                ctx.strokeRect(xL, yTop, xR - xL, yBase - yTop);
+            }
+        }
+
+        // 3. 速度特征线 (v-t 线)
+        ctx.strokeStyle = '#f56c6c';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(getX(0), getY(v0));
+        ctx.lineTo(getX(T), getY(v0 + a * T));
+        ctx.stroke();
+
+        // 4. 文字标注与虚线
+        ctx.fillStyle = '#888';
+        ctx.font = 'bold 18px Arial';
+        ctx.fillText('v (速度)', pad - 20, pad/2 - 25);
+        ctx.fillText('t (时间)', w - pad/2 - 60, h - pad + 45);
+        
+        ctx.fillStyle = '#409eff';
+        ctx.fillText('v0', pad - 40, getY(v0) + 7);
+        ctx.fillText('T', getX(T) - 8, h - pad + 25);
+        
+        ctx.setLineDash([6, 4]);
+        ctx.strokeStyle = '#333';
+        ctx.beginPath();
+        ctx.moveTo(getX(T), getY(0)); ctx.lineTo(getX(T), getY(v0 + a * T));
+        ctx.moveTo(getX(0), getY(v0 + a * T)); ctx.lineTo(getX(T), getY(v0 + a * T));
+        ctx.stroke();
+    }
+
+    slideIds.forEach(id => document.getElementById(id).addEventListener('input', sync));
+    nInput.addEventListener('input', sync);
+    window.addEventListener('resize', sync);
+    window.onload = sync;
+</script>
+
+</body>
+</html>

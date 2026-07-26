@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>地球引力与重力演示 (随地自转版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #000; color: white; }
+        
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧 UI 面板 */
+        #ui-panel {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 280px;
+            background: rgba(20, 20, 30, 0.9);
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+            backdrop-filter: blur(5px);
+            z-index: 10;
+        }
+
+        .control-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-size: 14px; color: #ddd; }
+        input[type=range] { width: 100%; cursor: pointer; }
+        
+        .btn-group { display: flex; gap: 10px; margin-top: 20px; }
+        button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        #btn-start { background-color: #28a745; color: white; }
+        #btn-pause { background-color: #ffc107; color: black; }
+        #btn-reset { background-color: #dc3545; color: white; }
+        button:hover { opacity: 0.9; transform: scale(1.02); }
+
+        .legend { margin-top: 20px; font-size: 12px; border-top: 1px solid #444; padding-top: 10px; }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .color-box { width: 12px; height: 12px; margin-right: 8px; border-radius: 2px; }
+
+        /* 左上角图表容器 */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 380px;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 8px;
+            padding: 10px;
+            cursor: move;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            z-index: 10;
+        }
+        #chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+            margin-bottom: 5px;
+            color: #333;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .close-btn { cursor: pointer; color: #666; font-size: 20px; line-height: 14px; }
+        .close-btn:hover { color: red; }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-wrapper">
+        <div id="chart-header">
+            <span>重力加速度 g (理论值随纬度变化)</span>
+            <span class="close-btn" onclick="toggleChart()">×</span>
+        </div>
+        <canvas id="myChart"></canvas>
+        <div style="font-size: 10px; color: #555; margin-top: 5px;">
+            *说明: 随着物体随地球旋转，离心力抵消了部分引力。
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h3 style="margin-top: 0; text-align: center; color: #fff;">物理参数控制</h3>
+        
+        <div class="control-group">
+            <label>观察者纬度: <span id="lat-val">45</span>°</label>
+            <input type="range" id="lat-slider" min="-90" max="90" value="45" step="1">
+        </div>
+
+        <div class="control-group">
+            <label>地球自转速度 (演示):</label>
+            <input type="range" id="speed-slider" min="0" max="10" value="2" step="0.1">
+        </div>
+
+        <div class="control-group">
+            <label>离心力显示放大:</label>
+            <input type="range" id="scale-slider" min="1" max="50" value="20" step="1">
+        </div>
+
+        <div class="legend">
+            <strong>力矢量说明:</strong>
+            <div class="legend-item"><div class="color-box" style="background: #00ff00;"></div>万有引力 (Fg) - 指向地心</div>
+            <div class="legend-item"><div class="color-box" style="background: #ff0000;"></div>离心力 (Fc) - 背离地轴</div>
+            <div class="legend-item"><div class="color-box" style="background: #ffff00;"></div>重力 (g) - 合力</div>
+        </div>
+
+        <div class="btn-group">
+            <button id="btn-start">开始</button>
+            <button id="btn-pause">暂停</button>
+            <button id="btn-reset">还原</button>
+        </div>
+        <div style="margin-top: 15px; text-align: center;">
+            <button onclick="toggleChart()" style="background: #555; color: #ccc; font-size: 12px;">显示/隐藏 图表</button>
+        </div>
+    </div>
+
+<script>
+    // ================= 全局变量 =================
+    let scene, camera, renderer, controls;
+    let earth, markerGroup;
+    let arrowFg, arrowFc, arrowG; // 矢量箭头
+    
+    // 状态变量
+    let isPlaying = true;
+    let rotationSpeed = 0.005;
+    let latitude = 45; 
+    let forceScale = 20; 
+    let chartInstance = null;
+
+    const R = 10; // 地球半径
+    const baseGravity = 6; // 基础引力显示长度
+
+    // ================= 初始化 =================
+    function init() {
+        const container = document.getElementById('canvas-container');
+
+        // 1. 场景
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x050505); // 深空黑
+
+        // 2. 相机
+        camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(35, 20, 35); // 初始视角
+
+        // 3. 渲染器
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        // 4. 控制器 (兼容性处理)
+        if (typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+        else if (typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+        
+        if(controls) {
+            controls.enableDamping = true;
+            controls.autoRotate = false; // 我们手动旋转地球，不旋转相机
+        }
+
+        // 5. 灯光
+        scene.add(new THREE.AmbientLight(0x444444));
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        sunLight.position.set(50, 20, 50);
+        scene.add(sunLight);
+
+        // 6. 创建地球与附着物
+        createEarthSystem();
+        
+        // 7. 图表
+        initChart();
+        setupDraggable('chart-wrapper');
+
+        // 8. 事件
+        window.addEventListener('resize', onWindowResize);
+        setupUI();
+
+        // 9. 循环
+        animate();
+    }
+
+    // ================= 创建核心物体 =================
+    function createEarthSystem() {
+        // --- 地球 (父对象) ---
+        const geometry = new THREE.SphereGeometry(R, 48, 48);
+        const material = new THREE.MeshPhongMaterial({ 
+            color: 0x1E90FF, 
+            wireframe: true, // 网格模式方便看旋转
+            transparent: true,
+            opacity: 0.5,
+            emissive: 0x112244
+        });
+        earth = new THREE.Mesh(geometry, material);
+        scene.add(earth);
+
+        // 地轴 (Y轴)
+        const axisGeo = new THREE.CylinderGeometry(0.05, 0.05, R * 2.8, 8);
+        const axisMat = new THREE.MeshBasicMaterial({ color: 0x888888 });
+        const axis = new THREE.Mesh(axisGeo, axisMat);
+        scene.add(axis);
+
+        // --- 观测点组 (markerGroup) ---
+        // 关键修改：将 markerGroup 添加到 earth 中，而不是 scene 中
+        // 这样它就会随着 earth 的 rotation.y 一起转动
+        markerGroup = new THREE.Group();
+        earth.add(markerGroup); 
+
+        // 观测者小球
+        const point = new THREE.Mesh(
+            new THREE.SphereGeometry(0.3, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0xffffff })
+        );
+        markerGroup.add(point);
+
+        // 创建三个箭头
+        // 方向将在 updateVectors 中实时计算
+        const origin = new THREE.Vector3(0, 0, 0); // 相对于 markerGroup 的原点
+        
+        // Fg: 引力 (绿)
+        arrowFg = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), origin, 1, 0x00ff00, 1, 0.5);
+        markerGroup.add(arrowFg);
+
+        // Fc: 离心力 (红)
+        arrowFc = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), origin, 1, 0xff0000, 1, 0.5);
+        markerGroup.add(arrowFc);
+
+        // g: 重力 (黄)
+        arrowG = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), origin, 1, 0xffff00, 1, 0.5);
+        markerGroup.add(arrowG);
+
+        updateVectors();
+    }
+
+    // ================= 物理计算与更新 =================
+    function updateVectors() {
+        const rad = THREE.MathUtils.degToRad(latitude);
+        
+        // 1. 计算在地球局部坐标系中的位置
+        // 假设我们将物体放在 Z=0 的经线上 (XY平面)，利用地球自转来改变它的世界位置
+        // x = R * cos(lat), y = R * sin(lat)
+        const x = R * Math.cos(rad);
+        const y = R * Math.sin(rad);
+        const z = 0;
+
+        // 设置 markerGroup 在地球内部的相对位置
+        markerGroup.position.set(x, y, z);
+        
+        // 为了让箭头看起来更自然，我们可以让 markerGroup 旋转一下，
+        // 让它的 "上" 方向对准法线，或者我们直接计算箭头的方向矢量。
+        // 这里直接计算矢量最简单。
+
+        // --- 计算力的方向 (在 markerGroup 的局部空间) ---
+        // markerGroup 位于 (x, y, 0)。
+        // 地心位于 (0, 0, 0)。
+        // 地轴位于 Y 轴。
+
+        // Vector: Fg (万有引力) -> 指向地心 (0,0,0)
+        // 向量 = 地心 - 当前位置 = (-x, -y, 0)
+        const dirFg = new THREE.Vector3(-x, -y, 0).normalize();
+        
+        // Vector: Fc (离心力) -> 垂直于地轴向外
+        // 当前位置 (x, y, 0)，地轴是 Y 轴。
+        // 垂线距离是 x。方向是沿 X 轴正向 (因为我们设定 z=0)。
+        const dirFc = new THREE.Vector3(1, 0, 0).normalize();
+
+        // 大小计算
+        const magnitudeFg = baseGravity;
+        
+        // 离心力大小 Fc = m * r * w^2
+        // r (旋转半径) = x = R * cos(lat)
+        // 这里的 rotationSpeed 是模拟值，为了视觉效果我们乘上 forceScale
+        const magnitudeFc = Math.cos(rad) * (rotationSpeed * 100) * (forceScale / 20);
+        // 保证最小可见度
+        const visualFc = Math.max(0.01, magnitudeFc * 2.5);
+
+        // 更新箭头
+        arrowFg.setDirection(dirFg);
+        arrowFg.setLength(magnitudeFg);
+
+        arrowFc.setDirection(dirFc);
+        arrowFc.setLength(visualFc, visualFc * 0.4, visualFc * 0.2); // 头部比例
+
+        // Vector: g (重力) = Fg + Fc
+        const vecFg = dirFg.clone().multiplyScalar(magnitudeFg);
+        const vecFc = dirFc.clone().multiplyScalar(visualFc);
+        const vecG = new THREE.Vector3().addVectors(vecFg, vecFc);
+
+        arrowG.setDirection(vecG.clone().normalize());
+        arrowG.setLength(vecG.length());
+    }
+
+    // ================= UI 交互 =================
+    function setupUI() {
+        // 纬度
+        document.getElementById('lat-slider').addEventListener('input', (e) => {
+            latitude = parseFloat(e.target.value);
+            document.getElementById('lat-val').innerText = latitude;
+            updateVectors();
+            updateChartDot();
+        });
+
+        // 速度
+        document.getElementById('speed-slider').addEventListener('input', (e) => {
+            rotationSpeed = parseFloat(e.target.value) * 0.005;
+            updateVectors();
+        });
+
+        // 比例
+        document.getElementById('scale-slider').addEventListener('input', (e) => {
+            forceScale = parseFloat(e.target.value);
+            updateVectors();
+        });
+
+        // 按钮
+        document.getElementById('btn-pause').onclick = () => isPlaying = false;
+        document.getElementById('btn-start').onclick = () => isPlaying = true;
+        document.getElementById('btn-reset').onclick = () => {
+            latitude = 45; rotationSpeed = 0.01; forceScale = 20; isPlaying = true;
+            document.getElementById('lat-slider').value = 45;
+            document.getElementById('lat-val').innerText = 45;
+            document.getElementById('speed-slider').value = 2;
+            earth.rotation.y = 0;
+            camera.position.set(35, 20, 35);
+            controls.reset();
+            updateVectors();
+            updateChartDot();
+        };
+    }
+
+    // ================= Chart.js 图表 =================
+    function initChart() {
+        const ctx = document.getElementById('myChart').getContext('2d');
+        const dataPoints = [];
+        const labels = [];
+        
+        // 生成模拟数据：g 随纬度变化
+        for(let i=0; i<=90; i+=5) {
+            labels.push(i);
+            // 简单模拟: 极点(90) g最大, 赤道(0) g最小
+            // g ~ 9.78 * (1 + 0.0053 sin^2(lat))
+            let val = 9.7803 * (1 + 0.005302 * Math.pow(Math.sin(i * Math.PI/180), 2));
+            dataPoints.push(val.toFixed(3));
+        }
+
+        chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '有效重力加速度 g (m/s²)',
+                    data: dataPoints,
+                    borderColor: 'rgba(255, 205, 86, 1)',
+                    backgroundColor: 'rgba(255, 205, 86, 0.2)',
+                    tension: 0.4,
+                    pointRadius: 3
+                }]
+            },
+            options: {
+                responsive: true,
+                scales: {
+                    x: { title: {display: true, text: '纬度 (°)'} },
+                    y: { min: 9.77, max: 9.85 }
+                },
+                animation: false
+            }
+        });
+        updateChartDot();
+    }
+
+    function updateChartDot() {
+        if(!chartInstance) return;
+        const absLat = Math.abs(latitude);
+        const index = Math.round(absLat / 5);
+        
+        // 高亮当前纬度点
+        const colors = new Array(19).fill('rgba(255, 205, 86, 1)');
+        const sizes = new Array(19).fill(3);
+        
+        if(index >= 0 && index < 19) {
+            colors[index] = 'red';
+            sizes[index] = 8;
+        }
+        
+        chartInstance.data.datasets[0].pointBackgroundColor = colors;
+        chartInstance.data.datasets[0].pointRadius = sizes;
+        chartInstance.update();
+    }
+
+    function toggleChart() {
+        const el = document.getElementById('chart-wrapper');
+        el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+    }
+
+    // ================= 拖拽功能 =================
+    function setupDraggable(id) {
+        const el = document.getElementById(id);
+        const header = document.getElementById('chart-header'); // 只允许拖动头部
+        let pos1=0, pos2=0, pos3=0, pos4=0;
+
+        header.onmousedown = function(e) {
+            if(e.target.classList.contains('close-btn')) return;
+            e.preventDefault();
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            document.onmouseup = closeDrag;
+            document.onmousemove = elementDrag;
+        };
+
+        function elementDrag(e) {
+            e.preventDefault();
+            pos1 = pos3 - e.clientX;
+            pos2 = pos4 - e.clientY;
+            pos3 = e.clientX;
+            pos4 = e.clientY;
+            el.style.top = (el.offsetTop - pos2) + "px";
+            el.style.left = (el.offsetLeft - pos1) + "px";
+        }
+        function closeDrag() {
+            document.onmouseup = null;
+            document.onmousemove = null;
+        }
+    }
+
+    // ================= 动画循环 =================
+    function animate() {
+        requestAnimationFrame(animate);
+
+        if(isPlaying) {
+            // 只需旋转地球，markerGroup 作为子对象会自动跟随旋转
+            earth.rotation.y += rotationSpeed;
+        }
+
+        if(controls) controls.update();
+        renderer.render(scene, camera);
+    }
+
+    // ================= 自适应 =================
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    init();
+</script>
+</body>
+</html>

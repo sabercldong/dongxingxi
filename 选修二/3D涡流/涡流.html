@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>电磁炉涡流深度演示 (Detailed Eddy Current)</title>
+    <style>
+        /* 背景保持白色 */
+        body { margin: 0; overflow: hidden; background-color: #fff; font-family: 'Segoe UI', sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* UI 面板 */
+        #ui-panel {
+            position: absolute; top: 0; right: 0; width: 300px; height: 100%;
+            background: rgba(245, 245, 245, 0.95); border-left: 1px solid #ddd;
+            color: #333; padding: 20px; box-shadow: -5px 0 15px rgba(0,0,0,0.1);
+        }
+
+        h2 { color: #e65100; text-align: center; margin-bottom: 20px; }
+        .group { margin-bottom: 25px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
+        label { display: block; font-size: 13px; color: #666; margin-top: 10px; font-weight: 600; }
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: #e65100; }
+        
+        button {
+            width: 32%; padding: 8px; border: none; border-radius: 4px; color: white; font-weight: bold; cursor: pointer;
+        }
+        .btn-start { background: #43a047; }
+        .btn-pause { background: #fbc02d; color: black; }
+        .btn-reset { background: #e53935; }
+
+        .legend { font-size: 12px; line-height: 1.6; color: #555; background: #fff; padding: 10px; border-radius: 5px; border: 1px solid #eee; }
+        .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; }
+    </style>
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="ui-panel">
+        <h2>⚡ 涡流微观演示</h2>
+        
+        <div class="group">
+            <button class="btn-start" onclick="isRun=true">加热</button>
+            <button class="btn-pause" onclick="isRun=false">暂停</button>
+            <button class="btn-reset" onclick="resetSim()">重置</button>
+        </div>
+
+        <div class="group">
+            <label>线圈频率 (Current Frequency)</label>
+            <input type="range" min="0.1" max="2.0" step="0.1" value="0.5" oninput="params.freq=Number(this.value)">
+            <div style="font-size:11px; color:#888">控制电流方向变化的快慢</div>
+
+            <label>功率强度 (Power)</label>
+            <input type="range" min="0" max="100" value="60" oninput="params.power=Number(this.value)">
+        </div>
+
+        <div class="group">
+            <label>图例说明</label>
+            <div class="legend">
+                <div><span class="dot" style="background:#8a2be2"></span><b>紫色流光</b>: 涡电流 (Eddy Current)<br>在锅底金属内部高速环流</div>
+                <div style="margin-top:5px"><span class="dot" style="background:#ff9800"></span><b>底部变黄</b>: 电阻生热 (Heat)<br>由涡流产生的焦耳热</div>
+            </div>
+        </div>
+
+        <div class="group">
+            <label>状态监控</label>
+            <div style="font-family: monospace; font-size: 14px;">
+                温度: <span id="temp-val" style="color:#e65100; font-weight:bold">25</span> °C
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 变量 ---
+        let scene, camera, renderer, controls;
+        let potBottom, particles, particleGeo;
+        let isRun = false;
+        
+        // 粒子数据
+        const particleCount = 3000;
+        const particleData = []; // 存储每个粒子的初始角度、半径、速度
+
+        const params = {
+            freq: 0.5,
+            power: 60,
+            heat: 0,
+            time: 0
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xffffff); // 白色背景
+
+            // 相机视角调整：从下往上看，看得更清楚
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 100);
+            camera.position.set(0, -15, 25); // 仰视
+            camera.lookAt(0, 5, 0);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            if(typeof THREE.OrbitControls !== 'undefined') controls = new THREE.OrbitControls(camera, renderer.domElement);
+            else if(typeof OrbitControls !== 'undefined') controls = new OrbitControls(camera, renderer.domElement);
+
+            // 灯光
+            const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambient);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            createSceneObjects();
+            animate();
+        }
+
+        function createSceneObjects() {
+            // 1. 玻璃面板 (半透明)
+            const glassGeo = new THREE.BoxGeometry(18, 0.2, 18);
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0xccffff, transmission: 0.6, opacity: 0.8, transparent: true, roughness: 0.1
+            });
+            const glass = new THREE.Mesh(glassGeo, glassMat);
+            glass.position.y = 0;
+            scene.add(glass);
+
+            // 2. 锅具 (切开一半，方便观察底部)
+            const potGroup = new THREE.Group();
+            
+            // 锅底 (这是变色的核心部件)
+            const bottomGeo = new THREE.CylinderGeometry(6, 6, 0.5, 64);
+            const bottomMat = new THREE.MeshStandardMaterial({
+                color: 0x333333, // 初始黑色金属
+                emissive: 0x000000,
+                roughness: 0.6,
+                metalness: 0.8
+            });
+            potBottom = new THREE.Mesh(bottomGeo, bottomMat);
+            potBottom.position.y = 0.5; // 放在玻璃上方
+            potGroup.add(potBottom);
+
+            // 锅身 (线框模式，避免遮挡视线)
+            const bodyGeo = new THREE.CylinderGeometry(6, 6, 4, 32, 1, true);
+            const bodyMat = new THREE.MeshBasicMaterial({ color: 0xaaaaaa, wireframe: true, transparent: true, opacity: 0.3 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 2.5;
+            potGroup.add(body);
+            
+            scene.add(potGroup);
+
+            // 3. 涡流粒子系统 (核心演示部分)
+            createEddyParticles();
+            
+            // 4. 下方线圈示意图
+            const coilGeo = new THREE.TorusGeometry(4, 0.1, 8, 32);
+            const coilMat = new THREE.MeshBasicMaterial({ color: 0xb87333 });
+            const coil = new THREE.Mesh(coilGeo, coilMat);
+            coil.rotation.x = Math.PI / 2;
+            coil.position.y = -1;
+            scene.add(coil);
+        }
+
+        function createEddyParticles() {
+            particleGeo = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const sizes = [];
+
+            const colorObj = new THREE.Color();
+
+            for (let i = 0; i < particleCount; i++) {
+                // 在锅底半径 1 到 5.8 之间随机分布
+                const r = 1 + Math.random() * 4.8; 
+                const theta = Math.random() * Math.PI * 2;
+                
+                const x = r * Math.cos(theta);
+                const z = r * Math.sin(theta);
+                const y = 0.3; // 紧贴锅底表面，但在内部
+
+                positions.push(x, y, z);
+                
+                // 颜色：使用电光紫/蓝色
+                colorObj.setHSL(0.7 + Math.random()*0.1, 1.0, 0.6);
+                colors.push(colorObj.r, colorObj.g, colorObj.b);
+                
+                sizes.push(0); // 初始不可见
+
+                // 保存自定义数据用于动画
+                particleData.push({
+                    baseR: r,           // 基础半径
+                    angle: theta,       // 当前角度
+                    speed: (6.0 - r) * 0.02 + 0.01, // 越靠近中心转得越快 (模拟涡旋)
+                    offset: Math.random() * 10 // 随机相位
+                });
+            }
+
+            particleGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            particleGeo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+            particleGeo.setAttribute('size', new THREE.Float32BufferAttribute(sizes, 1));
+
+            // 材质
+            const particleMat = new THREE.PointsMaterial({
+                size: 0.15,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.9,
+                blending: THREE.AdditiveBlending, // 发光叠加效果
+                depthWrite: false
+            });
+
+            particles = new THREE.Points(particleGeo, particleMat);
+            // 放到锅底的位置
+            particles.position.y = 0.55; 
+            scene.add(particles);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(controls) controls.update();
+
+            if (isRun) {
+                params.time += params.freq * 0.1;
+                
+                // --- 1. 更新涡流粒子 ---
+                const positions = particleGeo.attributes.position.array;
+                const sizes = particleGeo.attributes.size.array;
+                
+                for (let i = 0; i < particleCount; i++) {
+                    const data = particleData[i];
+                    
+                    // 旋转逻辑：根据功率加速旋转
+                    const currentSpeed = data.speed * (params.power / 20) * params.freq;
+                    data.angle += currentSpeed;
+
+                    // 脉冲逻辑：模拟交流电频率产生的磁场波纹
+                    // 半径会轻微缩放，产生"呼吸"感
+                    const ripple = Math.sin(params.time * 5 - data.baseR * 2) * 0.1; 
+                    const currentR = data.baseR + ripple;
+
+                    // 更新坐标
+                    positions[i*3] = currentR * Math.cos(data.angle);
+                    positions[i*3+2] = currentR * Math.sin(data.angle);
+
+                    // 大小/显隐逻辑
+                    // 功率越大，粒子越大；配合波纹闪烁
+                    if (params.power > 5) {
+                        const wave = (Math.sin(params.time * 10 - data.baseR) + 1) / 2;
+                        sizes[i] = (params.power / 100) * 0.2 * (0.5 + wave * 0.5); 
+                    } else {
+                        sizes[i] = 0;
+                    }
+                }
+                particleGeo.attributes.position.needsUpdate = true;
+                particleGeo.attributes.size.needsUpdate = true;
+
+                // --- 2. 热量积累逻辑 ---
+                // 热量增加速度 = 功率 * 0.05
+                if (params.heat < 120) {
+                    params.heat += params.power * 0.005;
+                }
+
+            } else {
+                // 暂停时，粒子瞬间消失 (因为电流没有惯性，断电即停)
+                const sizes = particleGeo.attributes.size.array;
+                for(let i=0; i<particleCount; i++) sizes[i] = 0;
+                particleGeo.attributes.size.needsUpdate = true;
+
+                // 冷却
+                if(params.heat > 25) params.heat -= 0.2;
+            }
+
+            // --- 3. 锅底颜色变化 (根据热量) ---
+            // 25度是黑色，100度变红，200度变黄
+            // 这里为了演示，把刻度压缩一下
+            updatePotColor();
+            
+            renderer.render(scene, camera);
+        }
+
+        function updatePotColor() {
+            const t = params.heat;
+            document.getElementById('temp-val').innerText = Math.floor(t);
+
+            // Emissive color calculation
+            // t = 25 -> black
+            // t = 60 -> dark red
+            // t = 100 -> bright red / orange
+            // t = 150 -> yellow
+            
+            let r = 0, g = 0, b = 0;
+            
+            if (t > 40) {
+                r = (t - 40) / 60; // 40度开始变红
+            }
+            if (t > 80) {
+                g = (t - 80) / 60; // 80度开始变黄 (加绿色)
+            }
+            
+            // 限制在0-1之间
+            r = Math.min(1, Math.max(0, r));
+            g = Math.min(1, Math.max(0, g));
+
+            potBottom.material.emissive.setRGB(r, g, 0);
+            
+            // 发光强度随温度增加，但在白色背景下不能太亮，否则会像过曝
+            potBottom.material.emissiveIntensity = Math.min(2.0, (t - 25) / 50);
+        }
+
+        function resetSim() {
+            isRun = false;
+            params.heat = 25;
+            params.time = 0;
+            document.querySelector('input[oninput*="power"]').value = 60;
+            params.power = 60;
+        }
+
+        window.onresize = function() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        };
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>牛顿环三维仿真实验</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Microsoft YaHei', sans-serif; background-color: #000; }
+        
+        /* 1. 布局：全屏 Canvas */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 2. 右侧功能区 */
+        #gui-panel {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 280px;
+            height: 100%;
+            background: rgba(30, 30, 30, 0.9);
+            color: #fff;
+            padding: 20px;
+            box-sizing: border-box;
+            border-left: 1px solid #444;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        h2, h3 { margin: 0 0 10px 0; color: #4facfe; }
+        
+        .control-group { margin-bottom: 15px; border-bottom: 1px solid #555; padding-bottom: 15px; }
+        .control-group label { display: block; margin-bottom: 5px; font-size: 14px; }
+        .control-group input[type="range"] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #00f260; font-weight: bold; }
+
+        button {
+            background: #4facfe;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: 0.3s;
+            width: 100%;
+        }
+        button:hover { background: #00f260; }
+
+        /* 3. 左上角可拖动图表 */
+        #chart-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 400px;
+            height: 250px;
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            cursor: move; /* 鼠标变成移动图标 */
+            padding: 10px;
+            z-index: 100;
+        }
+        #chart-header {
+            font-size: 12px;
+            color: #333;
+            text-align: center;
+            margin-bottom: 5px;
+            pointer-events: none; /* 让点击穿透到div以便拖拽 */
+            user-select: none;
+        }
+
+        /* 提示信息 */
+        #loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 24px;
+            pointer-events: none;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="chart-container">
+        <div id="chart-header">光强分布图 (I - r) - 按住拖动</div>
+        <canvas id="intensityChart"></canvas>
+    </div>
+
+    <div id="gui-panel">
+        <h2>牛顿环实验</h2>
+        <p style="font-size: 12px; color: #aaa;">使用鼠标左键旋转，右键平移，滚轮缩放。</p>
+        
+        <div class="control-group">
+            <label>曲率半径 R (mm) <span id="val-R" class="value-display">1000</span></label>
+            <input type="range" id="slider-R" min="500" max="2000" step="10" value="1000">
+        </div>
+
+        <div class="control-group">
+            <label>波长 λ (nm) <span id="val-W" class="value-display">550</span></label>
+            <input type="range" id="slider-W" min="400" max="700" step="1" value="550">
+        </div>
+        
+        <div style="height: 20px; width: 100%; margin-bottom: 15px; border-radius: 4px; border: 1px solid #fff;" id="color-preview"></div>
+
+        <button id="btn-reset">还原视角与参数</button>
+        
+        <div style="margin-top: auto; font-size: 12px; color: #666;">
+            原理公式: δ = r²/R <br>
+            明环: δ = (k-1/2)λ <br>
+            暗环: δ = kλ
+        </div>
+    </div>
+
+    <div id="loading">正在加载本地脚本...<br>请确保文件名正确且在同一目录</div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+
+    <script>
+        // --- 0. 错误检查 ---
+        if (typeof THREE === 'undefined' || typeof Chart === 'undefined') {
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('loading').innerHTML = "错误：无法加载脚本。<br>请检查 three.min.js, OrbitControls.js, chart.min.js 是否在同一文件夹。";
+            throw new Error("Library not found");
+        }
+
+        // --- 1. 全局变量与初始化 ---
+        let scene, camera, renderer, controls;
+        let ringMesh, lensMesh, glassPlate;
+        let chartInstance;
+        
+        // 物理参数
+        let params = {
+            R: 1000,       // 曲率半径 mm (模拟值，为了视觉效果会缩放)
+            wavelength: 550, // 波长 nm
+            maxRadius: 5.0 // 模拟显示的物理半径 mm
+        };
+
+        const container = document.getElementById('canvas-container');
+        
+        // --- 2. Chart.js 初始化 ---
+        function initChart() {
+            const ctx = document.getElementById('intensityChart').getContext('2d');
+            
+            // 初始数据
+            const dataPoints = generateChartData();
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dataPoints.labels,
+                    datasets: [{
+                        label: '光强 I',
+                        data: dataPoints.data,
+                        borderColor: wavelengthToColor(params.wavelength),
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        fill: false,
+                        tension: 0.4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false, // 禁用动画以提高性能
+                    interaction: { intersect: false },
+                    scales: {
+                        x: { display: true, title: { display: true, text: '半径 r (mm)' } },
+                        y: { display: false, min: 0, max: 1.1 }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        // 计算图表数据
+        function generateChartData() {
+            const labels = [];
+            const data = [];
+            const steps = 100;
+            // 仅绘制从中心到边缘的一侧
+            for (let i = 0; i <= steps; i++) {
+                let r = (i / steps) * params.maxRadius;
+                // 牛顿环光强公式近似 I ~ sin^2(pi * r^2 / (R * lambda)) 
+                // 注意单位换算: nm -> mm (1e-6)
+                let lambda_mm = params.wavelength * 1e-6;
+                let phase = (Math.PI * r * r) / (params.R * lambda_mm);
+                let intensity = Math.pow(Math.sin(phase), 2);
+                
+                labels.push(r.toFixed(2));
+                data.push(intensity);
+            }
+            return { labels, data };
+        }
+
+        // --- 3. Three.js 场景构建 ---
+        function init3D() {
+            // 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x111111);
+
+            // 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 8, 8); // 初始视角
+
+            // 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // 控制器 (OrbitControls)
+            // 兼容性处理：检查 OrbitControls 是挂在 THREE 下还是全局
+            if (THREE.OrbitControls) {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else if (typeof OrbitControls !== 'undefined') {
+                controls = new OrbitControls(camera, renderer.domElement);
+            } else {
+                alert("OrbitControls 加载失败，请检查文件名");
+            }
+            
+            if(controls) {
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+            }
+
+            // 灯光
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // --- 构建物体 ---
+
+            // 1. 平板玻璃 (底座)
+            const glassGeo = new THREE.BoxGeometry(6, 0.2, 6);
+            const glassMat = new THREE.MeshPhysicalMaterial({
+                color: 0x88ccff,
+                transmission: 0.2,
+                opacity: 0.6,
+                transparent: true,
+                roughness: 0.1,
+                metalness: 0
+            });
+            glassPlate = new THREE.Mesh(glassGeo, glassMat);
+            glassPlate.position.y = -0.1;
+            scene.add(glassPlate);
+
+            // 2. 牛顿环纹理 (ShaderMaterial 实现动态条纹)
+            // 使用自定义着色器来绘制精准的环，而不是贴图
+            const ringGeo = new THREE.PlaneGeometry(5, 5);
+            ringGeo.rotateX(-Math.PI / 2); // 放平
+            
+            const vertexShader = `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `;
+
+            const fragmentShader = `
+                uniform float R;
+                uniform float wavelength; // in nm
+                uniform vec3 color;
+                varying vec2 vUv;
+                
+                void main() {
+                    // 将UV坐标(0~1)转换到中心坐标(-2.5~2.5 mm 对应物理尺寸)
+                    float maxR = 5.0; // mm
+                    vec2 center = vec2(0.5, 0.5);
+                    float dist = distance(vUv, center) * maxR; // 距离中心的mm数
+                    
+                    // 物理公式: 光程差 delta = r^2 / R
+                    // 相位差 phi = 2 * PI * delta / lambda
+                    // 为了简化计算，直接用 sin^2 模拟干涉条纹
+                    
+                    float lambda_mm = wavelength * 0.000001; 
+                    float phase = (3.14159 * dist * dist) / (R * lambda_mm);
+                    
+                    float intensity = pow(sin(phase), 2.0);
+                    
+                    // 边缘淡出，让看起来像圆形限制
+                    float alpha = 1.0 - smoothstep(0.48, 0.5, distance(vUv, center));
+                    
+                    // 混合颜色: 黑色背景 + 光强颜色
+                    vec3 finalColor = color * intensity;
+                    
+                    gl_FragColor = vec4(finalColor, alpha * intensity); //让暗纹透明
+                }
+            `;
+
+            const ringMat = new THREE.ShaderMaterial({
+                uniforms: {
+                    R: { value: params.R },
+                    wavelength: { value: params.wavelength },
+                    color: { value: new THREE.Color(wavelengthToColor(params.wavelength)) }
+                },
+                vertexShader: vertexShader,
+                fragmentShader: fragmentShader,
+                transparent: true,
+                side: THREE.DoubleSide,
+                depthWrite: false, // 避免遮挡
+                blending: THREE.AdditiveBlending // 光叠加模式
+            });
+
+            ringMesh = new THREE.Mesh(ringGeo, ringMat);
+            ringMesh.position.y = 0.01; // 紧贴玻璃上方
+            scene.add(ringMesh);
+
+            // 3. 平凸透镜 (示意图)
+            const lensGeo = new THREE.SphereGeometry(5, 32, 16, 0, Math.PI * 2, 0, Math.PI/6); 
+            // 这里的球并不对应真实的R (R太大了球会非常平)，只是个视觉示意
+            const lensMat = new THREE.MeshPhysicalMaterial({
+                color: 0xffffff,
+                transmission: 0.9,
+                opacity: 0.3,
+                transparent: true,
+                roughness: 0,
+                side: THREE.DoubleSide
+            });
+            lensMesh = new THREE.Mesh(lensGeo, lensMat);
+            lensMesh.rotation.x = 0; 
+            // 调整透镜位置让它看起来压在板上
+            lensMesh.position.y = 2.4; // 偏移基于球半径
+            lensMesh.scale.set(1, 0.2, 1); // 压扁一点只是为了好看，不影响物理纹理
+            scene.add(lensMesh);
+        }
+
+        // --- 4. 交互逻辑与更新 ---
+        
+        // 波长转RGB颜色 (近似算法)
+        function wavelengthToColor(wavelength) {
+            let r, g, b, alpha;
+            let wl = wavelength;
+            if (wl >= 380 && wl < 440) {
+                r = -1 * (wl - 440) / (440 - 380); g = 0; b = 1;
+            } else if (wl >= 440 && wl < 490) {
+                r = 0; g = (wl - 440) / (490 - 440); b = 1;
+            } else if (wl >= 490 && wl < 510) {
+                r = 0; g = 1; b = -1 * (wl - 510) / (510 - 490);
+            } else if (wl >= 510 && wl < 580) {
+                r = (wl - 510) / (580 - 510); g = 1; b = 0;
+            } else if (wl >= 580 && wl < 645) {
+                r = 1; g = -1 * (wl - 645) / (645 - 580); b = 0;
+            } else if (wl >= 645 && wl <= 780) {
+                r = 1; g = 0; b = 0;
+            } else {
+                r = 0; g = 0; b = 0;
+            }
+            return `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+        }
+
+        function updateScene() {
+            // 更新Shader参数
+            if (ringMesh) {
+                ringMesh.material.uniforms.R.value = params.R;
+                ringMesh.material.uniforms.wavelength.value = params.wavelength;
+                const colStr = wavelengthToColor(params.wavelength);
+                ringMesh.material.uniforms.color.value = new THREE.Color(colStr);
+                document.getElementById('color-preview').style.backgroundColor = colStr;
+            }
+
+            // 更新图表
+            if (chartInstance) {
+                const newData = generateChartData();
+                chartInstance.data.labels = newData.labels;
+                chartInstance.data.datasets[0].data = newData.data;
+                chartInstance.data.datasets[0].borderColor = wavelengthToColor(params.wavelength);
+                chartInstance.update();
+            }
+        }
+
+        // 监听 UI 事件
+        const sliderR = document.getElementById('slider-R');
+        const valR = document.getElementById('val-R');
+        sliderR.addEventListener('input', (e) => {
+            params.R = parseFloat(e.target.value);
+            valR.innerText = params.R;
+            updateScene();
+        });
+
+        const sliderW = document.getElementById('slider-W');
+        const valW = document.getElementById('val-W');
+        sliderW.addEventListener('input', (e) => {
+            params.wavelength = parseFloat(e.target.value);
+            valW.innerText = params.wavelength;
+            updateScene();
+        });
+
+        // 还原按钮
+        document.getElementById('btn-reset').addEventListener('click', () => {
+            params.R = 1000;
+            params.wavelength = 550;
+            
+            sliderR.value = 1000; valR.innerText = 1000;
+            sliderW.value = 550; valW.innerText = 550;
+            
+            // 重置相机
+            camera.position.set(0, 8, 8);
+            controls.target.set(0, 0, 0);
+            controls.update();
+            
+            updateScene();
+        });
+
+        // --- 5. 图表拖动逻辑 (原生JS实现) ---
+        const dragItem = document.getElementById("chart-container");
+        let active = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        dragItem.addEventListener("mousedown", dragStart, false);
+        window.addEventListener("mouseup", dragEnd, false);
+        window.addEventListener("mousemove", drag, false);
+
+        function dragStart(e) {
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+            if (e.target === dragItem || e.target.id === 'chart-header') {
+                active = true;
+            }
+        }
+
+        function dragEnd(e) {
+            initialX = currentX;
+            initialY = currentY;
+            active = false;
+        }
+
+        function drag(e) {
+            if (active) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+                xOffset = currentX;
+                yOffset = currentY;
+                setTranslate(currentX, currentY, dragItem);
+            }
+        }
+
+        function setTranslate(xPos, yPos, el) {
+            el.style.transform = "translate3d(" + xPos + "px, " + yPos + "px, 0)";
+        }
+
+        // --- 6. 动画循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // 启动
+        window.onload = function() {
+            initChart();
+            init3D();
+            updateScene(); // 初始颜色设置
+            animate();
+        };
+
+        // 窗口大小调整
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>

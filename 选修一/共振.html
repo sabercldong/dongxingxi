@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>受迫振动 - 手动量程版</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #0d0d0d;
+            color: #ccc;
+            font-family: 'Segoe UI', sans-serif;
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .viewport {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #333;
+        }
+        
+        .canvas-box { position: relative; width: 100%; overflow: hidden; }
+        #box-sim { flex: 5; background: #1a1a1a; border-bottom: 1px solid #444; }
+        #box-graph { flex: 5; background: #000; }
+        
+        canvas { display: block; width: 100%; height: 100%; }
+
+        /* 浮层信息 */
+        .hud {
+            position: absolute;
+            pointer-events: none;
+            background: rgba(0,0,0,0.6);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 10;
+        }
+        .hud-tl { top: 10px; left: 10px; color: #fff; }
+        .hud-tr { top: 10px; right: 10px; text-align: right; color: #4fc3f7; font-family: monospace; }
+        
+        /* 坐标轴刻度标尺 */
+        .axis-label {
+            position: absolute;
+            right: 5px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #00e676;
+            background: rgba(0,0,0,0.7);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+        .axis-top { top: 5px; }
+        .axis-btm { bottom: 5px; }
+
+        /* 控制台 */
+        .controls {
+            width: 320px;
+            background: #202020;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -5px 0 20px rgba(0,0,0,0.6);
+        }
+
+        .control-group { background: #2a2a2a; padding: 12px; border-radius: 8px; }
+        .label-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 0.9em; }
+        .val { color: #fff; font-weight: bold; font-family: monospace;}
+        
+        input[type=range] { width: 100%; cursor: pointer; }
+
+        .btn-row { margin-top: auto; display: flex; gap: 10px; }
+        button {
+            flex: 1; padding: 12px; border: none; border-radius: 6px;
+            font-size: 15px; cursor: pointer; font-weight: bold; color: white;
+            transition: 0.2s;
+        }
+        #btn-pause { background: #ff9800; color: #000; }
+        #btn-pause.paused { background: #00e676; content: "继续"; }
+        #btn-reset { background: #d32f2f; }
+
+    </style>
+</head>
+<body>
+
+<div class="viewport">
+    <div class="canvas-box" id="box-sim">
+        <canvas id="simCanvas"></canvas>
+        <div class="hud hud-tl">
+            物理视图 (自动跟随)
+        </div>
+        <div class="hud hud-tr">
+            <div>当前位移 X: <span id="disp-x">0.0</span> m</div>
+        </div>
+    </div>
+
+    <div class="canvas-box" id="box-graph">
+        <canvas id="graphCanvas"></canvas>
+        <div class="hud hud-tl" style="color:#aaa">
+            x-t 示波器 (手动量程)
+        </div>
+        <div class="axis-label axis-top" id="axis-max">+10m</div>
+        <div class="axis-label axis-btm" id="axis-min">-10m</div>
+    </div>
+</div>
+
+<div class="controls">
+    <div style="border-bottom:1px solid #444; padding-bottom:10px;">
+        <h2 style="margin:0; color:#fff;">控制面板</h2>
+    </div>
+
+    <div class="control-group">
+        <div class="label-row">驱动频率 <span id="val-fd" class="val">1.00 Hz</span></div>
+        <input type="range" id="sl-fd" min="0.5" max="1.5" step="0.01" value="1.00">
+    </div>
+
+    <div class="control-group">
+        <div class="label-row">固有频率 <span id="val-fn" class="val">1.00 Hz</span></div>
+        <input type="range" id="sl-fn" min="0.5" max="1.5" step="0.1" value="1.00">
+    </div>
+
+    <div class="control-group">
+        <div class="label-row">阻尼系数 <span id="val-c" class="val" style="color:#ff5252">0.00</span></div>
+        <input type="range" id="sl-c" min="0" max="100" step="0.5" value="0">
+        <div style="font-size:11px; color:#aaa; margin-top:5px;">0=无阻尼 (共振发散)</div>
+    </div>
+
+    <div class="control-group" style="border: 1px solid #00e676;">
+        <div class="label-row" style="color:#00e676">下方图表量程 (±) <span id="val-scale" class="val">10m</span></div>
+        <input type="range" id="sl-scale" min="5" max="2000" step="5" value="10">
+        <div style="font-size:11px; color:#aaa; margin-top:5px;">
+            波形如果跑出去了，请调大此值
+        </div>
+    </div>
+
+    <div class="btn-row">
+        <button id="btn-pause" onclick="togglePause()">暂停</button>
+        <button id="btn-reset" onclick="resetSim()">重置</button>
+    </div>
+</div>
+
+<script>
+    const CONF = {
+        dt: 0.016,
+        subSteps: 8,
+        historyLen: 600
+    };
+
+    let sys = {
+        running: true,
+        t: 0,
+        x: 0,
+        v: 0,
+        m: 1,
+        F0: 20,         
+        
+        fd: 1.0,
+        fn: 1.0,
+        c_slider: 0,
+        c_real: 0,
+        
+        phase: 0,
+        
+        // 视觉控制
+        maxAmpSeen: 5,  // 上方视图用的（自动跟随）
+        currentZoomPPM: 40,
+        
+        // 下方图表的手动量程
+        graphScaleY: 10 // 默认为 ±10m
+    };
+
+    let history = []; 
+
+    // Canvas & UI
+    const cvsSim = document.getElementById('simCanvas');
+    const ctxSim = cvsSim.getContext('2d');
+    const cvsGraph = document.getElementById('graphCanvas');
+    const ctxGraph = cvsGraph.getContext('2d');
+    const btnPause = document.getElementById('btn-pause');
+
+    // Update Logic
+    function updatePhysics() {
+        if(!sys.running) return;
+
+        let k = sys.m * Math.pow(2 * Math.PI * sys.fn, 2);
+        let wd = 2 * Math.PI * sys.fd;
+        
+        let norm = sys.c_slider / 100;
+        sys.c_real = norm * norm * 0.5;
+
+        let dt = CONF.dt / CONF.subSteps;
+
+        for(let i=0; i<CONF.subSteps; i++) {
+            sys.phase += wd * dt;
+            if(sys.phase > Math.PI*2) sys.phase -= Math.PI*2;
+
+            let F_drive = sys.F0 * Math.cos(sys.phase);
+            let F_spring = -k * sys.x;
+            let F_damp = -sys.c_real * sys.v * 20; 
+
+            let a = (F_drive + F_spring + F_damp) / sys.m;
+            sys.v += a * dt;
+            sys.x += sys.v * dt;
+            sys.t += dt;
+        }
+
+        history.push(sys.x);
+        if(history.length > CONF.historyLen) history.shift();
+
+        // 上方视图依然需要自动逻辑，否则物体飞出去就看不见了
+        let currentAbs = Math.abs(sys.x);
+        if(currentAbs > sys.maxAmpSeen) {
+            sys.maxAmpSeen = currentAbs;
+        } else {
+            sys.maxAmpSeen = Math.max(5, sys.maxAmpSeen * 0.99); 
+        }
+    }
+
+    // 绘图：物理视图 (自动跟随)
+    function drawSim() {
+        let w = cvsSim.width;
+        let h = cvsSim.height;
+        let cx = w/2;
+        let cy = h/2;
+
+        ctxSim.clearRect(0,0,w,h);
+
+        let targetPPM = (w * 0.4) / sys.maxAmpSeen;
+        sys.currentZoomPPM += (targetPPM - sys.currentZoomPPM) * 0.1;
+        let ppm = sys.currentZoomPPM;
+
+        drawGrid(ctxSim, w, h, ppm);
+
+        let screenX = cx + sys.x * ppm;
+        let boxSize = Math.max(20, Math.min(60, ppm * 1.5)); 
+
+        // 弹簧
+        ctxSim.beginPath(); ctxSim.strokeStyle = '#666'; ctxSim.lineWidth = 2;
+        ctxSim.moveTo(0, cy); ctxSim.lineTo(screenX - boxSize/2, cy); ctxSim.stroke();
+
+        // 物体
+        ctxSim.fillStyle = '#2196f3';
+        ctxSim.fillRect(screenX - boxSize/2, cy - boxSize/2, boxSize, boxSize);
+
+        // 驱动力箭头
+        let arrowPixelLen = 80 * Math.cos(sys.phase);
+        drawArrow(ctxSim, screenX, cy - boxSize/2 - 15, arrowPixelLen, '#ff5252');
+    }
+
+    // 绘图：图表视图 (手动量程)
+    function drawGraph() {
+        let w = cvsGraph.width;
+        let h = cvsGraph.height;
+        let cy = h/2;
+
+        ctxGraph.fillStyle = '#000';
+        ctxGraph.fillRect(0,0,w,h);
+
+        // 使用用户设定的手动量程
+        // 映射：sys.graphScaleY 对应屏幕高度的一半 (h/2)
+        // 比如 graphScaleY = 10，则 +10m 在顶端，-10m 在底端
+        let scaleFactor = (h / 2) / sys.graphScaleY;
+        
+        let stepX = w / CONF.historyLen;
+
+        ctxGraph.beginPath();
+        ctxGraph.strokeStyle = '#00e676';
+        ctxGraph.lineWidth = 2;
+        
+        for(let i=0; i<history.length; i++) {
+            let px = i * stepX;
+            // 计算 Y 坐标
+            let py = cy - history[i] * scaleFactor;
+            
+            // 注意：这里没有限制 py 的范围，canvas 自动处理剪裁。
+            // 如果 py < 0 或 py > h，线条就会画到画布外面，表现为“切断”。
+            
+            if(i===0) ctxGraph.moveTo(px, py);
+            else ctxGraph.lineTo(px, py);
+        }
+        ctxGraph.stroke();
+        
+        // 中轴线
+        ctxGraph.strokeStyle = '#444';
+        ctxGraph.lineWidth = 1;
+        ctxGraph.beginPath(); ctxGraph.moveTo(0, cy); ctxGraph.lineTo(w, cy); ctxGraph.stroke();
+    }
+
+    function drawArrow(ctx, x, y, len, color) {
+        if (Math.abs(len) < 2) return; 
+        ctx.beginPath(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 4;
+        ctx.moveTo(x, y); ctx.lineTo(x + len, y); ctx.stroke();
+        let headSize = 12; let dir = len > 0 ? 1 : -1; let tipX = x + len;
+        ctx.beginPath(); ctx.moveTo(tipX, y);
+        ctx.lineTo(tipX - headSize * dir, y - headSize/2);
+        ctx.lineTo(tipX - headSize * dir, y + headSize/2);
+        ctx.fill();
+    }
+
+    function drawGrid(ctx, w, h, ppm) {
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 1; ctx.beginPath();
+        let step = 1;
+        while(step * ppm < 50) step *= 10; 
+        let cx = w/2;
+        for(let x = cx; x < w; x += step * ppm) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+        for(let x = cx; x > 0; x -= step * ppm) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+        ctx.stroke();
+    }
+
+    function loop() {
+        updatePhysics();
+        drawSim();
+        drawGraph();
+        
+        document.getElementById('disp-x').innerText = sys.x.toFixed(2);
+        document.getElementById('val-fd').innerText = sys.fd.toFixed(2) + " Hz";
+        document.getElementById('val-fn').innerText = sys.fn.toFixed(2) + " Hz";
+        document.getElementById('val-c').innerText = sys.c_real.toFixed(4);
+        
+        requestAnimationFrame(loop);
+    }
+
+    // 交互函数
+    function togglePause() {
+        sys.running = !sys.running;
+        if(sys.running) {
+            btnPause.innerText = "暂停";
+            btnPause.style.background = "#ff9800";
+            btnPause.style.color = "#000";
+        } else {
+            btnPause.innerText = "继续";
+            btnPause.style.background = "#00e676";
+            btnPause.style.color = "#000";
+        }
+    }
+
+    function resetSim() {
+        sys.t = 0; sys.x = 0; sys.v = 0; sys.phase = 0;
+        sys.maxAmpSeen = 5;
+        history = [];
+        if(!sys.running) togglePause();
+    }
+
+    // Resize
+    function resize() {
+        let b1 = document.getElementById('box-sim');
+        let b2 = document.getElementById('box-graph');
+        cvsSim.width = b1.clientWidth;
+        cvsSim.height = b1.clientHeight;
+        cvsGraph.width = b2.clientWidth;
+        cvsGraph.height = b2.clientHeight;
+    }
+    window.addEventListener('resize', resize);
+
+    // Inputs
+    document.getElementById('sl-fd').oninput = function() { sys.fd = parseFloat(this.value); };
+    document.getElementById('sl-fn').oninput = function() { sys.fn = parseFloat(this.value); };
+    document.getElementById('sl-c').oninput = function() { sys.c_slider = parseFloat(this.value); };
+    
+    // 手动量程滑块事件
+    document.getElementById('sl-scale').oninput = function() { 
+        sys.graphScaleY = parseFloat(this.value); 
+        document.getElementById('val-scale').innerText = sys.graphScaleY + "m";
+        document.getElementById('axis-max').innerText = "+" + sys.graphScaleY + "m";
+        document.getElementById('axis-min').innerText = "-" + sys.graphScaleY + "m";
+    };
+
+    resize();
+    loop();
+
+</script>
+</body>
+</html>

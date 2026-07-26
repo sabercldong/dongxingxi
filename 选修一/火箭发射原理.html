@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>火箭发射原理演示 (修复版)</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: rgba(30, 41, 59, 0.95);
+            --text-color: #f1f5f9;
+            --accent-color: #38bdf8;
+            --danger-color: #ef4444;
+            --success-color: #22c55e;
+        }
+
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            display: flex;
+            height: 100vh;
+        }
+
+        /* 画布容器 */
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            background: linear-gradient(to bottom, #020617 0%, #1e293b 100%);
+            overflow: hidden;
+        }
+
+        canvas#simCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 控制面板 */
+        .controls {
+            width: 340px;
+            background-color: var(--panel-bg);
+            padding: 20px;
+            box-shadow: -5px 0 20px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            border-left: 1px solid #334155;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        h2 { margin: 0 0 15px 0; color: var(--accent-color); font-size: 1.3rem; border-bottom: 2px solid #334155; padding-bottom: 10px; }
+        
+        /* 数据显示框 */
+        .stat-box {
+            background: rgba(0,0,0,0.2);
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-family: 'Courier New', monospace;
+            border: 1px solid #334155;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
+            font-size: 0.9rem;
+        }
+
+        .val { font-weight: bold; color: #fff; }
+        .highlight { color: var(--accent-color); }
+        
+        /* 图表区域 */
+        .chart-wrapper {
+            background: #0f172a;
+            border: 1px solid #475569;
+            border-radius: 6px;
+            padding: 5px;
+            margin-bottom: 20px;
+            position: relative;
+        }
+        .chart-title {
+            position: absolute;
+            top: 5px; left: 10px;
+            font-size: 0.75rem; color: #94a3b8;
+        }
+        canvas#chartCanvas {
+            width: 100%;
+            height: 120px;
+            display: block;
+        }
+
+        /* 滑块控制 */
+        .control-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: #cbd5e1; }
+        input[type="range"] { width: 100%; cursor: pointer; accent-color: var(--accent-color); }
+        .range-val { float: right; font-family: monospace; color: var(--accent-color); }
+
+        /* 按钮 */
+        button {
+            width: 100%;
+            padding: 14px;
+            background-color: var(--accent-color);
+            color: #0f172a;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 800;
+            font-size: 1rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.2s;
+        }
+        button:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        button:disabled { background-color: #475569; cursor: not-allowed; transform: none; color: #94a3b8; }
+        
+        .reset-btn {
+            background-color: transparent;
+            border: 1px solid #475569;
+            color: #94a3b8;
+            margin-top: 10px;
+        }
+        .reset-btn:hover { background-color: #334155; color: white; }
+
+        .status-msg {
+            text-align: center;
+            font-size: 0.8rem;
+            margin-top: 5px;
+            min-height: 1.2em;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="canvas-container" id="sceneContainer">
+        <canvas id="simCanvas"></canvas>
+    </div>
+
+    <div class="controls">
+        <h2>🚀 发射控制台</h2>
+        
+        <div class="stat-box">
+            <div class="stat-row"><span>高度 (H):</span> <span id="val-h" class="val">0 m</span></div>
+            <div class="stat-row"><span>速度 (v):</span> <span id="val-v" class="val">0 m/s</span></div>
+            <div class="stat-row"><span>加速度 (a):</span> <span id="val-a" class="val highlight">0.00 m/s²</span></div>
+            <div class="stat-row" style="margin-top:8px; border-top:1px dashed #555; padding-top:5px;">
+                <span>总质量 (M):</span> <span id="val-m" class="val">0 kg</span>
+            </div>
+            <div class="stat-row">
+                <span>推力 (F):</span> <span id="val-f" class="val">0 kN</span>
+            </div>
+        </div>
+
+        <div class="chart-wrapper">
+            <div class="chart-title">加速度变化曲线 (a-t)</div>
+            <canvas id="chartCanvas" width="300" height="120"></canvas>
+        </div>
+
+        <div class="control-group">
+            <label>燃料燃烧率 (dm/dt) <span id="lbl-burn" class="range-val">50 kg/s</span></label>
+            <input type="range" id="inp-burn" min="10" max="150" value="80">
+            <small style="color:#64748b; font-size:0.75rem;">决定推力大小 (恒定喷射)</small>
+        </div>
+
+        <div class="control-group">
+            <label>携带燃料量 <span id="lbl-fuel" class="range-val">3000 kg</span></label>
+            <input type="range" id="inp-fuel" min="500" max="5000" step="100" value="3000">
+        </div>
+
+        <button id="btn-launch">发射 (LAUNCH)</button>
+        <div id="status-text" class="status-msg" style="color:#22c55e">推重比 > 1.0，可以起飞</div>
+        <button id="btn-reset" class="reset-btn">重置系统</button>
+    </div>
+
+<script>
+    // === 配置与常量 ===
+    const CONFIG = {
+        g: 9.81,            // 重力加速度
+        ve: 1800,           // 喷气速度 (m/s) - 提高这个值让推力更明显
+        dryMass: 1000,      // 火箭干重 (kg)
+        scalePixelsPerMeter: 5, // 画面缩放比例
+        dt: 0.02            // 物理时间步长 (s)
+    };
+
+    // === 全局状态 ===
+    const state = {
+        t: 0,               // 仿真时间
+        y: 0,               // 高度 (m)
+        v: 0,               // 速度 (m/s)
+        a: 0,               // 加速度 (m/s^2)
+        fuel: 0,            // 当前燃料 (kg)
+        maxFuel: 0,         // 初始燃料
+        burnRate: 0,        // 燃烧率 (kg/s)
+        isRunning: false,
+        history: [],        // 用于图表的数据历史
+        stars: []           // 背景星星
+    };
+
+    let animFrameId;
+
+    // === DOM 元素 ===
+    const dom = {
+        simCanvas: document.getElementById('simCanvas'),
+        chartCanvas: document.getElementById('chartCanvas'),
+        container: document.getElementById('sceneContainer'),
+        h: document.getElementById('val-h'),
+        v: document.getElementById('val-v'),
+        a: document.getElementById('val-a'),
+        m: document.getElementById('val-m'),
+        f: document.getElementById('val-f'),
+        btnLaunch: document.getElementById('btn-launch'),
+        btnReset: document.getElementById('btn-reset'),
+        inpBurn: document.getElementById('inp-burn'),
+        inpFuel: document.getElementById('inp-fuel'),
+        lblBurn: document.getElementById('lbl-burn'),
+        lblFuel: document.getElementById('lbl-fuel'),
+        status: document.getElementById('status-text')
+    };
+
+    const ctx = dom.simCanvas.getContext('2d');
+    const chartCtx = dom.chartCanvas.getContext('2d');
+
+    // === 初始化 ===
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        
+        // 生成背景星星
+        for(let i=0; i<150; i++) {
+            state.stars.push({
+                x: Math.random(), 
+                y: Math.random(), 
+                size: Math.random() * 2 + 0.5,
+                alpha: Math.random() * 0.8 + 0.2
+            });
+        }
+
+        // 绑定事件
+        dom.inpBurn.addEventListener('input', updateInputs);
+        dom.inpFuel.addEventListener('input', updateInputs);
+        dom.btnLaunch.addEventListener('click', startLaunch);
+        dom.btnReset.addEventListener('click', resetSim);
+
+        resetSim();
+    }
+
+    function resize() {
+        dom.simCanvas.width = dom.container.clientWidth;
+        dom.simCanvas.height = dom.container.clientHeight;
+        drawFrame(); // 重绘一帧
+    }
+
+    function updateInputs() {
+        if (state.isRunning) return;
+        
+        const burnRate = parseFloat(dom.inpBurn.value);
+        const fuelMass = parseFloat(dom.inpFuel.value);
+        
+        dom.lblBurn.innerText = burnRate + " kg/s";
+        dom.lblFuel.innerText = fuelMass + " kg";
+
+        // 预计算推重比提示
+        const totalMass = CONFIG.dryMass + fuelMass;
+        const thrust = burnRate * CONFIG.ve;
+        const weight = totalMass * CONFIG.g;
+        const twr = thrust / weight; // 推重比
+
+        dom.status.innerText = `起飞推重比 TWR: ${twr.toFixed(2)}`;
+        if (twr < 1.0) {
+            dom.status.style.color = '#ef4444';
+            dom.status.innerText += " (推力不足，无法起飞！)";
+            dom.btnLaunch.disabled = true;
+        } else {
+            dom.status.style.color = '#22c55e';
+            dom.btnLaunch.disabled = false;
+        }
+
+        resetSimValuesOnly();
+        drawFrame();
+    }
+
+    function resetSimValuesOnly() {
+        state.t = 0;
+        state.y = 0;
+        state.v = 0;
+        state.a = 0;
+        state.history = [];
+        state.burnRate = parseFloat(dom.inpBurn.value);
+        state.maxFuel = parseFloat(dom.inpFuel.value);
+        state.fuel = state.maxFuel;
+        updateUI();
+    }
+
+    function resetSim() {
+        state.isRunning = false;
+        cancelAnimationFrame(animFrameId);
+        
+        dom.inpBurn.disabled = false;
+        dom.inpFuel.disabled = false;
+        dom.btnLaunch.disabled = false;
+        dom.btnLaunch.innerText = "发射 (LAUNCH)";
+        
+        updateInputs(); // 触发一次输入更新以设置初始值
+    }
+
+    function startLaunch() {
+        if(state.isRunning) return;
+        state.isRunning = true;
+        dom.inpBurn.disabled = true;
+        dom.inpFuel.disabled = true;
+        dom.btnLaunch.disabled = true;
+        dom.btnLaunch.innerText = "发射中...";
+        
+        lastTime = performance.now();
+        loop();
+    }
+
+    // === 物理引擎核心 ===
+    let lastTime = 0;
+    let frameCount = 0;
+
+    function loop(timestamp) {
+        if (!state.isRunning) return;
+        
+        // 物理更新 (使用固定时间步长累积，保证稳定性)
+        // 为了演示流畅，我们每帧运行一次物理步长
+        updatePhysics();
+        drawFrame();
+        
+        animFrameId = requestAnimationFrame(loop);
+    }
+
+    function updatePhysics() {
+        const dt = CONFIG.dt; // 使用固定步长，而非 real-time，方便演示
+        state.t += dt;
+
+        let thrust = 0;
+        let currentMass = CONFIG.dryMass + state.fuel;
+
+        // 1. 燃料燃烧计算
+        if (state.fuel > 0) {
+            let burnAmount = state.burnRate * dt;
+            if (burnAmount > state.fuel) burnAmount = state.fuel;
+            
+            state.fuel -= burnAmount;
+            
+            // F = dm/dt * Ve
+            // 如果燃料耗尽的那一帧，推力也要按比例减少
+            const effectiveBurnRate = burnAmount / dt;
+            thrust = effectiveBurnRate * CONFIG.ve;
+        }
+
+        // 2. 力学计算
+        const weight = currentMass * CONFIG.g;
+        // 简单的空气阻力 Fd = 0.5 * rho * v^2 * Cd * A (简化为 k*v*|v|)
+        const drag = 0.5 * state.v * Math.abs(state.v); 
+
+        const netForce = thrust - weight - drag;
+        
+        // a = F_net / m
+        state.a = netForce / currentMass;
+
+        // 3. 运动学积分
+        state.v += state.a * dt;
+        state.y += state.v * dt;
+
+        // 地面碰撞
+        if (state.y < 0) {
+            state.y = 0;
+            state.v = 0;
+            if (thrust < weight) state.a = 0; // 推力不足时静止
+        }
+
+        // 4. 记录历史数据 (用于绘图)
+        frameCount++;
+        if (frameCount % 5 === 0) { // 每5帧记录一次，避免数据过多
+            state.history.push({
+                t: state.t,
+                a: state.a,
+                hasFuel: state.fuel > 0
+            });
+            // 限制数组长度，太长会移除旧数据，形成滚动窗口
+            if (state.history.length > 300) state.history.shift();
+        }
+
+        updateUI(thrust, currentMass);
+    }
+
+    function updateUI(thrust = 0, mass = 0) {
+        dom.h.innerText = state.y.toFixed(1) + " m";
+        dom.v.innerText = state.v.toFixed(1) + " m/s";
+        dom.a.innerText = state.a.toFixed(2) + " m/s²";
+        dom.m.innerText = Math.round(mass || (CONFIG.dryMass + state.fuel)) + " kg";
+        dom.f.innerText = (thrust / 1000).toFixed(1) + " kN";
+    }
+
+    // === 渲染引擎 ===
+    function drawFrame() {
+        const w = dom.simCanvas.width;
+        const h = dom.simCanvas.height;
+
+        // 1. 计算视口 (Camera)
+        // 目标：火箭保持在屏幕下 1/3 处，除非接近地面
+        const screenGroundY = h - 50; 
+        const pixelY = state.y * CONFIG.scalePixelsPerMeter;
+        
+        let offsetY = 0;
+        // 如果火箭高度超过屏幕中线，开始移动"摄像机"
+        if (pixelY > h / 2) {
+            offsetY = pixelY - h / 2;
+        }
+
+        // 2. 清空画布
+        ctx.clearRect(0, 0, w, h);
+
+        // 3. 绘制背景 (带视差滚动)
+        ctx.save();
+        state.stars.forEach(star => {
+            // 星星移动速度较慢 (0.1倍)
+            let starY = (star.y * h + offsetY * 0.1) % h;
+            // 修正负数取模
+            if (starY < 0) starY += h; 
+            
+            ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
+            ctx.beginPath();
+            ctx.arc(star.x * w, h - starY, star.size, 0, Math.PI*2);
+            ctx.fill();
+        });
+        ctx.restore();
+
+        // 4. 绘制地面
+        const drawGroundY = screenGroundY + offsetY;
+        if (drawGroundY > 0) {
+            ctx.fillStyle = '#334155';
+            ctx.fillRect(0, drawGroundY, w, h - drawGroundY + 100);
+            
+            // 发射台
+            ctx.fillStyle = '#64748b';
+            ctx.fillRect(w/2 - 30, drawGroundY - 10, 60, 10);
+        }
+
+        // 5. 绘制火箭
+        // 火箭在屏幕上的位置
+        let rocketScreenY = drawGroundY - pixelY; // 如果没有offsetY，这就是绝对位置
+        // 实际上 rocketScreenY = screenGroundY + offsetY - pixelY
+        // 当 offsetY = pixelY - h/2 时， rocketScreenY = screenGroundY - h/2 = h - 50 - h/2 = h/2 - 50
+        
+        ctx.save();
+        ctx.translate(w/2, rocketScreenY);
+
+        // 尾焰 (随机闪烁)
+        if (state.fuel > 0 && state.isRunning) {
+            const flameLen = Math.random() * 40 + 40 + (state.burnRate / 2);
+            ctx.beginPath();
+            ctx.moveTo(-10, 0);
+            ctx.lineTo(10, 0);
+            ctx.lineTo(0, flameLen);
+            ctx.fillStyle = `rgba(245, 158, 11, ${Math.random() * 0.5 + 0.5})`;
+            ctx.fill();
+            
+            ctx.beginPath();
+            ctx.moveTo(-5, 0);
+            ctx.lineTo(5, 0);
+            ctx.lineTo(0, flameLen * 0.6);
+            ctx.fillStyle = '#fef3c7'; // 内焰
+            ctx.fill();
+        }
+
+        // 箭体
+        ctx.fillStyle = '#e2e8f0';
+        ctx.fillRect(-12, -60, 24, 60);
+        
+        // 燃料条指示
+        if (state.maxFuel > 0) {
+            const fuelPct = state.fuel / state.maxFuel;
+            ctx.fillStyle = '#38bdf8';
+            ctx.fillRect(-12, -60 + 60*(1-fuelPct), 24, 60*fuelPct);
+        }
+
+        // 边框
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(-12, -60, 24, 60);
+
+        // 箭头
+        ctx.beginPath();
+        ctx.moveTo(-12, -60);
+        ctx.lineTo(12, -60);
+        ctx.lineTo(0, -85);
+        ctx.fillStyle = '#ef4444';
+        ctx.fill();
+
+        // 尾翼
+        ctx.fillStyle = '#64748b';
+        ctx.beginPath();
+        ctx.moveTo(-12, -10);
+        ctx.lineTo(-25, 10);
+        ctx.lineTo(-12, 0);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(12, -10);
+        ctx.lineTo(25, 10);
+        ctx.lineTo(12, 0);
+        ctx.fill();
+
+        ctx.restore();
+
+        // 6. 绘制图表
+        drawChart();
+    }
+
+    function drawChart() {
+        const w = chartCanvas.width;
+        const h = chartCanvas.height;
+        chartCtx.clearRect(0, 0, w, h);
+        
+        // 网格线
+        chartCtx.strokeStyle = '#334155';
+        chartCtx.lineWidth = 1;
+        chartCtx.beginPath();
+        chartCtx.moveTo(0, h/2);
+        chartCtx.lineTo(w, h/2); // 0线
+        chartCtx.stroke();
+
+        if (state.history.length < 2) return;
+
+        // 动态缩放 Y 轴
+        let maxA = 20; // 默认最小显示范围
+        state.history.forEach(d => {
+            if (Math.abs(d.a) > maxA) maxA = Math.abs(d.a);
+        });
+        // 稍微留点余量
+        maxA *= 1.1; 
+
+        // 绘制曲线
+        chartCtx.beginPath();
+        chartCtx.strokeStyle = '#38bdf8';
+        chartCtx.lineWidth = 2;
+
+        for (let i = 0; i < state.history.length; i++) {
+            const point = state.history[i];
+            const x = (i / (state.history.length - 1)) * w;
+            // 映射 Y: h/2 是 0, 向上是正
+            const y = h/2 - (point.a / maxA) * (h/2);
+            
+            if (i === 0) chartCtx.moveTo(x, y);
+            else chartCtx.lineTo(x, y);
+        }
+        chartCtx.stroke();
+
+        // 标记燃料耗尽点
+        state.history.forEach((d, i) => {
+            if (i > 0 && state.history[i-1].hasFuel && !d.hasFuel) {
+                const x = (i / (state.history.length - 1)) * w;
+                const y = h/2 - (d.a / maxA) * (h/2);
+                
+                chartCtx.fillStyle = '#ef4444';
+                chartCtx.beginPath();
+                chartCtx.arc(x, y, 4, 0, Math.PI*2);
+                chartCtx.fill();
+                
+                chartCtx.fillStyle = '#ef4444';
+                chartCtx.font = "10px sans-serif";
+                chartCtx.fillText("SECO", x - 15, y - 10); // Main Engine Cut Off
+            }
+        });
+    }
+
+    // 启动
+    init();
+
+</script>
+</body>
+</html>

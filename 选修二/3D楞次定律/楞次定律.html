@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>楞次定律 3D (顶部下落版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', sans-serif; background-color: #151515; }
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* HUD 显示 */
+        #physics-hud {
+            position: absolute; top: 20px; left: 20px; 
+            background: rgba(0, 0, 0, 0.85); color: #fff; 
+            padding: 15px; border-radius: 8px; border-left: 4px solid #00d2ff;
+            font-family: monospace; z-index: 10; pointer-events: none;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            min-width: 260px;
+        }
+        .hud-row { margin-bottom: 6px; font-size: 14px; color:#ddd; }
+        .hud-val { float: right; font-weight: bold; color: #00d2ff; }
+        .hud-highlight { color: #ffff00; font-weight: bold; font-size: 1.1em; }
+
+        /* 右侧控制面板 */
+        #ui-panel {
+            position: absolute; top: 0; right: 0; width: 300px; height: 100vh;
+            background: rgba(30, 30, 30, 0.95); backdrop-filter: blur(10px);
+            border-left: 1px solid #444; padding: 20px; box-sizing: border-box;
+            color: #eee; overflow-y: auto; z-index: 10;
+        }
+
+        h2 { border-bottom: 1px solid #666; padding-bottom: 10px; margin-top: 0; }
+        button {
+            width: 100%; padding: 12px; margin-bottom: 10px; border: none; border-radius: 4px;
+            background: #007bff; color: white; cursor: pointer; font-weight: bold; transition: 0.2s;
+        }
+        button:hover { background: #0056b3; }
+        button.secondary { background: #555; }
+        button.warning { background: #d39e00; color:#fff; }
+
+        .legend { margin-top: 20px; font-size: 0.9rem; color: #ccc; }
+        .legend div { display: flex; align-items: center; margin-bottom: 8px; }
+        .dot { width: 12px; height: 12px; margin-right: 10px; border-radius: 50%; }
+        
+        #error-msg { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:red; background:white; padding:20px; display:none; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+    <div id="error-msg"></div>
+
+    <div id="physics-hud">
+        <div style="font-size:16px; margin-bottom:10px; border-bottom:1px solid #555; padding-bottom:5px;">
+            实验状态
+        </div>
+        <div class="hud-row">位置: <span id="hud-pos" class="hud-val">顶部 (开始)</span></div>
+        <div class="hud-row">阶段: <span id="hud-phase" class="hud-val">--</span></div>
+        <div class="hud-row">感应磁场: <span id="hud-bind" class="hud-val">--</span></div>
+        <div style="margin-top:12px; padding-top:8px; border-top:1px dashed #444;">
+            电流方向:<br>
+            <span id="hud-dir" class="hud-highlight">--</span>
+        </div>
+    </div>
+
+    <div id="ui-panel">
+        <h2>控制台</h2>
+        <button id="btn-pause-start">暂停 / 继续</button>
+        <button id="btn-reset" class="secondary">重置 (回到顶部)</button>
+        <button id="btn-flip" class="warning">切换磁极 (当前: N极在下)</button>
+        
+        <div class="legend">
+            <div style="font-weight:bold; margin-bottom:10px; color:#fff;">图例说明</div>
+            <div><span class="dot" style="background:red;"></span> N 极 (北)</div>
+            <div><span class="dot" style="background:blue;"></span> S 极 (南)</div>
+            <div><span class="dot" style="border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 10px solid yellow; width:0; height:0; background:none;"></span> 电流箭头</div>
+            
+            <p style="font-size:0.85rem; color:#aaa; margin-top:20px; line-height:1.5; border-top:1px solid #555; padding-top:10px;">
+                <strong>物理说明：</strong><br>
+                1. 磁铁从上方下落。<br>
+                2. 穿过线圈中心时，磁通量变化率反向。<br>
+                3. 电流方向随之翻转。
+            </p>
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+
+    <script>
+        let scene, camera, renderer, controls;
+        let coilMesh, magnetMesh;
+        let arrows = [];
+        let coilPath;
+        
+        // 状态
+        let isRunning = true;
+        let time = 0;
+        let isNorthBottom = true;
+        
+        // 物理参数
+        const FREQUENCY = 0.015;
+        const AMPLITUDE = 20; // 增大振幅，确保起始位置在线圈很远的地方
+        
+        // UI 元素
+        const elPos = document.getElementById('hud-pos');
+        const elPhase = document.getElementById('hud-phase');
+        const elBind = document.getElementById('hud-bind');
+        const elDir = document.getElementById('hud-dir');
+        const btnFlip = document.getElementById('btn-flip');
+
+        window.onload = function() {
+            try {
+                init();
+                animate();
+            } catch(e) {
+                document.getElementById('error-msg').style.display = 'block';
+                document.getElementById('error-msg').innerText = "加载失败: " + e.message;
+            }
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x151515);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 1000);
+            camera.position.set(30, 20, 30); 
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            if(typeof THREE.OrbitControls !== 'undefined') {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            }
+
+            scene.add(new THREE.AmbientLight(0x404040));
+            const light = new THREE.DirectionalLight(0xffffff, 1.2);
+            light.position.set(10, 20, 10);
+            light.castShadow = true;
+            scene.add(light);
+
+            // --- 1. 线圈 (逆时针螺旋) ---
+            const points = [];
+            const radius = 4;
+            const height = 12;
+            const turns = 10;
+            const segments = 500;
+
+            for(let i=0; i<=segments; i++) {
+                const t = i/segments;
+                const angle = t * Math.PI * 2 * turns;
+                
+                // 逆时针螺旋: z = -sin
+                const x = Math.cos(angle) * radius;
+                const z = -Math.sin(angle) * radius; 
+                const y = (t - 0.5) * height;
+                points.push(new THREE.Vector3(x, y, z));
+            }
+            coilPath = new THREE.CatmullRomCurve3(points);
+
+            const tube = new THREE.Mesh(
+                new THREE.TubeGeometry(coilPath, 400, 0.25, 8, false),
+                new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.6, roughness: 0.3 })
+            );
+            scene.add(tube);
+
+            // --- 2. 箭头 ---
+            const arrowGeo = new THREE.ConeGeometry(0.5, 1.5, 10);
+            arrowGeo.rotateX(Math.PI / 2);
+            const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+
+            for(let i=0; i<20; i++) {
+                const t = i / 20;
+                const pos = coilPath.getPointAt(t);
+                const tangent = coilPath.getTangentAt(t).normalize();
+
+                const arrow = new THREE.Mesh(arrowGeo, arrowMat);
+                const offset = new THREE.Vector3(pos.x, 0, pos.z).normalize().multiplyScalar(0.6);
+                arrow.position.copy(pos).add(offset);
+                
+                arrow.userData = { tangent: tangent };
+                scene.add(arrow);
+                arrows.push(arrow);
+            }
+
+            // --- 3. 磁铁 ---
+            magnetMesh = new THREE.Group();
+            const poleGeo = new THREE.CylinderGeometry(1.4, 1.4, 6, 32);
+            magnetMesh.bottomPole = new THREE.Mesh(poleGeo, new THREE.MeshStandardMaterial({ color: 0xff0000 }));
+            magnetMesh.bottomPole.position.y = -3;
+            magnetMesh.topPole = new THREE.Mesh(poleGeo, new THREE.MeshStandardMaterial({ color: 0x0000ff }));
+            magnetMesh.topPole.position.y = 3;
+            magnetMesh.add(magnetMesh.bottomPole);
+            magnetMesh.add(magnetMesh.topPole);
+            
+            // 初始位置设为顶部
+            magnetMesh.position.y = AMPLITUDE;
+            scene.add(magnetMesh);
+
+            scene.add(new THREE.GridHelper(50, 50, 0x333333, 0x222222));
+
+            // 事件
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth/window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+            
+            document.getElementById('btn-pause-start').onclick = () => isRunning = !isRunning;
+            document.getElementById('btn-reset').onclick = resetSimulation;
+            document.getElementById('btn-flip').onclick = () => {
+                isNorthBottom = !isNorthBottom;
+                magnetMesh.bottomPole.material.color.set(isNorthBottom ? 0xff0000 : 0x0000ff);
+                magnetMesh.topPole.material.color.set(isNorthBottom ? 0x0000ff : 0xff0000);
+                btnFlip.innerText = `切换磁极 (当前: ${isNorthBottom ? 'N' : 'S'}极在下)`;
+            };
+        }
+
+        function resetSimulation() {
+            isRunning = false;
+            time = 0; 
+            // 强制设为顶部位置
+            magnetMesh.position.y = AMPLITUDE; 
+            updatePhysics(AMPLITUDE, 0, 0); // 速度为0
+            updateArrows(0);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(controls) controls.update();
+
+            if(isRunning) {
+                time++;
+                // 运动方程修改: COS 使得 t=0 时 y=Amplitude (顶部)
+                const y = AMPLITUDE * Math.cos(time * FREQUENCY);
+                
+                // 速度 v = dy/dt = -A * w * sin(wt)
+                // 注意符号: sin(0)=0 (静止), sin(small)>0 => v为负(向下)
+                const v = -AMPLITUDE * FREQUENCY * Math.sin(time * FREQUENCY); 
+                
+                magnetMesh.position.y = y;
+
+                // 物理计算
+                const distFactor = Math.exp(-(y*y)/50);
+                
+                // 公式: EMF ∝ - (y * v)
+                // N极下落时 (y>0, v<0): y*v < 0 -> EMF > 0 (逆时针)
+                let current = - (y * v) * 0.8 * distFactor; 
+
+                if(!isNorthBottom) current = -current;
+
+                updateArrows(current);
+                updatePhysics(y, v, current);
+            }
+            renderer.render(scene, camera);
+        }
+
+        function updateArrows(current) {
+            const visible = Math.abs(current) > 0.1;
+            arrows.forEach(arrow => {
+                arrow.visible = visible;
+                if(visible) {
+                    const s = Math.min(Math.abs(current)*0.8, 2.0);
+                    arrow.scale.set(s,s,s);
+                    
+                    const target = arrow.position.clone();
+                    if(current > 0) target.add(arrow.userData.tangent); // 逆时针
+                    else target.sub(arrow.userData.tangent); // 顺时针
+                    
+                    arrow.lookAt(target);
+                }
+            });
+        }
+
+        function updatePhysics(y, v, current) {
+            // 位置描述
+            if(y > 8) elPos.innerText = "上方 (接近中)";
+            else if (y < -8) elPos.innerText = "下方 (远离中)";
+            else elPos.innerText = "线圈内部";
+
+            if(Math.abs(current) < 0.1) {
+                elPhase.innerText = (Math.abs(y) > 8) ? "距离过远" : "速度过慢";
+                elDir.innerText = "无电流";
+                elDir.style.color = "#777";
+                elBind.innerText = "--";
+                return;
+            }
+
+            // 接近判定: y和v异号 (y正v负 或 y负v正)
+            const isApproaching = (y * v) < 0; 
+            
+            if(isApproaching) {
+                elPhase.innerText = "正在接近 (磁通量↑)";
+                elBind.innerText = isNorthBottom ? "向上 (排斥N极)" : "向下 (排斥S极)";
+            } else {
+                elPhase.innerText = "正在远离 (磁通量↓)";
+                elBind.innerText = isNorthBottom ? "向下 (吸引N极)" : "向上 (吸引S极)";
+            }
+
+            if(current > 0) {
+                elDir.innerText = "逆时针 (CCW)";
+                elDir.style.color = "#00ff00"; 
+            } else {
+                elDir.innerText = "顺时针 (CW)";
+                elDir.style.color = "#ffaa00"; 
+            }
+        }
+    </script>
+</body>
+</html>

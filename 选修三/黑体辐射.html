@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>黑体辐射演示 - 原理详解版</title>
+    <style>
+        :root {
+            --bg-color: #0d1117;
+            --sidebar-bg: #161b22;
+            --text-primary: #c9d1d9;
+            --text-secondary: #8b949e;
+            --accent-color: #58a6ff;
+            --border-color: #30363d;
+            --highlight: #238636;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            height: 100vh;
+            display: flex;
+            overflow: hidden; /* 禁止整体滚动 */
+        }
+
+        /* 左侧：绘图区域 */
+        #main-view {
+            flex: 1;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border-color);
+        }
+
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 绘图区覆盖层信息 */
+        .chart-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        /* 右侧：功能与原理区 */
+        #sidebar {
+            width: 400px; /* 固定宽度 */
+            background-color: var(--sidebar-bg);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto; /* 允许内部滚动 */
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            padding: 20px;
+            gap: 20px;
+            min-width: 350px;
+        }
+
+        h2, h3 { margin: 0 0 10px 0; color: #fff; }
+        h3 { font-size: 1.1rem; margin-top: 10px; color: var(--accent-color); }
+        p { font-size: 0.9rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 10px; }
+
+        /* 控制组件样式 */
+        .control-panel {
+            background: rgba(255,255,255,0.05);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .slider-group {
+            margin-bottom: 15px;
+        }
+
+        label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .preset-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        button {
+            background: #21262d;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: 0.2s;
+            font-size: 0.85rem;
+        }
+
+        button:hover {
+            background: #30363d;
+            border-color: #8b949e;
+        }
+
+        /* 数据展示卡片 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        .stat-box {
+            background: rgba(0,0,0,0.2);
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+
+        .stat-val {
+            display: block;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: var(--accent-color);
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        /* 颜色球 */
+        #color-preview {
+            height: 40px;
+            border-radius: 4px;
+            margin-top: 10px;
+            border: 1px solid #fff;
+            transition: background-color 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-shadow: 0 0 4px black;
+            font-weight: bold;
+        }
+
+        /* 原理折叠面板 */
+        details {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            margin-bottom: 10px;
+            overflow: hidden;
+        }
+
+        summary {
+            padding: 12px;
+            cursor: pointer;
+            font-weight: bold;
+            background: rgba(255,255,255,0.05);
+            list-style: none; /* 隐藏默认三角 */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        summary::-webkit-details-marker { display: none; }
+        
+        summary::after {
+            content: '+'; 
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+        
+        details[open] summary::after {
+            content: '-';
+        }
+
+        .details-content {
+            padding: 15px;
+            font-size: 0.9rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        /* 公式样式 */
+        .formula {
+            background: rgba(0,0,0,0.3);
+            padding: 8px;
+            text-align: center;
+            border-radius: 4px;
+            font-family: 'Times New Roman', serif;
+            font-style: italic;
+            margin: 10px 0;
+            font-size: 1.1rem;
+        }
+
+        .unit { font-family: monospace; color: #ff7b72; }
+    </style>
+</head>
+<body>
+
+    <div id="main-view">
+        <div id="canvas-wrapper">
+            <canvas id="radiationCanvas"></canvas>
+            <div class="chart-overlay">
+                <h2 style="font-size: 1.5rem; margin-bottom:5px;">光谱辐射强度分布</h2>
+                <div style="color: #aaa; font-size: 0.9rem;">Y轴: 相对强度 (自动归一化)<br>X轴: 波长 (nm)</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="sidebar">
+        
+        <div class="control-panel">
+            <h2>🎛️ 参数控制</h2>
+            
+            <div class="slider-group">
+                <label>
+                    <span>温度 (T)</span>
+                    <span id="temp-display" style="color: var(--accent-color);">5800 K</span>
+                </label>
+                <input type="range" id="temp-slider" min="100" max="12000" step="50" value="5800">
+            </div>
+
+            <div class="preset-buttons">
+                <button onclick="setTemp(300)">🌍 地球 (300K)</button>
+                <button onclick="setTemp(3000)">💡 灯泡 (3000K)</button>
+                <button onclick="setTemp(5800)">☀️ 太阳 (5800K)</button>
+                <button onclick="setTemp(9900)">⭐ 参宿七 (9900K)</button>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <span class="stat-val" id="peak-lambda">500</span>
+                    <span class="stat-label">峰值波长 (nm)</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-val" id="total-power-ratio">1.0x</span>
+                    <span class="stat-label">总功率倍率</span>
+                </div>
+            </div>
+
+            <div style="margin-top:15px;">
+                <span class="stat-label">黑体近似颜色：</span>
+                <div id="color-preview">可见颜色</div>
+            </div>
+        </div>
+
+        <div>
+            <h2>📚 原理详解</h2>
+            <p>黑体是一个理想化的物理体，它吸收所有入射的电磁辐射。其辐射出的光谱仅取决于温度。</p>
+
+            <details open>
+                <summary>1. 普朗克定律 (光谱分布)</summary>
+                <div class="details-content">
+                    <p>描述了在特定温度下，黑体辐射的能量按波长分布的规律。</p>
+                    <div class="formula">
+                        B(λ,T) = (2hc² / λ⁵) × (1 / (e^(hc/λkT) - 1))
+                    </div>
+                    <p>这也是你在左侧看到的曲线。你可以观察到：温度越高，所有波长的辐射强度都增加，且曲线整体变得更"尖"。</p>
+                </div>
+            </details>
+
+            <details>
+                <summary>2. 维恩位移定律 (峰值移动)</summary>
+                <div class="details-content">
+                    <p>描述了辐射最强处的波长（λ<sub>peak</sub>）与温度成反比关系。</p>
+                    <div class="formula">
+                        λ<sub>peak</sub> = b / T
+                    </div>
+                    <p>其中 b ≈ 2.898 × 10⁶ nm·K。</p>
+                    <p><strong>实验：</strong> 拖动滑块增加温度，你会看到曲线的最高点（峰值）向左（短波方向/蓝光区）移动。这就是为什么高温物体发蓝光，低温物体发红光。</p>
+                </div>
+            </details>
+
+            <details>
+                <summary>3. 斯蒂芬-玻尔兹曼定律 (总能量)</summary>
+                <div class="details-content">
+                    <p>描述了单位面积辐射的总功率（曲线下方的面积）与温度的四次方成正比。</p>
+                    <div class="formula">
+                        P ∝ T⁴
+                    </div>
+                    <p><strong>注意：</strong> 为了让曲线能在屏幕上显示完整，左侧图表的Y轴会自动缩放。实际上，当温度从 3000K 升到 6000K (2倍)，总辐射能量会增加 16 倍！</p>
+                </div>
+            </details>
+        </div>
+
+        <div style="font-size: 0.8rem; text-align: center; color: #555; margin-top: auto;">
+            HTML5 Physics Simulation
+        </div>
+
+    </div>
+
+<script>
+    // --- 物理常量 ---
+    const h = 6.626e-34; 
+    const c = 3.0e8;
+    const k = 1.38e-23;
+    const b_const = 2.898e-3; // Wien's constant in m*K
+
+    // --- DOM 元素 ---
+    const canvas = document.getElementById('radiationCanvas');
+    const ctx = canvas.getContext('2d');
+    const slider = document.getElementById('temp-slider');
+    const tempDisplay = document.getElementById('temp-display');
+    const peakDisplay = document.getElementById('peak-lambda');
+    const powerDisplay = document.getElementById('total-power-ratio');
+    const colorPreview = document.getElementById('color-preview');
+    const mainView = document.getElementById('main-view');
+
+    let currentTemp = 5800;
+    let width, height;
+
+    // --- 初始化与事件 ---
+    function init() {
+        window.addEventListener('resize', resize);
+        slider.addEventListener('input', (e) => {
+            currentTemp = parseInt(e.target.value);
+            update();
+        });
+        resize();
+    }
+
+    function setTemp(t) {
+        currentTemp = t;
+        slider.value = t;
+        update();
+    }
+
+    function resize() {
+        width = mainView.clientWidth;
+        height = mainView.clientHeight;
+        canvas.width = width;
+        canvas.height = height;
+        update();
+    }
+
+    // --- 核心物理计算 ---
+
+    // 普朗克定律 (返回相对值)
+    function planck(lambdaM, T) {
+        if (lambdaM <= 0) return 0;
+        const p1 = 2 * h * c * c;
+        const p2 = (h * c) / (lambdaM * k * T);
+        return p1 / (Math.pow(lambdaM, 5) * (Math.exp(p2) - 1));
+    }
+
+    // 维恩位移定律
+    function getPeakLambda(T) {
+        return b_const / T; // returns meters
+    }
+
+    // 色温转RGB (近似算法)
+    function kelvinToRGB(kelvin) {
+        let temp = kelvin / 100;
+        let r, g, b;
+        if (temp <= 66) {
+            r = 255;
+            g = 99.4708025861 * Math.log(temp) - 161.1195681661;
+            if (temp <= 19) b = 0;
+            else b = 138.5177312231 * Math.log(temp - 10) - 305.0447927307;
+        } else {
+            r = 329.698727446 * Math.pow(temp - 60, -0.1332047592);
+            g = 288.1221695283 * Math.pow(temp - 60, -0.0755148492);
+            b = 255;
+        }
+        return {
+            r: Math.min(255, Math.max(0, r)),
+            g: Math.min(255, Math.max(0, g)),
+            b: Math.min(255, Math.max(0, b))
+        };
+    }
+
+    // 波长转RGB颜色 (用于绘制光谱背景)
+    function wavelengthToColor(lambdaNM) {
+        let r, g, b, alpha = 1;
+        if (lambdaNM >= 380 && lambdaNM < 440) { r = -(lambdaNM - 440) / (440 - 380); g = 0; b = 1; }
+        else if (lambdaNM >= 440 && lambdaNM < 490) { r = 0; g = (lambdaNM - 440) / (490 - 440); b = 1; }
+        else if (lambdaNM >= 490 && lambdaNM < 510) { r = 0; g = 1; b = -(lambdaNM - 510) / (510 - 490); }
+        else if (lambdaNM >= 510 && lambdaNM < 580) { r = (lambdaNM - 510) / (580 - 510); g = 1; b = 0; }
+        else if (lambdaNM >= 580 && lambdaNM < 645) { r = 1; g = -(lambdaNM - 645) / (645 - 580); b = 0; }
+        else if (lambdaNM >= 645 && lambdaNM <= 780) { r = 1; g = 0; b = 0; }
+        else return null;
+
+        return `rgb(${Math.floor(r*255)},${Math.floor(g*255)},${Math.floor(b*255)})`;
+    }
+
+    // --- 绘图逻辑 ---
+    function update() {
+        // 1. 更新数值显示
+        tempDisplay.textContent = currentTemp + " K";
+        
+        const peakM = getPeakLambda(currentTemp);
+        const peakNM = peakM * 1e9;
+        peakDisplay.textContent = Math.round(peakNM);
+
+        // 斯蒂芬玻尔兹曼比率 (相对于3000K)
+        const powerRatio = Math.pow(currentTemp / 3000, 4);
+        powerDisplay.textContent = powerRatio < 0.01 ? "< 0.01x" : powerRatio.toFixed(2) + "x";
+
+        // 更新颜色预览
+        const rgb = kelvinToRGB(currentTemp);
+        colorPreview.style.backgroundColor = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+        colorPreview.style.color = (rgb.r*0.299 + rgb.g*0.587 + rgb.b*0.114) > 186 ? '#000' : '#fff';
+
+        // 2. 准备画布
+        ctx.clearRect(0, 0, width, height);
+        
+        // 动态调整X轴范围：确保峰值总是处于合适的位置，但要保留一部分UV和IR
+        // 逻辑：X轴最大值大约是峰值波长的 6 倍，以便展示拖尾
+        let maxX_NM = Math.max(3000, peakNM * 5); 
+        if (maxX_NM > 15000) maxX_NM = 15000; // 限制最大范围以免地球温度看起来太扁
+        if (currentTemp < 500) maxX_NM = 20000; // 特殊处理低温
+
+        // 计算Y轴缩放
+        const peakIntensity = planck(peakM, currentTemp);
+        const maxY = peakIntensity * 1.2; // 顶部留白
+
+        // 3. 绘制可见光背景 (380-780nm)
+        const xStartVis = (380 / maxX_NM) * width;
+        const xEndVis = (780 / maxX_NM) * width;
+        
+        if (xStartVis < width) {
+            const gradient = ctx.createLinearGradient(xStartVis, 0, xEndVis, 0);
+            for (let l = 380; l <= 780; l+=10) {
+                const c = wavelengthToColor(l);
+                if (c) gradient.addColorStop((l-380)/(780-380), c);
+            }
+            ctx.fillStyle = gradient;
+            ctx.globalAlpha = 0.3; // 半透明背景
+            ctx.fillRect(xStartVis, 0, xEndVis - xStartVis, height);
+            ctx.globalAlpha = 1.0;
+            
+            // 标注
+            ctx.fillStyle = "#fff";
+            ctx.font = "12px monospace";
+            ctx.fillText("可见光", xStartVis + (xEndVis-xStartVis)/2 - 15, height - 10);
+        }
+
+        // 4. 绘制普朗克曲线
+        ctx.beginPath();
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = "#fff";
+        ctx.lineJoin = "round";
+
+        // 步进优化：屏幕每2个像素计算一次，减少计算量
+        for (let px = 0; px <= width; px+=2) {
+            const nm = (px / width) * maxX_NM;
+            const m = nm * 1e-9;
+            const intensity = planck(m, currentTemp);
+            
+            // 归一化Y坐标
+            const py = height - (intensity / maxY) * height;
+            
+            if (px === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // 5. 绘制峰值指示器
+        const peakPx = (peakNM / maxX_NM) * width;
+        const peakPy = height - (peakIntensity / maxY) * height;
+        
+        if (peakPx < width) {
+            // 虚线
+            ctx.beginPath();
+            ctx.setLineDash([5, 5]);
+            ctx.strokeStyle = "rgba(255,255,255,0.5)";
+            ctx.lineWidth = 1;
+            ctx.moveTo(peakPx, peakPy);
+            ctx.lineTo(peakPx, height);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // 圆点
+            ctx.beginPath();
+            ctx.fillStyle = "#fff";
+            ctx.arc(peakPx, peakPy, 6, 0, Math.PI*2);
+            ctx.fill();
+        }
+
+        // 6. 坐标轴标签
+        ctx.fillStyle = "#888";
+        ctx.font = "12px monospace";
+        ctx.textAlign = "right";
+        ctx.fillText(Math.round(maxX_NM) + " nm", width - 10, height - 10);
+        ctx.textAlign = "left";
+        ctx.fillText("0", 5, height - 10);
+    }
+
+    // 启动
+    init();
+
+</script>
+</body>
+</html>

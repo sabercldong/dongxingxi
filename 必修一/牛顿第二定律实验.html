@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>牛顿第二定律仿真实验 - 专业标准版</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #2980b9;
+            --secondary: #27ae60;
+            --accent: #c0392b;
+            --warning: #f39c12;
+            --bg-body: #f4f7f6;
+            --dark-btn: #1a252f;
+        }
+
+        body, html {
+            margin: 0; padding: 0;
+            height: 100vh; width: 100vw;
+            overflow: hidden;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background-color: var(--bg-body);
+        }
+
+        .app-wrapper {
+            display: flex; flex-direction: column;
+            height: 100vh; padding: 10px; box-sizing: border-box;
+        }
+
+        header { text-align: center; height: 30px; margin-bottom: 5px; }
+        header h1 { margin: 0; font-size: 1.2rem; color: #2c3e50; }
+
+        .main-layout {
+            display: grid; grid-template-columns: 290px 1fr;
+            gap: 10px; flex: 1; min-height: 0;
+        }
+
+        .card {
+            background: #fff; border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding: 12px; display: flex; flex-direction: column;
+        }
+
+        .control-panel { font-size: 13px; overflow-y: auto; }
+        .control-panel h3 { margin: 0 0 8px 0; font-size: 0.95rem; border-left: 4px solid var(--primary); padding-left: 8px; }
+        
+        .section { background: #f8f9fa; padding: 10px; border-radius: 6px; margin-bottom: 8px; border: 1px solid #e0e0e0; }
+        .section-title { font-weight: bold; margin-bottom: 6px; color: #333; display: block; }
+
+        .input-group { margin-bottom: 6px; }
+        .input-group label { display: block; margin-bottom: 2px; font-weight: 600; color: #666; }
+        .input-group span { font-family: "Times New Roman", serif; font-style: italic; color: var(--accent); float: right; }
+        input[type="number"], input[type="range"] { width: 100%; box-sizing: border-box; padding: 4px; cursor: pointer;}
+
+        .calc-result {
+            text-align: center; font-size: 1.1rem; font-weight: bold;
+            color: var(--primary); padding: 6px; background: #eef7fb; border-radius: 4px; margin: 5px 0;
+        }
+
+        .btn-col { display: flex; flex-direction: column; gap: 6px; }
+        button {
+            padding: 8px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; color: white; transition: 0.2s;
+        }
+        #pushBtn { background: var(--warning); border: 1px solid #d35400; }
+        #startBtn { background: var(--secondary); }
+        #resetBtn { background: var(--accent); }
+        #recordBtn { background: var(--primary); }
+        
+        .toggle-btn { 
+            font-size: 11px; padding: 6px 12px; 
+            background: var(--dark-btn); color: #fff; 
+            border: none; border-radius: 4px; cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        .toggle-btn:hover { background: #000; transform: translateY(-1px); }
+
+        .stage { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+        #simBox { height: 40%; position: relative; padding: 0; background: #fff; overflow: hidden; border: 1px solid #ddd; border-radius: 4px; }
+        canvas#simCanvas { width: 100%; height: 100%; display: block; }
+
+        .status-overlay {
+            position: absolute; top: 8px; left: 8px;
+            background: rgba(255,255,255,0.9); padding: 6px 10px;
+            border-radius: 4px; border: 1px solid #ccc; font-size: 12px; z-index: 5; line-height: 1.5;
+        }
+
+        .charts-container {
+            flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; min-height: 0;
+        }
+        .chart-card { position: relative; min-height: 0; padding: 8px; }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; font-weight: bold; font-size: 0.85rem;}
+    </style>
+</head>
+<body>
+
+<div class="app-wrapper">
+    <header><h1>探究加速度与力、质量的关系 (F = ma)</h1></header>
+
+    <div class="main-layout">
+        <aside class="card control-panel">
+            <div class="section" style="background: #fffdf0;">
+                <span class="section-title">1. 环境参数与平衡摩擦</span>
+                <div class="input-group">
+                    <label>动摩擦因数 μ: <span id="muVal">0.08</span></label>
+                    <input type="range" id="muInput" min="0" max="0.3" step="0.01" value="0.08">
+                </div>
+                <div class="input-group">
+                    <label>左端抬起角度 θ: <span id="angleVal">0.00</span></label>
+                    <input type="range" id="angleInput" min="0" max="15" step="0.01" value="0">
+                </div>
+                <button id="pushBtn" style="width: 100%;">轻推小车 (检测是否匀速)</button>
+            </div>
+
+            <div class="section">
+                <span class="section-title">2. 验证实验设定</span>
+                <div style="margin-bottom: 8px; display: flex; gap: 10px;">
+                    <label><input type="radio" name="expMode" value="modeF" checked> 恒定 m</label>
+                    <label><input type="radio" name="expMode" value="modeM"> 恒定 F</label>
+                </div>
+                <div class="input-group">
+                    <label>小车质量 m (kg)</label>
+                    <input type="number" id="massInput" min="1" max="50" value="10">
+                </div>
+                <div class="input-group">
+                    <label>挂钩拉力 F (N)</label>
+                    <input type="number" id="forceInput" min="0" max="150" value="50">
+                </div>
+            </div>
+
+            <div class="calc-result" id="accResult">a = 0.00 m/s²</div>
+
+            <div class="btn-col">
+                <button id="recordBtn">记录数据点</button>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <button id="startBtn">开始释放</button>
+                    <button id="resetBtn">复位</button>
+                </div>
+            </div>
+        </aside>
+
+        <main class="stage">
+            <div class="card" id="simBox">
+                <div class="status-overlay">
+                    速度 v: <span id="vDisp">0.00</span> m/s<br>
+                    加速度 a: <span id="aDisp">0.00</span> m/s²<br>
+                    状态: <span id="statusDisp" style="color:var(--accent); font-weight:bold;">静止</span>
+                </div>
+                <canvas id="simCanvas"></canvas>
+            </div>
+
+            <div class="charts-container">
+                <div class="card chart-card">
+                    <div class="chart-header"><span>a - F 图像</span></div>
+                    <div style="flex:1; min-height:0;"><canvas id="chartF"></canvas></div>
+                </div>
+                <div class="card chart-card">
+                    <div class="chart-header">
+                        <span id="chartMTitle">a - m 图像</span>
+                        <button class="toggle-btn" id="toggleMView">切换到 a - 1/m</button>
+                    </div>
+                    <div style="flex:1; min-height:0;"><canvas id="chartM"></canvas></div>
+                </div>
+            </div>
+        </main>
+    </div>
+</div>
+
+<script>
+    const g = 9.8; 
+    const state = {
+        mass: 10, force: 50, mu: 0.08, acc: 0, theta: 0,
+        mode: 'modeF', isRunning: false, isBalancing: false,
+        cartX: 0, velocity: 0, mViewMode: 'normal'
+    };
+    const dataPoints = { modeF: [], modeM: [] };
+
+    const simCanvas = document.getElementById('simCanvas');
+    const ctx = simCanvas.getContext('2d');
+    const vDisp = document.getElementById('vDisp');
+    const aDisp = document.getElementById('aDisp');
+    const statusDisp = document.getElementById('statusDisp');
+    let chartF, chartM;
+
+    function init() {
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        document.getElementById('muInput').addEventListener('input', (e) => {
+            state.mu = parseFloat(e.target.value);
+            document.getElementById('muVal').textContent = state.mu.toFixed(2);
+            updatePhysics();
+            drawScene();
+        });
+
+        document.getElementById('angleInput').addEventListener('input', (e) => {
+            const deg = e.target.value;
+            document.getElementById('angleVal').textContent = parseFloat(deg).toFixed(2);
+            state.theta = deg * Math.PI / 180;
+            updatePhysics();
+            drawScene();
+        });
+
+        [document.getElementById('massInput'), document.getElementById('forceInput')].forEach(el => {
+            el.addEventListener('input', () => {
+                state.mass = parseFloat(document.getElementById('massInput').value) || 1;
+                state.force = parseFloat(document.getElementById('forceInput').value) || 0;
+                updatePhysics();
+            });
+        });
+
+        document.querySelectorAll('input[name="expMode"]').forEach(r => {
+            r.addEventListener('change', (e) => {
+                state.mode = e.target.value;
+                document.getElementById('massInput').disabled = (state.mode === 'modeF');
+                document.getElementById('forceInput').disabled = (state.mode === 'modeM');
+            });
+        });
+
+        document.getElementById('pushBtn').addEventListener('click', () => { 
+            state.isBalancing = true; 
+            state.velocity = 1.0; 
+            updatePhysics(); 
+            startSim(); 
+        });
+        document.getElementById('startBtn').addEventListener('click', () => { 
+            state.isBalancing = false; 
+            updatePhysics(); 
+            startSim(); 
+        });
+        document.getElementById('resetBtn').addEventListener('click', resetSim);
+        document.getElementById('recordBtn').addEventListener('click', recordData);
+        document.getElementById('toggleMView').addEventListener('click', toggleMChartMode);
+
+        initCharts();
+        updatePhysics();
+        document.getElementById('massInput').disabled = true;
+    }
+
+    function updatePhysics() {
+        const activeForce = state.isBalancing ? 0 : state.force;
+        
+        // 物理引擎计算
+        const gravitySlide = state.mass * g * Math.sin(state.theta);
+        const friction = state.mu * state.mass * g * Math.cos(state.theta);
+        const netForce = activeForce + gravitySlide - friction;
+        
+        let calculatedAcc = netForce / state.mass;
+
+        // 阈值处理：如果加速度极小，视为 0（成功平衡摩擦力）
+        if (Math.abs(calculatedAcc) < 0.01) {
+            calculatedAcc = 0;
+        }
+
+        state.acc = calculatedAcc;
+        const displayAcc = state.acc.toFixed(2);
+        document.getElementById('accResult').textContent = "a = " + displayAcc + " m/s²";
+        aDisp.textContent = displayAcc;
+    }
+
+    function resizeCanvas() {
+        simCanvas.width = simCanvas.offsetWidth;
+        simCanvas.height = simCanvas.offsetHeight;
+        drawScene();
+    }
+
+    function drawScene() {
+        const w = simCanvas.width, h = simCanvas.height;
+        ctx.clearRect(0, 0, w, h);
+
+        const trackLen = w - 160;
+        const pulleyX = w - 60, pulleyY = h * 0.7; 
+        const cartW = 60, cartH = 30;
+
+        // 绳子高度补偿
+        const stringHeightLocal = -cartH / 2 - 5; 
+
+        ctx.save();
+        ctx.translate(pulleyX, pulleyY);
+        ctx.rotate(state.theta);
+
+        // 轨道
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-trackLen, 0); ctx.stroke();
+
+        // 小车
+        const currentX = -trackLen + state.cartX;
+        ctx.fillStyle = '#3498db';
+        ctx.fillRect(currentX, -cartH - 5, cartW, cartH);
+        
+        // 车轮
+        ctx.fillStyle = '#333';
+        ctx.beginPath(); ctx.arc(currentX + 15, -5, 5, 0, Math.PI*2); ctx.fill();
+        ctx.beginPath(); ctx.arc(currentX + 45, -5, 5, 0, Math.PI*2); ctx.fill();
+
+        // 水平绳
+        if (!state.isBalancing) {
+            ctx.beginPath(); 
+            ctx.moveTo(currentX + cartW, stringHeightLocal); 
+            ctx.lineTo(0, stringHeightLocal); 
+            ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2; ctx.stroke();
+        }
+        ctx.restore();
+
+        // 核心对齐计算：滑轮切点
+        const pulleyRadius = 12;
+        // 旋转后的水平线高度在全局坐标下的偏移需考虑 θ
+        const bendX = pulleyX - stringHeightLocal * Math.sin(state.theta);
+        const bendY = pulleyY + stringHeightLocal * Math.cos(state.theta);
+
+        // 滑轮
+        ctx.fillStyle = '#7f8c8d';
+        ctx.beginPath(); ctx.arc(pulleyX, pulleyY, pulleyRadius, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#333'; ctx.stroke();
+
+        // 垂直绳与重物
+        if (!state.isBalancing) {
+            ctx.beginPath();
+            ctx.moveTo(bendX, bendY); 
+            ctx.lineTo(bendX, bendY + 60 + state.cartX/2);
+            ctx.strokeStyle = '#e74c3c'; ctx.stroke();
+
+            ctx.fillStyle = '#c0392b';
+            ctx.fillRect(bendX - 12, bendY + 60 + state.cartX/2, 24, 20);
+            
+            // 标注力 F
+            ctx.fillStyle = "#fff";
+            ctx.font = "10px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("F", bendX, bendY + 74 + state.cartX/2);
+        }
+    }
+
+    function startSim() {
+        if (state.isRunning) return;
+        state.isRunning = true;
+        let lastT = performance.now();
+        function step(now) {
+            if (!state.isRunning) return;
+            const dt = (now - lastT) / 1000;
+            lastT = now;
+            state.velocity += state.acc * dt;
+            if (state.velocity < 0) state.velocity = 0;
+            state.cartX += state.velocity * dt * 60;
+
+            vDisp.textContent = state.velocity.toFixed(2);
+            if (state.isBalancing) {
+                if (state.acc === 0) statusDisp.textContent = "匀速 (平衡成功)";
+                else statusDisp.textContent = state.acc > 0 ? "加速 (θ 过大)" : "减速 (θ 过小)";
+            } else {
+                statusDisp.textContent = "实验运行中...";
+            }
+
+            if (state.cartX > simCanvas.width - 240 || (state.cartX < 0 && state.velocity <= 0)) {
+                state.isRunning = false;
+                if (!state.isBalancing) statusDisp.textContent = "已到达终点";
+            } else {
+                state.animationId = requestAnimationFrame(step);
+            }
+            drawScene();
+        }
+        state.animationId = requestAnimationFrame(step);
+    }
+
+    function resetSim() {
+        state.isRunning = false;
+        state.isBalancing = false;
+        cancelAnimationFrame(state.animationId);
+        state.cartX = 0; state.velocity = 0;
+        vDisp.textContent = "0.00"; statusDisp.textContent = "静止";
+        updatePhysics();
+        drawScene();
+    }
+
+    function initCharts() {
+        const commonOpt = { 
+            responsive: true, 
+            maintainAspectRatio: false, 
+            scales: { 
+                x: { type: 'linear', title: {display: true, text: ''} }, 
+                y: { min: 0, title: {display: true, text: 'a (m/s²)'} } 
+            }, 
+            plugins: { legend: { display: false } } 
+        };
+        chartF = new Chart(document.getElementById('chartF'), { 
+            type: 'scatter', 
+            data: { datasets: [{ data: [], backgroundColor: '#2980b9' }] }, 
+            options: {...commonOpt, scales: {...commonOpt.scales, x: {...commonOpt.scales.x, title: {display:true, text: 'F (N)'}}}} 
+        });
+        chartM = new Chart(document.getElementById('chartM'), { 
+            type: 'scatter', 
+            data: { datasets: [{ data: [], backgroundColor: '#27ae60' }] }, 
+            options: {...commonOpt, scales: {...commonOpt.scales, x: {...commonOpt.scales.x, title: {display:true, text: 'm (kg)'}}}} 
+        });
+    }
+
+    function recordData() {
+        if (state.isBalancing) return alert("平衡摩擦力过程中无法记录实验数据。");
+        if (state.mode === 'modeF') {
+            dataPoints.modeF.push({ x: state.force, y: state.acc });
+            chartF.data.datasets[0].data = [...dataPoints.modeF].sort((a,b)=>a.x-b.x);
+            chartF.update();
+        } else {
+            dataPoints.modeM.push({ x: state.mass, y: state.acc });
+            refreshMChart();
+        }
+    }
+
+    function toggleMChartMode() {
+        state.mViewMode = (state.mViewMode === 'normal' ? 'inverse' : 'normal');
+        document.getElementById('toggleMView').textContent = state.mViewMode === 'normal' ? "切换到 a - 1/m" : "切换到 a - m";
+        document.getElementById('chartMTitle').textContent = state.mViewMode === 'normal' ? "a - m 图像" : "a - 1/m 图像";
+        chartM.options.scales.x.title.text = state.mViewMode === 'normal' ? "m (kg)" : "1/m (1/kg)";
+        refreshMChart();
+    }
+
+    function refreshMChart() {
+        let displayData = state.mViewMode === 'normal' 
+            ? dataPoints.modeM.map(p => ({ x: p.x, y: p.y }))
+            : dataPoints.modeM.map(p => ({ x: 1/p.x, y: p.y }));
+        chartM.data.datasets[0].data = displayData.sort((a,b)=>a.x-b.x);
+        chartM.update();
+    }
+
+    init();
+</script>
+</body>
+</html>

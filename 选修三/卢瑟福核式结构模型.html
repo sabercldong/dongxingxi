@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>原子结构演示 (Atomic Structure)</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --panel-bg: #1e293b;
+            --text-main: #e2e8f0;
+            --proton: #ef4444;    /* 红色 */
+            --neutron: #94a3b8;   /* 灰色 */
+            --electron: #06b6d4;  /* 青色 */
+            --orbit: rgba(255, 255, 255, 0.1);
+            --border: #334155;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* 左侧：原子展示区 */
+        #canvas-wrapper {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 70%);
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 元素周期表卡片显示 */
+        .element-card {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 15px 25px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.2);
+            text-align: center;
+            pointer-events: none;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+
+        .card-number { font-size: 1.2rem; font-weight: bold; color: var(--text-main); display: block; text-align: left;}
+        .card-symbol { font-size: 3.5rem; font-weight: 800; line-height: 1; margin: 5px 0; background: -webkit-linear-gradient(#fff, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;}
+        .card-name { font-size: 1rem; color: #cbd5e1; letter-spacing: 1px; text-transform: uppercase;}
+        .card-mass { font-size: 0.9rem; color: #94a3b8; margin-top: 5px;}
+
+        /* 右侧：控制面板 */
+        #sidebar {
+            width: 320px;
+            min-width: 300px;
+            background-color: var(--panel-bg);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 25px;
+            overflow-y: auto;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; border-bottom: 2px solid var(--border); padding-bottom: 15px; font-size: 1.4rem; color: #fff; }
+
+        .control-group {
+            background: rgba(0,0,0,0.2);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid var(--border);
+        }
+
+        .slider-header { display: flex; justify-content: space-between; margin-bottom: 8px; font-weight: 600; font-size: 0.95rem; }
+        
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+            height: 6px;
+            border-radius: 3px;
+            appearance: none;
+            background: #475569;
+            outline: none;
+        }
+        
+        /* 滑块颜色定制 */
+        #s-proton::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--proton); cursor: pointer; border: 2px solid #fff; }
+        #s-neutron::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--neutron); cursor: pointer; border: 2px solid #fff; }
+        #s-electron::-webkit-slider-thumb { appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--electron); cursor: pointer; border: 2px solid #fff; }
+
+        /* 状态面板 */
+        .status-panel {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .status-box {
+            background: rgba(255,255,255,0.05);
+            padding: 10px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .status-val { font-size: 1.2rem; font-weight: bold; font-family: monospace;}
+        .status-lbl { font-size: 0.75rem; color: #94a3b8; margin-top: 2px;}
+
+        /* 离子状态标签 */
+        #charge-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: bold;
+            margin-top: 5px;
+            width: 100%;
+            text-align: center;
+            box-sizing: border-box;
+        }
+        .neutral { background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid #10b981; }
+        .cation { background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid #ef4444; } /* 阳离子 */
+        .anion { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid #3b82f6; } /* 阴离子 */
+
+        button {
+            background: #334155;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-top: 5px;
+            transition: 0.2s;
+            font-weight: 600;
+        }
+        button:hover { background: #475569; }
+
+        .legend {
+            margin-top: auto;
+            font-size: 0.8rem;
+            color: #94a3b8;
+            border-top: 1px solid var(--border);
+            padding-top: 15px;
+        }
+        .legend-item { display: flex; align-items: center; margin-bottom: 5px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }
+
+    </style>
+</head>
+<body>
+
+    <div id="canvas-wrapper">
+        <canvas id="atomCanvas"></canvas>
+        
+        <div class="element-card">
+            <div class="card-number" id="disp-atomic-num">1</div>
+            <div class="card-symbol" id="disp-symbol">H</div>
+            <div class="card-name" id="disp-name">Hydrogen</div>
+            <div class="card-mass" id="disp-mass-num">Mass: 1.008</div>
+        </div>
+    </div>
+
+    <aside id="sidebar">
+        <h2>⚛️ 组装原子</h2>
+
+        <div class="status-panel">
+            <div class="status-box">
+                <div class="status-val" id="val-mass">1</div>
+                <div class="status-lbl">质量数 (A)</div>
+            </div>
+            <div class="status-box">
+                <div class="status-val" id="val-charge">0</div>
+                <div class="status-lbl">净电荷</div>
+            </div>
+        </div>
+        <div id="charge-badge" class="neutral">中性原子</div>
+
+        <div style="height: 20px;"></div>
+
+        <div class="control-group" style="border-left: 4px solid var(--proton);">
+            <div class="slider-header">
+                <span>质子 (Protons)</span>
+                <span id="txt-p">1</span>
+            </div>
+            <input type="range" id="s-proton" min="1" max="18" step="1" value="1">
+            <div style="font-size:0.75rem; color:#666; margin-top:5px;">决定元素种类</div>
+        </div>
+
+        <div class="control-group" style="border-left: 4px solid var(--neutron);">
+            <div class="slider-header">
+                <span>中子 (Neutrons)</span>
+                <span id="txt-n">0</span>
+            </div>
+            <input type="range" id="s-neutron" min="0" max="22" step="1" value="0">
+            <div style="font-size:0.75rem; color:#666; margin-top:5px;">决定同位素 / 稳定性</div>
+        </div>
+
+        <div class="control-group" style="border-left: 4px solid var(--electron);">
+            <div class="slider-header">
+                <span>电子 (Electrons)</span>
+                <span id="txt-e">1</span>
+            </div>
+            <input type="range" id="s-electron" min="0" max="18" step="1" value="1">
+            <div style="font-size:0.75rem; color:#666; margin-top:5px;">决定带电性质</div>
+        </div>
+
+        <button onclick="resetToNeutral()">⚖️ 重置为中性原子</button>
+
+        <div class="legend">
+            <div class="legend-item"><span class="dot" style="background:var(--proton)"></span> 质子 (+)</div>
+            <div class="legend-item"><span class="dot" style="background:var(--neutron)"></span> 中子 (0)</div>
+            <div class="legend-item"><span class="dot" style="background:var(--electron)"></span> 电子 (-)</div>
+        </div>
+    </aside>
+
+<script>
+    // 元素数据 (前18号元素)
+    const elements = [
+        { sym: "?", name: "Unknown" }, // 0
+        { sym: "H", name: "Hydrogen", mass: 1.008 },
+        { sym: "He", name: "Helium", mass: 4.003 },
+        { sym: "Li", name: "Lithium", mass: 6.941 },
+        { sym: "Be", name: "Beryllium", mass: 9.012 },
+        { sym: "B", name: "Boron", mass: 10.81 },
+        { sym: "C", name: "Carbon", mass: 12.01 },
+        { sym: "N", name: "Nitrogen", mass: 14.01 },
+        { sym: "O", name: "Oxygen", mass: 16.00 },
+        { sym: "F", name: "Fluorine", mass: 19.00 },
+        { sym: "Ne", name: "Neon", mass: 20.18 },
+        { sym: "Na", name: "Sodium", mass: 22.99 },
+        { sym: "Mg", name: "Magnesium", mass: 24.31 },
+        { sym: "Al", name: "Aluminium", mass: 26.98 },
+        { sym: "Si", name: "Silicon", mass: 28.09 },
+        { sym: "P", name: "Phosphorus", mass: 30.97 },
+        { sym: "S", name: "Sulfur", mass: 32.06 },
+        { sym: "Cl", name: "Chlorine", mass: 35.45 },
+        { sym: "Ar", name: "Argon", mass: 39.95 }
+    ];
+
+    // DOM Elements
+    const canvas = document.getElementById('atomCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const sP = document.getElementById('s-proton');
+    const sN = document.getElementById('s-neutron');
+    const sE = document.getElementById('s-electron');
+    
+    const txtP = document.getElementById('txt-p');
+    const txtN = document.getElementById('txt-n');
+    const txtE = document.getElementById('txt-e');
+
+    const dispSym = document.getElementById('disp-symbol');
+    const dispName = document.getElementById('disp-name');
+    const dispNum = document.getElementById('disp-atomic-num');
+    const dispMass = document.getElementById('disp-mass-num');
+    
+    const valMass = document.getElementById('val-mass');
+    const valCharge = document.getElementById('val-charge');
+    const badgeCharge = document.getElementById('charge-badge');
+
+    // State
+    let state = {
+        p: 1,
+        n: 0,
+        e: 1
+    };
+
+    let particles = []; // Nucleus particles positions
+    let electrons = []; // Electron objects
+
+    // --- 初始化与事件 ---
+    function init() {
+        resize();
+        window.addEventListener('resize', resize);
+        
+        [sP, sN, sE].forEach(el => {
+            el.addEventListener('input', updateState);
+        });
+
+        updateState();
+        animate();
+    }
+
+    function resize() {
+        canvas.width = canvas.parentElement.clientWidth;
+        canvas.height = canvas.parentElement.clientHeight;
+    }
+
+    function resetToNeutral() {
+        // 将电子数设为与质子数相同
+        sE.value = sP.value;
+        // 重置中子数为合理的同位素 (简单估算 N ~= P)
+        let safeN = Math.round(parseInt(sP.value) >= 1 ? parseInt(sP.value) : 0);
+        // 对轻元素微调
+        if (sP.value == 1) safeN = 0; 
+        sN.value = safeN;
+        
+        updateState();
+    }
+
+    function updateState() {
+        state.p = parseInt(sP.value);
+        state.n = parseInt(sN.value);
+        state.e = parseInt(sE.value);
+
+        // Update Text
+        txtP.textContent = state.p;
+        txtN.textContent = state.n;
+        txtE.textContent = state.e;
+
+        // Update Element Card
+        const el = elements[state.p] || elements[0];
+        dispSym.textContent = el.sym;
+        dispName.textContent = el.name;
+        dispNum.textContent = state.p;
+        dispMass.textContent = "Atomic Weight: " + (el.mass ? el.mass : "??");
+
+        // Calculations
+        const massNum = state.p + state.n;
+        const netCharge = state.p - state.e;
+
+        valMass.textContent = massNum;
+        valCharge.textContent = (netCharge > 0 ? "+" : "") + netCharge;
+
+        // Update Badge
+        if (netCharge === 0) {
+            badgeCharge.className = "neutral";
+            badgeCharge.textContent = "中性原子 (Neutral)";
+        } else if (netCharge > 0) {
+            badgeCharge.className = "cation";
+            badgeCharge.textContent = `阳离子 (Cation +${netCharge})`;
+        } else {
+            badgeCharge.className = "anion";
+            badgeCharge.textContent = `阴离子 (Anion ${netCharge})`;
+        }
+
+        // Re-generate particles
+        generateNucleus();
+        generateElectrons();
+    }
+
+    // --- 粒子生成逻辑 ---
+
+    function generateNucleus() {
+        particles = [];
+        // 简单的聚集算法：随机分布在中心圆内
+        // 质子
+        for(let i=0; i<state.p; i++) {
+            particles.push(createNucleon('p'));
+        }
+        // 中子
+        for(let i=0; i<state.n; i++) {
+            particles.push(createNucleon('n'));
+        }
+        
+        // 简单的排斥/聚集优化（伪物理）
+        // 实际上只是为了画出来不完全重叠
+        // 这里我们用预计算的随机位置，渲染时排序产生3D感
+    }
+
+    function createNucleon(type) {
+        // 半径随粒子总数增加而略微增加
+        const total = state.p + state.n;
+        const clusterRadius = 4 + Math.sqrt(total) * 3.5; 
+        
+        // 随机位置
+        const angle = Math.random() * Math.PI * 2;
+        const r = Math.random() * clusterRadius; // 简单分布
+        
+        return {
+            type: type,
+            x: Math.cos(angle) * r,
+            y: Math.sin(angle) * r,
+            r: 6 + Math.random() * 1, // 粒子视觉半径
+            z: Math.random() // 用于渲染排序
+        };
+    }
+
+    function generateElectrons() {
+        electrons = [];
+        // 电子排布规则 (2, 8, 8)
+        let remaining = state.e;
+        let shell = 1;
+        
+        while (remaining > 0) {
+            let capacity = 0;
+            if (shell === 1) capacity = 2;
+            else if (shell === 2) capacity = 8;
+            else capacity = 18; // 简化模型
+
+            let count = Math.min(remaining, capacity);
+            
+            // 为这一层的电子生成对象
+            for(let i=0; i<count; i++) {
+                electrons.push({
+                    shell: shell,
+                    angle: (Math.PI * 2 * i) / count, // 均匀分布初始角度
+                    speed: (0.02 / shell) + Math.random() * 0.005 // 内层快，外层慢
+                });
+            }
+
+            remaining -= count;
+            shell++;
+        }
+    }
+
+    // --- 绘图循环 ---
+    function animate() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        const cx = canvas.width / 2;
+        const cy = canvas.height / 2;
+
+        // 1. 绘制轨道 (Shells)
+        // 轨道半径
+        const shellBaseR = 60;
+        const shellGap = 40;
+        
+        // 找出最大的shell
+        let maxShell = 0;
+        if(electrons.length > 0) maxShell = electrons[electrons.length-1].shell;
+        // 如果没有电子，画个空的K层作为示意
+        if(maxShell === 0) maxShell = 1;
+
+        for (let s = 1; s <= Math.max(maxShell, 3); s++) {
+            const r = shellBaseR + (s-1) * shellGap;
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(255,255,255,0.1)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // 轨道标签
+            if(cx > 50) {
+                ctx.fillStyle = "rgba(255,255,255,0.3)";
+                ctx.font = "10px sans-serif";
+                ctx.fillText(["K","L","M","N"][s-1], cx + r + 5, cy);
+            }
+        }
+
+        // 2. 绘制原子核 (Nucleus)
+        // 按照 z-index 排序，产生伪3D堆叠感
+        particles.sort((a, b) => a.z - b.z);
+        
+        ctx.save();
+        ctx.translate(cx, cy);
+        
+        // 让原子核缓慢旋转，增加立体感
+        const time = Date.now() * 0.0005;
+        const rotateR = 2; // 微小晃动
+        
+        particles.forEach(p => {
+            // 简单的旋转投影
+            const px = p.x * Math.cos(time) - p.z * 5 * Math.sin(time); 
+            const py = p.y;
+            
+            const color = p.type === 'p' ? '#ef4444' : '#94a3b8';
+            
+            // 绘制球体
+            ctx.beginPath();
+            ctx.arc(px, py, p.r, 0, Math.PI * 2);
+            
+            // 径向渐变模拟光照
+            const grad = ctx.createRadialGradient(px - 2, py - 2, 1, px, py, p.r);
+            grad.addColorStop(0, "#fff");
+            grad.addColorStop(0.3, color);
+            grad.addColorStop(1, "#111");
+            
+            ctx.fillStyle = grad;
+            ctx.fill();
+            
+            // 轮廓
+            ctx.strokeStyle = "rgba(0,0,0,0.3)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            
+            // 质子加个 + 号
+            if (p.type === 'p' && p.r > 5) {
+                ctx.fillStyle = "rgba(255,255,255,0.6)";
+                ctx.font = "bold 8px Arial";
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                ctx.fillText("+", px, py);
+            }
+        });
+        ctx.restore();
+
+        // 3. 绘制电子 (Electrons)
+        electrons.forEach(e => {
+            e.angle += e.speed; // 运动
+            
+            const r = shellBaseR + (e.shell - 1) * shellGap;
+            const ex = cx + Math.cos(e.angle) * r;
+            const ey = cy + Math.sin(e.angle) * r;
+            
+            // 电子发光效果
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "#06b6d4";
+            
+            ctx.beginPath();
+            ctx.arc(ex, ey, 5, 0, Math.PI * 2);
+            ctx.fillStyle = "#22d3ee";
+            ctx.fill();
+            
+            ctx.shadowBlur = 0;
+            
+            // 尾迹 (视觉增强)
+            /*
+            ctx.beginPath();
+            ctx.strokeStyle = "rgba(6, 182, 212, 0.3)";
+            ctx.lineWidth = 2;
+            ctx.arc(cx, cy, r, e.angle - 0.2, e.angle);
+            ctx.stroke();
+            */
+        });
+
+        requestAnimationFrame(animate);
+    }
+
+    // 启动
+    init();
+
+</script>
+</body>
+</html>

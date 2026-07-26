@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D 受力分析：合力演示</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e1e; }
+        
+        /* 3D 画布 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧功能区 */
+        #sidebar {
+            position: absolute;
+            right: 0;
+            top: 0;
+            width: 260px;
+            height: 100%;
+            background: rgba(40, 40, 40, 0.9);
+            color: white;
+            padding: 20px;
+            box-sizing: border-box;
+            border-left: 1px solid #555;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.5);
+        }
+
+        h2, h3 { margin: 0 0 10px 0; color: #4db8ff; }
+        label { font-size: 14px; display: block; margin-bottom: 5px; }
+
+        /* 按钮样式 */
+        button {
+            width: 100%;
+            padding: 8px;
+            background: #444;
+            color: white;
+            border: 1px solid #666;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #555; }
+        button:active { background: #333; }
+
+        /* 滚轮样式 */
+        input[type=range] {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        /* 图例样式 */
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .color-box {
+            width: 15px;
+            height: 15px;
+            margin-right: 10px;
+            border-radius: 3px;
+        }
+    </style>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>受力分析控制台</h2>
+        
+        <div>
+            <h3>图例说明</h3>
+            <div class="legend-item">
+                <div class="color-box" style="background-color: #00ff00;"></div>
+                <span>重力 (G)</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box" style="background-color: #ffff00;"></div>
+                <span>分力: 三个支持力 (N)</span>
+            </div>
+            <div class="legend-item">
+                <div class="color-box" style="background-color: #ff00ff;"></div>
+                <span>合力: 支持力矢量和 (F)</span>
+            </div>
+        </div>
+
+        <hr style="width:100%; border-color:#444;">
+
+        <div>
+            <h3>视图调整</h3>
+            <label>箭头缩放:</label>
+            <input type="range" id="slider-arrow" min="0.5" max="3" step="0.1" value="1">
+            <button id="btn-reset" style="margin-top: 10px;">还原视角</button>
+        </div>
+        
+        <div style="margin-top: auto; font-size: 12px; color: #888;">
+            *合力(紫)与重力(绿)等大反向<br>
+            左键：旋转 | 右键：平移 | 滚轮：缩放
+        </div>
+    </div>
+
+    <script>
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let balls = []; // 存储4个球
+        let arrows = []; // 存储受力箭头
+        
+        // 物理/几何参数
+        const radius = 10;
+        const stackHeight = 2 * radius * Math.sqrt(2/3); 
+        
+        // 力的模拟大小 (用于显示)
+        const magnitudeG = 18; // 重力长度
+        // 几何计算分力长度: G = 3 * N * cos(theta)
+        // cos(theta) = h / (2R) = sqrt(2/3)
+        // N = G / (3 * sqrt(2/3))
+        const magnitudeN = magnitudeG / (3 * Math.sqrt(2/3));
+
+        // ================= 初始化程序 =================
+        init();
+        animate();
+
+        function init() {
+            // 1. 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x222222);
+            // 添加网格辅助
+            const gridHelper = new THREE.GridHelper(200, 20);
+            scene.add(gridHelper);
+
+            // 2. 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(50, 30, 60); // 稍微降低一点视角，看得更清楚
+
+            // 3. 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            // 4. 控制器
+            if (typeof OrbitControls !== 'undefined') {
+                 controls = new OrbitControls(camera, renderer.domElement);
+            } else if (THREE.OrbitControls) {
+                 controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else {
+                 try { controls = new THREE.OrbitControls(camera, renderer.domElement); } catch(e){}
+            }
+
+            if(controls) {
+                controls.enableDamping = true;
+                controls.dampingFactor = 0.05;
+            }
+
+            // 5. 灯光
+            const ambientLight = new THREE.AmbientLight(0x404040, 2.0);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(50, 100, 50);
+            scene.add(dirLight);
+            
+            const backLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            backLight.position.set(-50, 20, -50);
+            scene.add(backLight);
+
+            // 6. 创建球体
+            createBalls();
+            
+            // 7. 创建受力分析箭头
+            createForceArrows();
+
+            // 8. 窗口大小自适应
+            window.addEventListener('resize', onWindowResize, false);
+            
+            // 9. 绑定UI事件
+            bindUIEvents();
+        }
+
+        function createBalls() {
+            const geometry = new THREE.SphereGeometry(radius, 64, 64);
+            
+            // 透明材质设置
+            const matSettings = {
+                roughness: 0.1,
+                metalness: 0.1,
+                transparent: true,
+                opacity: 0.5,      // 透明度 50%
+                side: THREE.DoubleSide,
+                depthWrite: false
+            };
+
+            const matBottom = new THREE.MeshStandardMaterial({ ...matSettings, color: 0x3498db });
+            const matTop = new THREE.MeshStandardMaterial({ ...matSettings, color: 0xe74c3c, opacity: 0.6 });
+
+            const d = (2 * radius) / Math.sqrt(3);
+
+            // 球1, 2, 3 (底部)
+            const b1 = new THREE.Mesh(geometry, matBottom);
+            b1.position.set(0, radius, -d);
+            
+            const b2 = new THREE.Mesh(geometry, matBottom);
+            b2.position.set(d * Math.sin(Math.PI/3), radius, d * Math.cos(Math.PI/3));
+
+            const b3 = new THREE.Mesh(geometry, matBottom);
+            b3.position.set(-d * Math.sin(Math.PI/3), radius, d * Math.cos(Math.PI/3));
+
+            // 顶层球
+            const topBall = new THREE.Mesh(geometry, matTop);
+            topBall.position.set(0, radius + stackHeight, 0);
+
+            scene.add(b1);
+            scene.add(b2);
+            scene.add(b3);
+            scene.add(topBall);
+            
+            balls = [b1, b2, b3, topBall];
+        }
+
+        function createForceArrows() {
+            const topBall = balls[3];
+            const origin = topBall.position;
+
+            // 1. 重力 (绿色, 向下)
+            const dirG = new THREE.Vector3(0, -1, 0);
+            const arrowG = new THREE.ArrowHelper(dirG, origin, magnitudeG, 0x00ff00, 3, 2);
+            // 增加箭头线宽的模拟（ThreeJS ArrowHelper不支持lineWidth，只能通过Head区分）
+            scene.add(arrowG);
+            arrows.push({ mesh: arrowG, baseLen: magnitudeG });
+
+            // 2. 三个分力 (黄色)
+            for(let i=0; i<3; i++) {
+                const bottomPos = balls[i].position;
+                // 从底球指向顶球中心的方向
+                const normalDir = new THREE.Vector3().subVectors(origin, bottomPos).normalize();
+                
+                const arrowN = new THREE.ArrowHelper(normalDir, origin, magnitudeN, 0xffff00, 2.5, 1.5);
+                scene.add(arrowN);
+                arrows.push({ mesh: arrowN, baseLen: magnitudeN });
+            }
+
+            // 3. 合力 (品红色, 向上)
+            // 合力 = 3个分力的矢量和 = 与重力等大反向
+            const dirResultant = new THREE.Vector3(0, 1, 0);
+            // 这里我们让合力的显示长度稍微比重力长一点点，或者稍微粗一点(head宽一点)，以便区分
+            const arrowR = new THREE.ArrowHelper(dirResultant, origin, magnitudeG, 0xff00ff, 4, 3);
+            scene.add(arrowR);
+            arrows.push({ mesh: arrowR, baseLen: magnitudeG });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function bindUIEvents() {
+            // 还原
+            document.getElementById('btn-reset').addEventListener('click', () => {
+                camera.position.set(50, 30, 60);
+                controls.target.set(0, 0, 0);
+                controls.update();
+                
+                document.getElementById('slider-arrow').value = 1;
+                updateArrowScale(1);
+            });
+
+            // 箭头大小滚轮
+            document.getElementById('slider-arrow').addEventListener('input', (e) => {
+                const scale = parseFloat(e.target.value);
+                updateArrowScale(scale);
+            });
+        }
+
+        function updateArrowScale(scale) {
+             arrows.forEach(item => {
+                const arrow = item.mesh;
+                const len = item.baseLen;
+                // 动态调整长度和箭头头部大小
+                arrow.setLength(len * scale, 3 * scale, 2 * scale);
+            });
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

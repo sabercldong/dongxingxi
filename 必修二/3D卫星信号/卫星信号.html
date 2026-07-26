@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>卫星信号覆盖演示 (无图表版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #000; }
+        
+        /* 3D 容器 */
+        #canvas-container { width: 100vw; height: 100vh; display: block; }
+
+        /* 右侧功能区 */
+        #sidebar {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 280px;
+            height: 100vh;
+            background: rgba(20, 20, 35, 0.9);
+            backdrop-filter: blur(5px);
+            border-left: 1px solid #444;
+            color: #fff;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+            z-index: 10;
+        }
+
+        h2 { margin-top: 0; font-size: 18px; border-bottom: 1px solid #555; padding-bottom: 10px; color: #4db8ff; }
+        .control-group { margin-bottom: 25px; }
+        label { display: block; margin-bottom: 8px; font-size: 14px; color: #ccc; }
+        .value-display { float: right; color: #00ff00; font-family: monospace; }
+        .note { font-size: 12px; color: #888; margin-top: 5px; line-height: 1.4; }
+        
+        button {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #007bff;
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #0056b3; }
+        button.stop { background: #dc3545; }
+        button.stop:hover { background: #a71d2a; }
+        button.reset { background: #6c757d; }
+        
+        input[type=range] { width: 100%; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+    <div id="canvas-container"></div>
+
+    <div id="sidebar">
+        <h2>控制面板</h2>
+        
+        <div class="control-group">
+            <button id="btn-start">开始运行</button>
+            <button id="btn-pause" class="stop">暂停</button>
+            <button id="btn-reset" class="reset">还原 / 重置</button>
+        </div>
+
+        <div class="control-group">
+            <label>
+                卫星轨道高度 
+                <span id="val-altitude" class="value-display">8.0</span>
+            </label>
+            <input type="range" id="slider-altitude" min="4.5" max="15" step="0.1" value="8">
+            <div class="note">信号圆锥自动调整大小以保持与地球相切。</div>
+        </div>
+
+        <div class="control-group">
+            <label>
+                运行速度
+                <span id="val-speed" class="value-display">1.0</span>
+            </label>
+            <input type="range" id="slider-speed" min="0" max="5.0" step="0.1" value="1.0">
+        </div>
+    </div>
+
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script> 
+
+    <script>
+        // ================= 全局变量 =================
+        let scene, camera, renderer, controls;
+        let earth, satellite, signalCone, orbitGroup;
+        let animationId;
+        let isRunning = true;
+        let time = 0;
+        
+        const EARTH_RADIUS = 4; // 地球半径
+        
+        const config = {
+            altitude: 8, 
+            speed: 1.0
+        };
+
+        // ================= 1. 初始化 3D 场景 =================
+        function initThree() {
+            const container = document.getElementById('canvas-container');
+
+            // 场景
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x020205); // 深空背景
+
+            // 相机
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 20, 30);
+            camera.lookAt(0, 0, 0);
+
+            // 渲染器
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            container.appendChild(renderer.domElement);
+
+            // 控制器
+            if (typeof THREE.OrbitControls === 'function') {
+                controls = new THREE.OrbitControls(camera, renderer.domElement);
+            } else if (typeof OrbitControls === 'function') {
+                controls = new OrbitControls(camera, renderer.domElement);
+            }
+            if(controls) {
+                controls.enableDamping = true;
+                controls.minDistance = 5;
+                controls.maxDistance = 100;
+            }
+
+            // 灯光
+            scene.add(new THREE.AmbientLight(0x333333)); 
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(20, 10, 10);
+            scene.add(dirLight);
+
+            // --- 物体 ---
+
+            // 地球
+            const earthGeo = new THREE.SphereGeometry(EARTH_RADIUS, 64, 64);
+            const earthMat = new THREE.MeshPhongMaterial({ 
+                color: 0x1144cc, 
+                emissive: 0x001133,
+                wireframe: true 
+            });
+            earth = new THREE.Mesh(earthGeo, earthMat);
+            scene.add(earth);
+
+            // 黑色遮挡球体 (让地球背面不可见)
+            const innerEarth = new THREE.Mesh(
+                new THREE.SphereGeometry(EARTH_RADIUS - 0.05, 64, 64),
+                new THREE.MeshBasicMaterial({ color: 0x000000 })
+            );
+            scene.add(innerEarth);
+
+            // 轨道组
+            orbitGroup = new THREE.Group();
+            scene.add(orbitGroup);
+
+            // 卫星
+            const satGeo = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+            const satMat = new THREE.MeshStandardMaterial({ color: 0xffcc00 });
+            satellite = new THREE.Mesh(satGeo, satMat);
+            orbitGroup.add(satellite);
+
+            // --- 信号圆锥 ---
+            // 初始单位圆锥：半径1，高度1
+            const coneGeo = new THREE.ConeGeometry(1, 1, 64, 1, true); 
+            
+            // 几何变换：
+            // 1. 顶点移到原点
+            coneGeo.translate(0, -0.5, 0); 
+            
+            // 2. 旋转方向：从 -Y 旋转 -90度到 -X (指向地球)
+            coneGeo.rotateZ(-Math.PI / 2); 
+
+            const coneMat = new THREE.MeshBasicMaterial({ 
+                color: 0x00ff00, 
+                opacity: 0.15, 
+                transparent: true, 
+                side: THREE.DoubleSide, 
+                depthWrite: false,
+                blending: THREE.AdditiveBlending
+            });
+            signalCone = new THREE.Mesh(coneGeo, coneMat);
+            satellite.add(signalCone); // 挂载到卫星上
+
+            // 线框增强
+            const edgesGeo = new THREE.EdgesGeometry(coneGeo);
+            const edgesMat = new THREE.LineBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.4 });
+            const coneEdges = new THREE.LineSegments(edgesGeo, edgesMat);
+            signalCone.add(coneEdges);
+        }
+
+        // ================= 2. 动态计算几何 (保持相切) =================
+        function updateSignalGeometry() {
+            // 更新卫星位置
+            satellite.position.set(config.altitude, 0, 0);
+
+            // 防止穿模
+            if (config.altitude <= EARTH_RADIUS) {
+                signalCone.visible = false;
+                return;
+            }
+            signalCone.visible = true;
+
+            const D = config.altitude; // 卫星到地心距离
+            const R = EARTH_RADIUS;
+            
+            // 几何计算：
+            // sin(theta) = R / D
+            const theta = Math.asin(R / D); 
+            
+            // 真实半径 = D * tan(theta)
+            const scaleLength = D;
+            const scaleRadius = D * Math.tan(theta);
+
+            signalCone.scale.set(scaleLength, scaleRadius, scaleRadius);
+        }
+
+        // ================= 3. 动画循环 =================
+        function animate() {
+            requestAnimationFrame(animate);
+            if (controls) controls.update();
+
+            updateSignalGeometry();
+
+            if (isRunning) {
+                time += 0.01 * config.speed;
+                orbitGroup.rotation.y = time;
+            }
+            renderer.render(scene, camera);
+        }
+
+        // ================= 4. 事件交互 =================
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        document.getElementById('btn-start').addEventListener('click', () => isRunning = true);
+        document.getElementById('btn-pause').addEventListener('click', () => isRunning = false);
+        document.getElementById('btn-reset').addEventListener('click', () => {
+            isRunning = false;
+            time = 0;
+            orbitGroup.rotation.y = 0;
+            config.altitude = 8;
+            config.speed = 1.0;
+            
+            // UI 重置
+            document.getElementById('slider-altitude').value = 8;
+            document.getElementById('val-altitude').innerText = '8.0';
+            document.getElementById('slider-speed').value = 1.0;
+            document.getElementById('val-speed').innerText = '1.0';
+            
+            updateSignalGeometry();
+            renderer.render(scene, camera);
+        });
+
+        document.getElementById('slider-altitude').addEventListener('input', (e) => {
+            config.altitude = parseFloat(e.target.value);
+            document.getElementById('val-altitude').innerText = config.altitude.toFixed(1);
+            if(!isRunning) {
+                updateSignalGeometry();
+                renderer.render(scene, camera);
+            }
+        });
+
+        document.getElementById('slider-speed').addEventListener('input', (e) => {
+            config.speed = parseFloat(e.target.value);
+            document.getElementById('val-speed').innerText = config.speed.toFixed(1);
+        });
+
+        // 启动
+        initThree();
+        animate();
+
+    </script>
+</body>
+</html>

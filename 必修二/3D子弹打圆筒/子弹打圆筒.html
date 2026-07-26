@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圆筒旋转与子弹射击仿真 (修复版)</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1a1a; color: #fff; }
+        
+        /* 布局容器 */
+        #container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; }
+        #canvas-container { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        /* 右侧控制面板 */
+        #controls-panel {
+            width: 300px;
+            background: #2c2c2c;
+            padding: 20px;
+            box-shadow: -2px 0 10px rgba(0,0,0,0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            z-index: 10;
+            overflow-y: auto;
+        }
+
+        h2 { margin-top: 0; font-size: 18px; color: #4db8ff; border-bottom: 1px solid #555; padding-bottom: 10px; }
+        
+        .control-group { margin-bottom: 15px; }
+        .control-group label { display: block; margin-bottom: 5px; font-size: 14px; color: #ccc; }
+        .control-group input[type="range"] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #4db8ff; font-weight: bold; }
+
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background 0.2s;
+        }
+        .btn-start { background: #28a745; color: white; }
+        .btn-start:hover { background: #218838; }
+        .btn-pause { background: #ffc107; color: black; }
+        .btn-pause:hover { background: #e0a800; }
+        .btn-reset { background: #dc3545; color: white; }
+        .btn-reset:hover { background: #c82333; }
+
+        .info-box {
+            background: #333;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            line-height: 1.5;
+            border: 1px solid #444;
+        }
+        .highlight { color: #ffeb3b; }
+
+        /* --- 修复后的图表样式 --- */
+        #chart-wrapper {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 360px; /* 限制宽度 */
+            background: rgba(30, 30, 30, 0.85); /* 半透明深色背景 */
+            backdrop-filter: blur(5px);
+            border: 1px solid #555;
+            border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+        }
+        #chart-header {
+            padding: 8px 12px;
+            background: rgba(60, 60, 60, 0.9);
+            color: #ddd;
+            cursor: move;
+            border-top-left-radius: 8px;
+            border-top-right-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            user-select: none;
+            font-size: 13px;
+        }
+        #chart-body { 
+            padding: 10px; 
+            height: 220px; /* 关键：强制高度，防止拉长 */
+            box-sizing: border-box;
+            position: relative;
+        }
+        #toggle-chart {
+            background: none; border: none; color: #aaa; cursor: pointer; font-size: 14px;
+        }
+        #toggle-chart:hover { color: #fff; }
+        
+    </style>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+<div id="container">
+    <div id="canvas-container">
+        
+        <div id="chart-wrapper">
+            <div id="chart-header">
+                <span>📊 速度与转角匹配图 (拖动滑块使点重合)</span>
+                <button id="toggle-chart">▼</button>
+            </div>
+            <div id="chart-body">
+                <canvas id="physicsChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <div id="controls-panel">
+        <h2>控制面板</h2>
+        
+        <div class="control-group">
+            <label>圆筒角速度 (ω) <span id="val-omega" class="value-display">2.0 rad/s</span></label>
+            <input type="range" id="input-omega" min="0.5" max="8" step="0.1" value="2.0">
+        </div>
+
+        <div class="control-group">
+            <label>子弹速度 (v) <span id="val-speed" class="value-display">5.0 m/s</span></label>
+            <input type="range" id="input-speed" min="0.5" max="25" step="0.1" value="5.0">
+        </div>
+
+        <div class="btn-group">
+            <button class="btn-start" id="btn-start">开始</button>
+            <button class="btn-pause" id="btn-pause">暂停</button>
+            <button class="btn-reset" id="btn-reset">还原</button>
+        </div>
+
+        <hr style="width:100%; border:0; border-top:1px solid #555;">
+
+        <div class="info-box">
+            <strong>实时状态：</strong><br>
+            时间: <span id="disp-time" class="highlight">0.00</span> s<br>
+            圆筒转角: <span id="disp-angle" class="highlight">0.00</span> rad (<span id="disp-turns">0.0</span> π)<br>
+            <br>
+            <strong>结果判定：</strong><br>
+            <span id="result-status" style="color: #aaa;">等待射击...</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- 1. 初始化变量 ---
+    let scene, camera, renderer, controls;
+    let cylinder, bullet;
+    let holeEntry, holeExit; 
+    let isRunning = false;
+    let isPaused = false;
+    let currentTime = 0;
+    
+    // 物理参数
+    const R = 2; // 圆筒半径
+    let omega = 2.0; 
+    let bulletSpeed = 5.0; 
+
+    // 状态标记
+    let hasEntered = false;
+    let hasExited = false;
+    
+    // DOM 元素引用
+    const elOmega = document.getElementById('input-omega');
+    const elSpeed = document.getElementById('input-speed');
+    const valOmega = document.getElementById('val-omega');
+    const valSpeed = document.getElementById('val-speed');
+    const dispTime = document.getElementById('disp-time');
+    const dispAngle = document.getElementById('disp-angle');
+    const dispTurns = document.getElementById('disp-turns');
+    const resultStatus = document.getElementById('result-status');
+
+    // --- 2. Three.js 场景 ---
+    function initThree() {
+        const container = document.getElementById('canvas-container');
+        
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+
+        camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 100);
+        camera.position.set(0, 5, 14);
+        camera.lookAt(0, 0, 0);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        renderer.shadowMap.enabled = true;
+        container.appendChild(renderer.domElement);
+
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        }
+
+        // 光照
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // 1. 圆筒
+        const cylinderGeo = new THREE.CylinderGeometry(R, R, 6, 32, 1, true);
+        const cylinderMat = new THREE.MeshPhongMaterial({ 
+            color: 0x4db8ff, 
+            transparent: true, 
+            opacity: 0.2, 
+            side: THREE.DoubleSide 
+        });
+        cylinder = new THREE.Mesh(cylinderGeo, cylinderMat);
+        
+        // 红色参考线 (0度)
+        const seamGeo = new THREE.BoxGeometry(0.05, 6, 0.05);
+        const seamMat = new THREE.MeshBasicMaterial({ color: 0xff4444 });
+        const seam = new THREE.Mesh(seamGeo, seamMat);
+        seam.position.set(R, 0, 0);
+        cylinder.add(seam);
+
+        // 边框
+        const edges = new THREE.EdgesGeometry(cylinderGeo);
+        const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x88ccff, opacity: 0.5, transparent: true }));
+        cylinder.add(line);
+        scene.add(cylinder);
+
+        // 2. 子弹
+        const bulletGeo = new THREE.SphereGeometry(0.2, 16, 16);
+        const bulletMat = new THREE.MeshStandardMaterial({ color: 0xffeb3b, emissive: 0xffaa00, emissiveIntensity: 0.6 });
+        bullet = new THREE.Mesh(bulletGeo, bulletMat);
+        scene.add(bullet);
+
+        // 3. 辅助轨迹线
+        const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-10, 0, 0), new THREE.Vector3(10, 0, 0)]);
+        const lineMat = new THREE.LineBasicMaterial({ color: 0x666666, linetype: 'dashed' });
+        const guideLine = new THREE.Line(lineGeo, lineMat);
+        scene.add(guideLine);
+
+        // 4. 枪模型
+        const gun = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.5, 0.3), new THREE.MeshLambertMaterial({ color: 0x444444 }));
+        gun.position.set(-6, 0, 0);
+        scene.add(gun);
+
+        resetSimulation();
+        window.addEventListener('resize', onWindowResize, false);
+    }
+
+    function onWindowResize() {
+        const container = document.getElementById('canvas-container');
+        camera.aspect = container.clientWidth / container.clientHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(container.clientWidth, container.clientHeight);
+    }
+
+    // --- 3. 弹孔逻辑 ---
+    function createHole(isEntry) {
+        const holeGeo = new THREE.CircleGeometry(0.25, 16);
+        const holeMat = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+        const hole = new THREE.Mesh(holeGeo, holeMat);
+
+        // 放在圆筒表面
+        hole.position.set(R, 0, 0);
+        hole.rotation.y = Math.PI / 2;
+
+        // 计算正确的旋转角度
+        const worldAngle = isEntry ? Math.PI : 0;
+        const localAngle = worldAngle - cylinder.rotation.y;
+        
+        const pivot = new THREE.Object3D();
+        pivot.rotation.y = localAngle;
+        pivot.add(hole);
+        
+        cylinder.add(pivot);
+        return pivot;
+    }
+
+    // --- 4. 动画循环 ---
+    function animate() {
+        requestAnimationFrame(animate);
+        if (controls) controls.update();
+
+        if (isRunning && !isPaused) {
+            const dt = 0.016; 
+            cylinder.rotation.y += omega * dt;
+            currentTime += dt;
+            bullet.position.x += bulletSpeed * dt;
+
+            // 进
+            if (!hasEntered && bullet.position.x >= -R) {
+                hasEntered = true;
+                holeEntry = createHole(true); 
+                holeEntry.children[0].material.color.setHex(0xff3333); // 红
+            }
+
+            // 出
+            if (!hasExited && bullet.position.x >= R) {
+                hasExited = true;
+                holeExit = createHole(false);
+                holeExit.children[0].material.color.setHex(0x33ff33); // 绿
+                checkResult();
+                isRunning = false; 
+                document.getElementById('btn-start').disabled = false;
+            }
+            updateUI();
+        }
+        renderer.render(scene, camera);
+    }
+
+    function updateUI() {
+        dispTime.innerText = currentTime.toFixed(2);
+        dispAngle.innerText = cylinder.rotation.y.toFixed(2);
+        dispTurns.innerText = (cylinder.rotation.y / Math.PI).toFixed(2);
+    }
+
+    function checkResult() {
+        const timeInside = (2 * R) / bulletSpeed;
+        const rotationAngle = omega * timeInside;
+        const rotationInPI = rotationAngle / Math.PI;
+        
+        // 判断是否为整数
+        const isInteger = Math.abs(rotationInPI - Math.round(rotationInPI)) < 0.08;
+        
+        let msg = `穿越耗时: ${timeInside.toFixed(3)}s<br>转过角度: <b>${rotationInPI.toFixed(2)} π</b>`;
+        if (isInteger) {
+            msg += "<br><span style='color:#4caf50; font-weight:bold;'>✔ 成功！两孔位于直径上。</span>";
+        } else {
+            msg += "<br><span style='color:#ff5555'>✘ 失败。角度不是 π 的整数倍。</span>";
+        }
+        resultStatus.innerHTML = msg;
+    }
+
+    function resetSimulation() {
+        isRunning = false;
+        isPaused = false;
+        currentTime = 0;
+        hasEntered = false;
+        hasExited = false;
+        
+        bullet.position.set(-5, 0, 0);
+        cylinder.rotation.set(0, 0, 0);
+        
+        // 清除弹孔
+        for (let i = cylinder.children.length - 1; i >= 0; i--) {
+            if (cylinder.children[i].type === 'Object3D') cylinder.remove(cylinder.children[i]);
+        }
+
+        updateUI();
+        resultStatus.innerHTML = "等待射击...";
+        resultStatus.style.color = "#aaa";
+        
+        // 重新获取数值
+        omega = parseFloat(elOmega.value);
+        bulletSpeed = parseFloat(elSpeed.value);
+        
+        updateChart();
+    }
+
+    // --- 5. 图表修复版 (Dark Mode + Compact) ---
+    let myChart = null;
+
+    function initChart() {
+        const ctx = document.getElementById('physicsChart').getContext('2d');
+        
+        // 全局默认字体颜色设为浅色
+        Chart.defaults.color = '#ccc';
+        Chart.defaults.borderColor = '#444';
+
+        myChart = new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: [
+                    {
+                        label: '理论整数解 (nπ)',
+                        data: [],
+                        backgroundColor: '#00aaff', // 亮蓝色
+                        borderColor: '#00aaff',
+                        pointRadius: 5,
+                    },
+                    {
+                        label: '当前设定值',
+                        data: [],
+                        backgroundColor: '#ff4444', // 亮红色
+                        borderColor: '#fff',
+                        borderWidth: 2,
+                        pointRadius: 8, 
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false, // 允许填满容器
+                layout: {
+                    padding: { left: 0, right: 10, top: 10, bottom: 0 }
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        position: 'bottom',
+                        title: { display: true, text: '转过角度 (n × π)', color: '#aaa', font: {size: 10} },
+                        min: 0,
+                        suggestedMax: 6, // 动态范围，但也给个建议最大值
+                        grid: { color: '#444' }
+                    },
+                    y: {
+                        title: { display: true, text: '子弹速度 (m/s)', color: '#aaa', font: {size: 10} },
+                        min: 0,
+                        // max 不写死，让它自动适应，防止点跑出去
+                        grid: { color: '#444' }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        labels: { boxWidth: 10, font: { size: 11 } }
+                    },
+                    tooltip: {
+                        enabled: true,
+                        callbacks: {
+                            label: function(ctx) {
+                                return `转角: ${ctx.parsed.x.toFixed(2)}π, 速度: ${ctx.parsed.y.toFixed(2)}`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        updateChart();
+    }
+
+    function updateChart() {
+        if (!myChart) return;
+
+        const w = parseFloat(elOmega.value);
+        const v = parseFloat(elSpeed.value);
+
+        // 1. 生成理论点 (n=1,2,3,4,5,6)
+        // 公式: v = 2Rω / nπ
+        const theoryPoints = [];
+        for (let n = 1; n <= 8; n++) {
+            const theoryV = (2 * R * w) / (n * Math.PI);
+            theoryPoints.push({ x: n, y: theoryV });
+        }
+        myChart.data.datasets[0].data = theoryPoints;
+
+        // 2. 当前点
+        // X = (ω * 2R / v) / π
+        const currentN = (w * 2 * R) / (v * Math.PI);
+        
+        myChart.data.datasets[1].data = [{
+            x: currentN,
+            y: v
+        }];
+
+        myChart.update('none'); // none 模式避免动画闪烁，更跟手
+    }
+
+    // --- 6. 事件交互 ---
+    elOmega.addEventListener('input', (e) => {
+        valOmega.innerText = parseFloat(e.target.value).toFixed(1) + " rad/s";
+        if (!isRunning) omega = parseFloat(e.target.value);
+        updateChart();
+    });
+
+    elSpeed.addEventListener('input', (e) => {
+        valSpeed.innerText = parseFloat(e.target.value).toFixed(1) + " m/s";
+        if (!isRunning) bulletSpeed = parseFloat(e.target.value);
+        updateChart();
+    });
+
+    document.getElementById('btn-start').addEventListener('click', () => {
+        if (hasExited) resetSimulation();
+        isRunning = true;
+        isPaused = false;
+        document.getElementById('btn-start').disabled = true;
+    });
+
+    document.getElementById('btn-pause').addEventListener('click', () => {
+        isPaused = !isPaused;
+        document.getElementById('btn-pause').innerText = isPaused ? "继续" : "暂停";
+    });
+
+    document.getElementById('btn-reset').addEventListener('click', () => {
+        resetSimulation();
+        document.getElementById('btn-start').disabled = false;
+    });
+
+    // 拖动窗口逻辑
+    const chartWrapper = document.getElementById('chart-wrapper');
+    const chartHeader = document.getElementById('chart-header');
+    const toggleBtn = document.getElementById('toggle-chart');
+    const chartBody = document.getElementById('chart-body');
+
+    let isDragging = false;
+    let offset = { x: 0, y: 0 };
+
+    chartHeader.addEventListener('mousedown', (e) => {
+        if(e.target === toggleBtn) return;
+        isDragging = true;
+        offset.x = e.clientX - chartWrapper.offsetLeft;
+        offset.y = e.clientY - chartWrapper.offsetTop;
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (isDragging) {
+            chartWrapper.style.left = (e.clientX - offset.x) + 'px';
+            chartWrapper.style.top = (e.clientY - offset.y) + 'px';
+        }
+    });
+
+    document.addEventListener('mouseup', () => { isDragging = false; });
+    
+    toggleBtn.addEventListener('click', () => {
+        if (chartBody.style.display === 'none') {
+            chartBody.style.display = 'block';
+            toggleBtn.innerText = '▼';
+        } else {
+            chartBody.style.display = 'none';
+            toggleBtn.innerText = '▲';
+        }
+    });
+
+    // 启动
+    initThree();
+    initChart();
+    animate();
+
+</script>
+</body>
+</html>

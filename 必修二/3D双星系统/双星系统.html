@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>双星系统引力模拟</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: 'Segoe UI', sans-serif; color: white; }
+        
+        /* 布局容器 */
+        #container { display: flex; width: 100vw; height: 100vh; }
+        
+        /* 3D 画布区域 */
+        #canvas-wrapper { flex-grow: 1; position: relative; overflow: hidden; }
+        
+        /* 右侧功能区 */
+        #ui-panel {
+            width: 280px;
+            background: rgba(30, 30, 30, 0.9);
+            border-left: 1px solid #444;
+            padding: 20px;
+            box-sizing: border-box;
+            overflow-y: auto; /* 滚轮支持 */
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        /* UI 元素样式 */
+        h2 { margin: 0 0 10px 0; font-size: 18px; color: #4db8ff; border-bottom: 1px solid #555; padding-bottom: 5px; }
+        .control-group { margin-bottom: 10px; }
+        label { display: block; font-size: 12px; color: #aaa; margin-bottom: 5px; }
+        
+        /* 按钮样式 */
+        .btn-row { display: flex; gap: 5px; }
+        button {
+            flex: 1;
+            padding: 8px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: 0.2s;
+        }
+        .btn-start { background: #28a745; color: white; }
+        .btn-pause { background: #ffc107; color: black; }
+        .btn-reset { background: #dc3545; color: white; }
+        .btn-toggle { background: #17a2b8; color: white; margin-top: 5px; width: 100%;}
+        
+        button:hover { opacity: 0.8; }
+        button:active { transform: scale(0.98); }
+
+        /* 滑块样式 */
+        input[type=range] { width: 100%; cursor: pointer; }
+        .value-display { float: right; color: #fff; }
+
+        /* 左上角图表容器 (可拖动) */
+        #chart-widget {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 350px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #555;
+            border-radius: 8px;
+            padding: 10px;
+            z-index: 100;
+            cursor: move; /* 指示可拖动 */
+            backdrop-filter: blur(5px);
+        }
+        
+        #chart-header {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 5px;
+            user-select: none;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        canvas#orbitChart { width: 100% !important; height: 180px !important; }
+        
+        .hidden { display: none !important; }
+
+    </style>
+    
+    <script src="three.min.js"></script>
+    <script src="OrbitControls.js"></script>
+    <script src="chart.min.js"></script>
+</head>
+<body>
+
+    <div id="container">
+        <div id="canvas-wrapper">
+            <div id="chart-widget">
+                <div id="chart-header">
+                    <span>双星间距实时图表 (拖动面板)</span>
+                    <span style="cursor:pointer" onclick="toggleChart()">×</span>
+                </div>
+                <canvas id="orbitChart"></canvas>
+            </div>
+        </div>
+
+        <div id="ui-panel">
+            <h2>控制台</h2>
+            
+            <div class="control-group">
+                <div class="btn-row">
+                    <button class="btn-start" onclick="setPlayState(true)">开始</button>
+                    <button class="btn-pause" onclick="setPlayState(false)">暂停</button>
+                </div>
+                <button class="btn-reset" onclick="resetSimulation()" style="width:100%; margin-top:5px;">还原 / 重置</button>
+            </div>
+
+            <button class="btn-toggle" onclick="toggleChartVisibility()">显示/隐藏 图表</button>
+
+            <h2>参数调整</h2>
+            
+            <div class="control-group">
+                <label>蓝星质量 (M1) <span id="val-m1" class="value-display">20</span></label>
+                <input type="range" id="input-m1" min="5" max="50" value="20" step="1">
+            </div>
+
+            <div class="control-group">
+                <label>红星质量 (M2) <span id="val-m2" class="value-display">15</span></label>
+                <input type="range" id="input-m2" min="5" max="50" value="15" step="1">
+            </div>
+
+            <div class="control-group">
+                <label>初始速度 <span id="val-vel" class="value-display">0.8</span></label>
+                <input type="range" id="input-vel" min="0.1" max="2.0" value="0.8" step="0.1">
+            </div>
+            
+            <div class="control-group">
+                <label>模拟速度 <span id="val-speed" class="value-display">1.0</span></label>
+                <input type="range" id="input-speed" min="0.1" max="3.0" value="1.0" step="0.1">
+            </div>
+
+            <div style="font-size: 11px; color: #666; margin-top: auto;">
+                <p>操作提示：<br>左键旋转，右键平移，滚轮缩放。</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. 初始化 Three.js 场景 ---
+        const wrapper = document.getElementById('canvas-wrapper');
+        const scene = new THREE.Scene();
+        // 添加星空背景
+        scene.background = new THREE.Color(0x050510);
+        
+        const camera = new THREE.PerspectiveCamera(45, wrapper.clientWidth / wrapper.clientHeight, 0.1, 2000);
+        camera.position.set(0, 40, 60);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(wrapper.clientWidth, wrapper.clientHeight);
+        renderer.shadowMap.enabled = true;
+        wrapper.appendChild(renderer.domElement);
+
+        // --- 轨道控制器 OrbitControls ---
+        // 尝试实例化控件，兼容不同的文件版本写法
+        let controls;
+        if (typeof THREE.OrbitControls !== 'undefined') {
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+        } else if (typeof OrbitControls !== 'undefined') {
+            controls = new OrbitControls(camera, renderer.domElement);
+        } else {
+            alert('错误: 未找到 OrbitControls。请确保 OrbitControls.js 文件存在且版本兼容。');
+        }
+        if(controls) {
+            controls.enableDamping = true; 
+            controls.dampingFactor = 0.05;
+        }
+
+        // --- 灯光 ---
+        const ambientLight = new THREE.AmbientLight(0x404040); // 柔和环境光
+        scene.add(ambientLight);
+
+        // --- 物理变量与对象 ---
+        let isPaused = true;
+        let simSpeed = 1.0;
+        const G = 0.5; // 模拟引力常数
+        
+        // 星体对象结构
+        class CelestialBody {
+            constructor(color, size, mass, startPos, startVel, name) {
+                this.mass = mass;
+                this.position = startPos.clone();
+                this.velocity = startVel.clone();
+                this.mesh = null;
+                this.trail = [];
+                this.trailLine = null;
+                this.color = color;
+                
+                // 创建球体
+                const geometry = new THREE.SphereGeometry(size, 32, 32);
+                const material = new THREE.MeshStandardMaterial({ 
+                    color: color, 
+                    emissive: color, 
+                    emissiveIntensity: 0.5 
+                });
+                this.mesh = new THREE.Mesh(geometry, material);
+                this.mesh.position.copy(this.position);
+                
+                // 自发光点光源
+                const light = new THREE.PointLight(color, 1.5, 50);
+                this.mesh.add(light);
+                
+                scene.add(this.mesh);
+
+                // 轨迹线
+                const trailGeo = new THREE.BufferGeometry();
+                const trailMat = new THREE.LineBasicMaterial({ color: color, opacity: 0.4, transparent: true });
+                this.trailLine = new THREE.Line(trailGeo, trailMat);
+                scene.add(this.trailLine);
+            }
+
+            update(dt) {
+                this.mesh.position.copy(this.position);
+                
+                // 更新轨迹
+                if (!isPaused && frameCount % 3 === 0) {
+                    this.trail.push(this.position.clone());
+                    if (this.trail.length > 200) this.trail.shift();
+                    this.trailLine.geometry.setFromPoints(this.trail);
+                }
+            }
+            
+            reset(pos, vel, m) {
+                this.position.copy(pos);
+                this.velocity.copy(vel);
+                this.mass = m;
+                this.trail = [];
+                this.trailLine.geometry.setFromPoints(this.trail);
+                this.mesh.position.copy(this.position);
+            }
+        }
+
+        // 创建双星
+        let star1, star2;
+        
+        // --- 图表 Chart.js 初始化 ---
+        let chart;
+        let chartDataPoints = [];
+        const maxChartPoints = 50;
+        let frameCount = 0;
+
+        function initChart() {
+            const ctx = document.getElementById('orbitChart').getContext('2d');
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array(maxChartPoints).fill(''),
+                    datasets: [{
+                        label: '双星距离',
+                        data: Array(maxChartPoints).fill(null),
+                        borderColor: '#4db8ff',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.4,
+                        fill: true,
+                        backgroundColor: 'rgba(77, 184, 255, 0.1)'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: { legend: { display: false } },
+                    scales: {
+                        x: { display: false },
+                        y: { 
+                            grid: { color: '#333' },
+                            ticks: { color: '#aaa', font: {size: 10} } 
+                        }
+                    }
+                }
+            });
+        }
+
+        // --- 核心模拟逻辑 ---
+        function initSimulation() {
+            // 获取 UI 参数
+            const m1 = parseFloat(document.getElementById('input-m1').value);
+            const m2 = parseFloat(document.getElementById('input-m2').value);
+            const vScale = parseFloat(document.getElementById('input-vel').value);
+
+            // 初始位置 (在 X 轴上分开)
+            const dist = 20;
+            const r1 = (dist * m2) / (m1 + m2);
+            const r2 = (dist * m1) / (m1 + m2);
+            
+            const pos1 = new THREE.Vector3(-r1, 0, 0);
+            const pos2 = new THREE.Vector3(r2, 0, 0);
+
+            // 初始速度 (垂直于位置向量，产生轨道)
+            // 简单估算轨道速度 v = sqrt(GM/r)
+            const velMag = Math.sqrt(G * (m1 + m2) / dist) * vScale;
+            
+            // 动量守恒分配速度
+            const v1 = (velMag * m2) / (m1 + m2);
+            const v2 = (velMag * m1) / (m1 + m2);
+
+            const vel1 = new THREE.Vector3(0, 0, v1); // Z轴方向
+            const vel2 = new THREE.Vector3(0, 0, -v2);
+
+            if (!star1) {
+                star1 = new CelestialBody(0x3388ff, 2, m1, pos1, vel1, "Star 1"); // 蓝星
+                star2 = new CelestialBody(0xff4433, 1.5, m2, pos2, vel2, "Star 2"); // 红星
+            } else {
+                star1.reset(pos1, vel1, m1);
+                star2.reset(pos2, vel2, m2);
+            }
+            
+            // 重置图表
+            chartDataPoints = Array(maxChartPoints).fill(null);
+            if(chart) {
+                chart.data.datasets[0].data = chartDataPoints;
+                chart.update();
+            }
+        }
+
+        function updatePhysics() {
+            const dt = 0.1 * simSpeed;
+            
+            // 计算两星向量
+            const rVec = new THREE.Vector3().subVectors(star2.position, star1.position);
+            const dist = rVec.length();
+            
+            // 引力公式 F = G * m1 * m2 / r^2
+            // 避免碰撞导致的除以零
+            if (dist < 1) return; 
+
+            const fMag = (G * star1.mass * star2.mass) / (dist * dist);
+            const fDir = rVec.normalize();
+            
+            const force = fDir.multiplyScalar(fMag);
+            
+            // F = ma -> a = F/m -> dv = a * dt
+            const acc1 = force.clone().divideScalar(star1.mass);
+            const acc2 = force.clone().multiplyScalar(-1).divideScalar(star2.mass); // 反作用力
+            
+            star1.velocity.add(acc1.multiplyScalar(dt));
+            star2.velocity.add(acc2.multiplyScalar(dt));
+            
+            star1.position.add(star1.velocity.clone().multiplyScalar(dt));
+            star2.position.add(star2.velocity.clone().multiplyScalar(dt));
+            
+            // 更新3D网格
+            star1.update();
+            star2.update();
+
+            // 更新图表 (每10帧一次，节省性能)
+            if (frameCount % 10 === 0 && chart) {
+                chartDataPoints.push(dist);
+                if (chartDataPoints.length > maxChartPoints) chartDataPoints.shift();
+                chart.data.datasets[0].data = chartDataPoints;
+                chart.update();
+            }
+            frameCount++;
+        }
+
+        // --- 渲染循环 ---
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (!isPaused) {
+                updatePhysics();
+            }
+
+            if(controls) controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- UI 事件处理 ---
+        function setPlayState(play) {
+            isPaused = !play;
+        }
+
+        function resetSimulation() {
+            isPaused = true;
+            initSimulation();
+        }
+        
+        // 监听滑块变化
+        ['input-m1', 'input-m2', 'input-vel', 'input-speed'].forEach(id => {
+            document.getElementById(id).addEventListener('input', function(e) {
+                // 更新数值显示
+                const labelId = 'val-' + id.split('-')[1];
+                document.getElementById(labelId).innerText = e.target.value;
+                
+                // 如果是速度，实时更新变量
+                if (id === 'input-speed') {
+                    simSpeed = parseFloat(e.target.value);
+                }
+                // 如果是物理属性，在暂停时或重置时生效，这里为了简单，改变质量需要点击重置生效，或者可以实时改
+                // 为用户体验，此处仅更新UI，让用户点重置应用新物理参数
+            });
+        });
+
+        // 窗口大小调整
+        window.addEventListener('resize', () => {
+            camera.aspect = wrapper.clientWidth / wrapper.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(wrapper.clientWidth, wrapper.clientHeight);
+        });
+
+        // --- 拖拽图表逻辑 ---
+        const dragItem = document.getElementById("chart-widget");
+        let active = false;
+        let currentX;
+        let currentY;
+        let initialX;
+        let initialY;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        document.getElementById("chart-header").addEventListener("mousedown", dragStart, false);
+        window.addEventListener("mouseup", dragEnd, false);
+        window.addEventListener("mousemove", drag, false);
+
+        function dragStart(e) {
+            initialX = e.clientX - xOffset;
+            initialY = e.clientY - yOffset;
+            if (e.target.closest('#chart-header')) {
+                active = true;
+            }
+        }
+
+        function dragEnd(e) {
+            initialX = currentX;
+            initialY = currentY;
+            active = false;
+        }
+
+        function drag(e) {
+            if (active) {
+                e.preventDefault();
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+                xOffset = currentX;
+                yOffset = currentY;
+                setTranslate(currentX, currentY, dragItem);
+            }
+        }
+
+        function setTranslate(xPos, yPos, el) {
+            el.style.transform = "translate3d(" + xPos + "px, " + yPos + "px, 0)";
+        }
+        
+        function toggleChartVisibility() {
+            const el = document.getElementById("chart-widget");
+            el.classList.toggle("hidden");
+        }
+        
+        function toggleChart() {
+             toggleChartVisibility(); // 关闭按钮功能相同
+        }
+
+        // --- 启动程序 ---
+        initChart();
+        initSimulation();
+        animate();
+
+    </script>
+</body>
+</html>
